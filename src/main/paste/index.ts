@@ -267,7 +267,8 @@ export async function pasteImageKey(press: PasteKeyPress): Promise<PasteKeyResul
       const picture = deps.decodeFile(holds.path)
       if (!picture) return logged(sessionId, what, notPasted('no-picture'))
       const written = await deps.write(picture)
-      if (written !== 'written') return logged(sessionId, what, notPasted(written === 'not-yet' ? 'not-available' : 'not-written'))
+      if (written === 'not-yet') return logged(sessionId, what, { outcome: 'not-pasted', reason: 'not-available', note: COPIED_FILE_NOT_AVAILABLE_NOTE })
+      if (written !== 'written') return logged(sessionId, what, notPasted('not-written'))
     }
     return logged(sessionId, what, await sendKey(sessionId, rule, focused ? null : PASTE_SENTENCE))
   } catch {
@@ -288,11 +289,17 @@ export function pathRouteLineOf(sessionId: string): 'enter' | 'composer' | null 
 /** Snap's answer on an app machine whose writer is not in this beta yet
  *  (plan s6: macOS and Linux until plan 3.1). */
 export const SNAP_NOT_AVAILABLE_NOTE = 'Snap into a session is not available on this computer in this beta.'
+/** A copied image file's answer there, when the CLI needs it written as a
+ *  picture (plan s6: Claude Code on macOS until plan 3.1). */
+export const COPIED_FILE_NOT_AVAILABLE_NOTE = 'Pasting a copied image file is not available on this computer in this beta.'
 
 /**
- * Snap's picture (plan 2.1.5): main's capture hands it here with its saved
- * file (kept in the shared screenshots folder for the C2 proof and the tool
- * route, declared exception 13 as ADR-032 amends it). The picture goes onto
+ * Snap's picture (plan 2.1.5): main's capture keeps it and answers the
+ * renderer a one-shot token for it (SnapPasteAnswer); the renderer reports
+ * that token on paste:imageKey (chord 'snap'), and pasteImageKey takes the
+ * picture by it (takeSnap), with its saved file (kept in the shared
+ * screenshots folder for the C2 proof and the tool route, declared exception
+ * 13 as ADR-032 amends it), then calls this. The picture goes onto
  * this computer's clipboard (plan Q1, whichever machine the session runs
  * on), then: a session on this computer gets its CLI's key, then the
  * sentence and Enter; a tab on the old SSH path, and a helper tab until plan

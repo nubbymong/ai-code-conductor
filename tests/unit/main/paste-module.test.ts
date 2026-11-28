@@ -6,7 +6,9 @@
 //    sentence, one in the terminal with none.
 //  - A copied image file: written as a picture for Claude Code, never for
 //    Codex on Windows (it reads copied files itself); too large, or one that
-//    does not decode: nothing, and the hint says so.
+//    does not decode: nothing, and the hint says so. On a machine whose
+//    writer is not in this beta (macOS until plan 3.1), no key and the line
+//    s6 names for a copied file (review round 1, R1-3).
 //  - The text chord (Ctrl+V with no text): only a picture pastes; a copied
 //    file or nothing answers no picture.
 //  - A tab on the old SSH path: a press from outside the terminal saves the
@@ -20,13 +22,17 @@
 //    name elsewhere; on a machine whose writer is not in this beta, nothing
 //    pasted and the line s6 names. No path in any answer or door call, on
 //    Rectangle's and Window's sentences alike.
+//  - Snap's token is taken for the press's own session (review round 1,
+//    R1-2).
 //  - The session's account folder (the profile it spawned under) reaches
 //    the table.
 //  - The path route behind the test switch: the line, and nothing written
 //    or typed.
 // Red on 0c54a1c6: no such module. Mutants this must catch: a write when the
 // clipboard already holds a picture; the copied-file rule ignored; the path
-// fallback restored (a path handed to the door).
+// fallback restored (a path handed to the door). Red on 0fce95b6: a copied
+// file the writer could not write there answered the generic line (R1-3);
+// the token was taken for no session (R1-2).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -153,6 +159,20 @@ describe('a Claude Code or Codex session on this computer', () => {
       expect(written, p).toEqual([])
       expect(door, p).toHaveLength(1)
     }
+  })
+
+  it('a copied image file for Claude Code on a machine whose writer is not in this beta (macOS until plan 3.1): no key, and the line s6 names', async () => {
+    setPlatform('darwin')
+    onClipboard = null
+    files = [FILE]
+    sizes = { [FILE]: 1000 }
+    writeResult = 'not-yet'
+    expect(await press('image', false)).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: paste.COPIED_FILE_NOT_AVAILABLE_NOTE })
+    expect(paste.COPIED_FILE_NOT_AVAILABLE_NOTE).toBe('Pasting a copied image file is not available on this computer in this beta.')
+    expect(door).toEqual([])
+    writeResult = 'failed'
+    expect(await press('image', false)).toMatchObject({ outcome: 'not-pasted', reason: 'not-written' })
+    expect(door).toEqual([])
   })
 
   it('a copied file too large, one that does not decode, or nothing: no key, and the hint', async () => {

@@ -641,10 +641,12 @@ export interface ElectronAPI {
   }
   screenshot: {
     /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.5): the capture names the
-     *  session it is for. Its answer: what the paste of the picture did
-     *  (`snapped`, no path); a press that captured nothing and says why (no
-     *  desktop to capture); null; or, on the path route behind the test
-     *  switch only, the picture's file and the session's image line. */
+     *  session it is for. Its answer: a one-shot token for the picture main
+     *  keeps, bound to that session (SnapPasteAnswer, no path), which the
+     *  renderer reports on paste:imageKey (chord 'snap'); a press that
+     *  captured nothing and says why (no desktop to capture); null; or, on
+     *  the path route behind the test switch only, the picture's file and
+     *  the session's image line. */
     captureRectangle: (sessionId: string) => Promise<SnapPasteAnswer | SnapPathRouteAnswer | { notCaptured: 'no-desktop' } | null>
     captureWindow: (sourceId: string, sessionId: string) => Promise<SnapPasteAnswer | SnapPathRouteAnswer | null>
     listWindows: () => Promise<Array<{ id: string; name: string; thumbnail: string }>>
