@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-27T23:42:08.591Z",
-  "head": "7205dc61706e1267709df4d6eff2f0a189ab4224",
-  "tree": "24fa2f2eb0499e2c3b85dca30384f239814d6954",
+  "generatedAt": "2026-11-28T08:21:55.209Z",
+  "head": "6eb905e8482f75fe581daa2a5449b2f55f5b45f1",
+  "tree": "fc6f716a11d56452d0933b9adca68ecb55ec7172",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 4027,
-  "excludedFileCount": 653,
-  "scannedFileCount": 3374,
+  "trackedFileCount": 4041,
+  "excludedFileCount": 654,
+  "scannedFileCount": 3387,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1147,
-  "pathDigest": "dc9b0ea3c4ceb401d546946ed0913ba8b2047f91fbd3bcc8d9102d628ef4b615",
+  "matchedPathCount": 1160,
+  "pathDigest": "45df41a73325f530f2f1bf8dd44fabfae4b76f5e1f2aa68c87600ab35fcd53f6",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -148,7 +148,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 76
+      "lineCount": 86
     },
     {
       "path": ".github/workflows/upstream-cli-watch.yml",
@@ -218,14 +218,14 @@
       "predicates": [
         "P12"
       ],
-      "lineCount": 8
+      "lineCount": 22
     },
     {
       "path": "docs/remote/helper-threat-model.md",
       "predicates": [
         "P12"
       ],
-      "lineCount": 6
+      "lineCount": 7
     },
     {
       "path": "docs/wp2/completion-plan.md",
@@ -275,7 +275,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 1
+      "lineCount": 2
     },
     {
       "path": "helper/fixtures/screens/codex-linux-first-screen.json",
@@ -1066,7 +1066,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 33
+      "lineCount": 50
     },
     {
       "path": "helper/probes/c7-scenarios.json",
@@ -1162,6 +1162,14 @@
         "P14"
       ],
       "lineCount": 3
+    },
+    {
+      "path": "helper/probes/pv-codex-stand-in.cjs",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 15
     },
     {
       "path": "helper/src/serve.rs",
@@ -1603,7 +1611,16 @@
         "P04",
         "P14"
       ],
-      "lineCount": 86
+      "lineCount": 80
+    },
+    {
+      "path": "src/main/codex-review-remote.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P14"
+      ],
+      "lineCount": 71
     },
     {
       "path": "src/main/codex-review-usage.ts",
@@ -1621,7 +1638,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 86
+      "lineCount": 92
     },
     {
       "path": "src/main/config-manager.ts",
@@ -1805,6 +1822,13 @@
     },
     {
       "path": "src/main/ipc/registry-handlers.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "src/main/ipc/remote-machines-handlers.ts",
       "predicates": [
         "P14"
       ],
@@ -2138,7 +2162,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 335
+      "lineCount": 336
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -2251,6 +2275,15 @@
         "P14"
       ],
       "lineCount": 61
+    },
+    {
+      "path": "src/main/providers/codex/remote-review.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P14"
+      ],
+      "lineCount": 23
     },
     {
       "path": "src/main/providers/codex/resume-picker.ts",
@@ -2377,7 +2410,7 @@
         "P07",
         "P14"
       ],
-      "lineCount": 82
+      "lineCount": 83
     },
     {
       "path": "src/main/pty-input-guard.ts",
@@ -2395,6 +2428,28 @@
         "P14"
       ],
       "lineCount": 305
+    },
+    {
+      "path": "src/main/remote-helper/machines.ts",
+      "predicates": [
+        "P04",
+        "P14"
+      ],
+      "lineCount": 40
+    },
+    {
+      "path": "src/main/remote-helper/scripts.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 10
+    },
+    {
+      "path": "src/main/review-request.ts",
+      "predicates": [
+        "P14"
+      ],
+      "lineCount": 40
     },
     {
       "path": "src/main/sanitize-restored-spawn-options.ts",
@@ -3764,7 +3819,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 184
+      "lineCount": 186
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -4861,6 +4916,14 @@
       "lineCount": 73
     },
     {
+      "path": "tests/live/remote-review.live.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "lineCount": 61
+    },
+    {
       "path": "tests/unit/account-web-codex-session.test.ts",
       "predicates": [
         "P01",
@@ -5523,6 +5586,16 @@
       "lineCount": 200
     },
     {
+      "path": "tests/unit/main/codex-review-remote.test.ts",
+      "predicates": [
+        "P01",
+        "P04",
+        "P08",
+        "P13"
+      ],
+      "lineCount": 82
+    },
+    {
       "path": "tests/unit/main/codex-review-session-abort.test.ts",
       "predicates": [
         "P01",
@@ -5680,6 +5753,16 @@
         "P13"
       ],
       "lineCount": 74
+    },
+    {
+      "path": "tests/unit/main/conductor-mcp-remote-review.test.ts",
+      "predicates": [
+        "P04",
+        "P05",
+        "P08",
+        "P13"
+      ],
+      "lineCount": 26
     },
     {
       "path": "tests/unit/main/conductor-mcp-review-switches.test.ts",
@@ -7375,6 +7458,22 @@
       "lineCount": 2
     },
     {
+      "path": "tests/unit/remote-helper/no-electron-import.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 5
+    },
+    {
+      "path": "tests/unit/remote-helper/remote-review.test.ts",
+      "predicates": [
+        "P04",
+        "P08",
+        "P13"
+      ],
+      "lineCount": 53
+    },
+    {
       "path": "tests/unit/renderer/SessionRow.effort.test.tsx",
       "predicates": [
         "P13"
@@ -8920,6 +9019,13 @@
       "lineCount": 63
     },
     {
+      "path": "tests/unit/scripts/remote-helper-e2e-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
+    },
+    {
       "path": "tests/unit/scripts/snap-e2e-job.test.ts",
       "predicates": [
         "P13"
@@ -9000,7 +9106,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 446,
+      "lineCount": 460,
       "truncated": true
     },
     {
