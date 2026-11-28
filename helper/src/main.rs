@@ -10,7 +10,7 @@
 //! aicc-helper selftest [--nonce <32 hex>]
 //! aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds> | --until-ended] [--ring-bytes N] [--detach]
 //! aicc-helper list --store <folder>
-//! aicc-helper field --file <path under home> --key <dotted key>     (macOS and Linux)
+//! aicc-helper field --file <path under home> (--key <dotted key> | --keys <dotted key>[,...])     (macOS and Linux)
 //! aicc-helper hook [--store <folder>] [--session <sid>]      (each left out: AICC_HELPER_STORE, AICC_HELPER_SESSION)
 //! aicc-helper status [--store <folder>] [--session <sid>]    (the same)
 //! aicc-helper mcp --store <folder> --session <sid>
@@ -32,7 +32,9 @@
 //! `"lifetime":"until-ended"`, `store.rs`). `list` prints every session in
 //! the store as one JSON line, removing the records of holders that are
 //! gone. `field` prints one string from a JSON file in the user's home
-//! folder, or nothing, and exits 0 (`field.rs`). `hook` passes one hook
+//! folder (`--key`), or one JSON object of several of its keys (`--keys`,
+//! from 2.1.3-beta.20), or nothing, and exits 0; only the keys on its list
+//! are read (`field.rs`). `hook` passes one hook
 //! event, read from standard input, to the session's holder; it always exits
 //! 0 and prints nothing (`hook.rs`). `status` passes one status line update,
 //! read from standard input, to the session's holder, the same way: it
@@ -508,24 +510,38 @@ fn cmd_bridge(_raw: &[OsString]) -> ExitCode {
     fail("bridge runs on macOS and Linux only")
 }
 
-/// The field mode (`field.rs`): the value and one line end on standard
-/// output, or nothing, and exit 0; exit 2 on a command line it does not
-/// take, an argument that is not Unicode included. It writes with writeln!,
-/// so a closed standard output is no panic.
+/// The field mode (`field.rs`): the value (`--key`) or one JSON object
+/// (`--keys`, from 2.1.3-beta.20) and one line end on standard output, or
+/// nothing, and exit 0; exit 2 on a command line it does not take, an
+/// argument that is not Unicode or a key off the field mode's list included
+/// (nothing is read then). It writes with writeln!, so a closed standard
+/// output is no panic.
 fn cmd_field(raw: &[OsString]) -> ExitCode {
     let args: Vec<String> = match raw.iter().map(|a| a.to_str().map(str::to_string)).collect::<Option<Vec<String>>>() {
         Some(args) => args,
         None => return usage("field takes Unicode arguments only"),
     };
-    let a = match Args::parse(&args, &["--file", "--key"], &[]) {
+    let a = match Args::parse(&args, &["--file", "--key", "--keys"], &[]) {
         Ok(a) => a,
         Err(e) => return usage(&e),
     };
-    let (file, key) = match (a.get("--file"), a.get("--key")) {
-        (Some(file), Some(key)) => (file, key),
-        _ => return usage("field needs --file and --key"),
+    let printed = match (a.get("--file"), a.get("--key"), a.get("--keys")) {
+        (Some(file), Some(key), None) => {
+            if !field::key_allowed(key) {
+                return usage("field reads only the keys on its list");
+            }
+            field::run(file, key)
+        }
+        (Some(file), None, Some(keys)) => {
+            let keys: Vec<&str> = keys.split(',').collect();
+            if let Some(why) = field::keys_problem(&keys) {
+                return usage(why);
+            }
+            field::run_keys(file, &keys)
+        }
+        _ => return usage("field needs --file, and --key or --keys"),
     };
-    if let Some(value) = field::run(file, key) {
+    if let Some(value) = printed {
         let mut out = std::io::stdout().lock();
         let _ = writeln!(out, "{value}");
         let _ = out.flush();

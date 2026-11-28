@@ -17,8 +17,10 @@
 // help text by claude-conformance-lib.test.ts):
 //   1. the install answers `claude --version` with the version asked for; the
 //      app's own reader reads it; the app's managed-launch floor check accepts it;
-//   2. `claude --help` lists every switch of the reviewer's constant command line
-//      (CLAUDE_REVIEW_ARGS), and --output-format still offers json;
+//   2. `claude --help` lists every switch of the reviewer's command line: its
+//      constant (CLAUDE_REVIEW_ARGS) and the two a chosen model and effort add
+//      (--model, --effort; claudeReviewArgs, ADR-031), and --output-format
+//      still offers json;
 //   3. --permission-mode offers every mode the launch picker writes;
 //   4. `claude auth --help` lists login, logout and status; `claude auth login
 //      --help` lists one flag per sign-in method, and --email.
@@ -32,7 +34,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { parseClaudeVersion } from '../../src/main/sentinel/sentinel-version'
-import { CLAUDE_REVIEW_ARGS } from '../../src/main/providers/claude/review'
+import { claudeReviewArgs } from '../../src/main/providers/claude/review'
 import { CLAUDE_MIN_MANAGED_CLI_VERSION, claudeManagedCliCompatibility } from '../../src/main/providers/claude/managed-launch'
 import { CLI_AUTH_METHODS } from '../../src/shared/account-web-session'
 import { PERMISSION_MODES } from '../../src/renderer/lib/claude-cli-options'
@@ -51,8 +53,12 @@ const want = expectedVersion(process.env.CCC_CLAUDE_CONFORMANCE_KIND, process.en
 
 // The same expectations the app holds, less the picker's `default` (it writes no
 // flag for it), with one nobody can meet added when proving the job can go red.
+// The reviewer's flags with a model and an effort chosen: the constant's, then
+// --model and --effort (nubbymong/aicc_planning#446).
+const reviewArgs = claudeReviewArgs({ model: 'opus', effort: 'high' })
 const base = {
-  flags: CLAUDE_REVIEW_ARGS,
+  // A refusal here could only be a fault of this file: a flag no CLI lists makes it red.
+  flags: Array.isArray(reviewArgs) ? reviewArgs : ['--ccc-review-args-refused'],
   modes: PERMISSION_MODES.map((m) => m.value).filter((v) => v !== 'default'),
   commands: ['login', 'logout', 'status'],
   methods: [...CLI_AUTH_METHODS],

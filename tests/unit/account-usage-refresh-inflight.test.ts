@@ -46,7 +46,7 @@ vi.mock('https', () => {
         return res
       },
     }
-    if (opts?.hostname === 'console.anthropic.com') held.answer = () => cb(res)
+    if (opts?.hostname === 'platform.claude.com') held.answer = () => cb(res)
     else cb(res)
     return { on: () => ({}), write: () => {}, end: () => {}, destroy: () => {}, setTimeout: () => {} }
   }

@@ -1,0 +1,368 @@
+// @vitest-environment jsdom
+//
+// 2.1.3-beta.20 section 5, frame 4 of the approved mockup "Accounts across
+// machines" (Claude Code rows only): each Linux machine's card says how
+// accounts sign in there (Sign in on this machine; Lend from this computer is
+// left out, not greyed: Q7), lists this computer's accounts with their sign-in
+// there (Sign in on <machine>, Sign out; the machine's own sign-in asks first,
+// naming it so: Q5), and Remove lists the accounts it signs out first, or,
+// when the machine does not answer, what stays signed in there, with Remove
+// anyway.
+//
+// PURE: the real section over a fake window.electronAPI.machines.remote, no IPC.
+import React from 'react'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { createRoot, type Root } from 'react-dom/client'
+import { act } from 'react'
+import type { HostMachineAccounts, HostSignOutResult } from '../../../src/shared/host-accounts'
+import type { RemoteActionResult, RemoteMachinesState } from '../../../src/shared/remote-machines'
+
+;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+
+const { default: RemoteMachinesSection } = await import('../../../src/renderer/components/RemoteMachinesSection')
+const { useSessionStore } = await import('../../../src/renderer/stores/sessionStore')
+const { useConfigStore } = await import('../../../src/renderer/stores/configStore')
+const { useAccountProfilesStore } = await import('../../../src/renderer/stores/accountProfilesStore')
+const { resetHostAccountsStore, useHostAccountsStore } = await import('../../../src/renderer/stores/hostAccountsStore')
+const { useSettingsStore } = await import('../../../src/renderer/stores/settingsStore')
+const { adoptTitleOn, hostAccountNamer } = await import('../../../src/renderer/utils/hostAccounts')
+const { hostAccountName } = await import('../../../src/renderer/utils/hostSignIn')
+
+const DID = 'd'.repeat(32)
+const ROCKY = { did: DID, label: 'Rocky', name: 'Rocky (nick@rocky.lan:22)', target: 'nick@rocky.lan:22', checked: true, lastCheck: { at: Date.now(), ok: true }, helperVersion: '0.1.0', system: 'Linux x86-64', inUse: 0 }
+const STATE: RemoteMachinesState = { available: true, switchOn: true, bundled: { ok: true, version: '0.1.0', files: [] }, machines: [ROCKY], candidates: [] }
+const SSH = { host: 'rocky.lan', port: 22, username: 'nick', remotePath: '~' }
+const facts = (identity: string) => ({ identity, plan: 'max', tier: null, expiresAt: 1, credentials: true })
+const READ: HostMachineAccounts = {
+  did: DID, readAt: 1, ok: true, own: facts('s@x.io'), others: [],
+  accounts: [
+    { profileId: 'p1', state: 'signed-in-here', facts: facts('w@x.io'), folder: true },
+    { profileId: 'p2', state: 'not-signed-in', facts: null, folder: false },
+    { profileId: 'p3', state: 'machine-own', facts: facts('s@x.io'), folder: false },
+  ],
+}
+
+let container: HTMLDivElement
+let root: Root
+let remote: Record<string, ReturnType<typeof vi.fn>>
+
+function install(opts: { read?: HostMachineAccounts; remove?: RemoteActionResult; signOut?: HostSignOutResult } = {}) {
+  remote = {
+    state: vi.fn(async () => STATE),
+    sessions: vi.fn(async () => ({ machines: [] })),
+    accounts: vi.fn(async () => ({ machines: [opts.read ?? READ] })),
+    accountSignOut: vi.fn(async () => opts.signOut ?? { ok: true, message: 'Signed Work out on Rocky (nick@rocky.lan:22), and removed its folder there.', signedOutWithService: true, state: 'not-signed-in' }),
+    remove: vi.fn(async () => opts.remove ?? { ok: true, message: 'Removed the session helper from Rocky (nick@rocky.lan:22).' }),
+    check: vi.fn(async () => ({ ok: true, message: 'ok' })),
+    endSession: vi.fn(),
+  }
+  ;(window as any).electronAPI = { machines: { remote } }
+}
+async function settle(): Promise<void> {
+  for (let i = 0; i < 6; i++) await act(async () => { await Promise.resolve() })
+}
+async function mount(): Promise<void> {
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  await act(async () => { root.render(<RemoteMachinesSection active />) })
+  await settle()
+}
+const q = (sel: string) => container.querySelector(sel) as HTMLElement | null
+const rows = () => [...container.querySelectorAll('[data-testid="remote-account-row"]')] as HTMLElement[]
+const row = (who: string) => rows().find((r) => r.dataset.who === who) ?? null
+const button = (label: string) => [...container.querySelectorAll('button')].find((b) => b.textContent === label) as HTMLButtonElement | undefined
+async function click(b: Element | null | undefined) {
+  expect(b, 'the button is there').toBeTruthy()
+  await act(async () => { (b as HTMLElement).click() })
+  await settle()
+}
+
+beforeEach(() => {
+  resetHostAccountsStore()
+  useAccountProfilesStore.setState({ profiles: [
+    { id: 'p1', name: 'Work', accountEmail: 'w@x.io', active: true } as never,
+    { id: 'p2', name: 'Personal', accountEmail: 'p@x.io', active: true } as never,
+    { id: 'p3', name: 'Shared', accountEmail: 's@x.io', active: true } as never,
+  ] })
+  useConfigStore.setState({ configs: [{ id: 'cfg-rocky', label: 'Rocky', workingDirectory: '', color: '#fff', sessionType: 'ssh', sshConfig: { ...SSH } } as never] })
+  useSessionStore.setState({ sessions: [], activeSessionId: null })
+})
+
+afterEach(() => {
+  act(() => root?.unmount())
+  container?.remove()
+  delete (window as any).electronAPI
+})
+
+describe('a machine card says how accounts sign in there (frame 4)', () => {
+  it('one way, Sign in on this machine, checked; Lend from this computer is left out, not greyed', async () => {
+    install()
+    await mount()
+    const how = q('[data-testid="remote-machine-how"]')
+    expect(how?.textContent).toContain('How accounts sign in here')
+    expect(q('[data-testid="remote-machine-how-signin"]')?.textContent).toBe('Sign in on this machineEach account signs in once on Rocky and stays signed in there. Remote Control works.')
+    // NIT-5 (round 1): one way is static text, not a radio group the keyboard cannot reach.
+    expect(how?.querySelectorAll('[role="radio"], [role="radiogroup"]')).toHaveLength(0)
+    expect(container.textContent).not.toMatch(/lend/i)
+  })
+})
+
+// MINOR-2 (round 1): an account whose folder there the app on another computer made.
+describe('an account whose folder there is another computer\'s', () => {
+  it('its row says so and offers no Sign in; Remove says such folders stay', async () => {
+    install({ read: { ...READ, elsewhere: ['p2', 'zz9'] } })
+    await mount()
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-state"]')?.textContent).toBe('Used by the app on another computerIts folder on Rocky was made by the app on another computer, which signs it in and out there.')
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-signin"]')).toBeNull()
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-signout"]')).toBeNull()
+    await click(button('Remove'))
+    expect(q('[data-testid="remote-remove-listing"]')?.textContent).toContain('2 account folders there are used by the app on another computer and stay.')
+    expect(q('[data-testid="remote-account-adopt"]')).toBeNull()
+  })
+})
+
+// R2-1 (round 2): every folder there with another install's mark is named by
+// one of this computer's accounts (main's mayBeEarlierInstall): the row says
+// it may be this computer's own and offers Adopt, which asks first.
+describe('a folder that may be this computer\'s own from an earlier install', () => {
+  it('its row says so and offers Adopt, which asks (naming the accounts) before anything runs', async () => {
+    install({ read: { ...READ, elsewhere: ['p2'], mayBeEarlierInstall: true } })
+    await mount()
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-state"]')?.textContent).toBe('May be this computer\'s own from an earlier installIts folder on Rocky carries another install\'s mark. If it is this computer\'s own, Adopt makes it so again; if it is the app\'s on another computer, leave it.')
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-signin"]')).toBeNull()
+    // R3-3 (round 3): its hover text names what it adopts there (R4-6,
+    // round 4: and what Adopt does).
+    expect((row('Personal')?.querySelector('[data-testid="remote-account-adopt"]') as HTMLElement).title).toBe("Asks first, then makes the folder for Personal on Rocky this computer's again. It carries another install's mark and may be this computer's own from an earlier install.")
+    await click(row('Personal')?.querySelector('[data-testid="remote-account-adopt"]'))
+    expect(useHostAccountsStore.getState().adoptAsk).toEqual({ did: DID, machineName: 'Rocky', profileIds: ['p2'] })
+  })
+
+  // R5-3 (round 5): the row's hover text comes from adoptTitleOn, the one
+  // helper the account card's calls, naming the accounts as Adopt's confirm
+  // does. An account with neither a name nor an email is where a copy of the
+  // rule of its own used to differ. The row itself is named "Account"
+  // (final review F-3: by the same rule, hostAccountNamer, with that fallback).
+  it('its Adopt hover text is the account card\'s, from the one helper', async () => {
+    const profiles = [...useAccountProfilesStore.getState().profiles, { id: 'p4', name: '', accountEmail: '', active: true } as never]
+    useAccountProfilesStore.setState({ profiles })
+    const read: HostMachineAccounts = { ...READ, accounts: [...READ.accounts, { profileId: 'p4', state: 'not-signed-in', facts: null, folder: false }], elsewhere: ['p2', 'p4'], mayBeEarlierInstall: true }
+    install({ read })
+    await mount()
+    const want = adoptTitleOn('Rocky', read, profiles, useSettingsStore.getState().settings.accountAliases)
+    expect(want).toBe("Asks first, then makes the folders for Personal and an account with no name on Rocky this computer's again. They carry another install's mark and may be this computer's own from an earlier install.")
+    for (const who of ['Personal', 'Account']) {
+      expect((row(who)?.querySelector('[data-testid="remote-account-adopt"]') as HTMLElement).title).toBe(want)
+    }
+  })
+
+  // Final review, round 1 (F-3): one naming rule on the card. Its row names
+  // an account with no name "Account"; a sentence names it as Adopt's hover
+  // does, "an account with no name", with a capital where it starts one.
+  it('an account with no name: its row reads Account, and Remove names it as Adopt does', async () => {
+    useAccountProfilesStore.setState({ profiles: [...useAccountProfilesStore.getState().profiles, { id: 'p4', name: '', accountEmail: '', active: true } as never] })
+    install({ read: { ...READ, accounts: [...READ.accounts, { profileId: 'p4', state: 'not-signed-in', facts: null, folder: false }], elsewhere: ['p2', 'p4'], mayBeEarlierInstall: true } })
+    await mount()
+    expect(row('Account')).not.toBeNull()
+    await click(button('Remove'))
+    const text = q('[data-testid="remote-remove-listing"]')?.textContent ?? ''
+    expect(text).toContain("Personal and an account with no name: their folders there carry another install's mark")
+    expect(text).not.toMatch(/\bAccount\b/)
+  })
+
+  it('Remove names those folders as main does, and the old-marker folders it leaves', async () => {
+    install({ read: { ...READ, elsewhere: ['p2'], mayBeEarlierInstall: true, oldMarker: ['zz9'] } })
+    await mount()
+    await click(button('Remove'))
+    const text = q('[data-testid="remote-remove-listing"]')?.textContent ?? ''
+    expect(text).toContain('Personal: its folder there carries another install\'s mark, and may be this computer\'s own from an earlier install of the app; Remove leaves it as it is. To sign it out from here, choose Adopt on this card first.')
+    // Final review round 3 (F3-1): counted as main counts them, never by profile id.
+    expect(text).toContain('The folder an earlier build of the app made there for an account no longer on this computer stays signed in there as it is.')
+    expect(text).not.toContain('zz9')
+    expect(text).not.toContain('used by the app on another computer')
+  })
+
+  // Final review round 3 (F3-1): folders of accounts this computer no longer
+  // holds are one counted item, and the question counts each account it
+  // stands for ("These accounts are", "Sign out and remove").
+  it('Remove counts the folders of accounts no longer on this computer as the accounts they are', async () => {
+    install({ read: { ...READ, accounts: READ.accounts.map((a) => ({ ...a, folder: false, state: a.state === 'signed-in-here' ? 'not-signed-in' : a.state })), others: ['zz8', 'zz9'] } })
+    await mount()
+    await click(button('Remove'))
+    const listing = q('[data-testid="remote-remove-listing"]')
+    expect([...(listing?.querySelectorAll('li') ?? [])].map((li) => li.textContent)).toEqual(['2 accounts no longer on this computer'])
+    expect(listing?.textContent).toContain('These accounts are signed in there and are signed out first:')
+    expect(button('Sign out and remove')).toBeDefined()
+  })
+
+  // Final review round 3 (F3-1): a read that names an account this computer's
+  // list no longer has (removed since) names it as main would, not as "an
+  // account of this computer".
+  it('a read naming an account no longer on this computer: Remove names it so', async () => {
+    install({ read: { ...READ, accounts: [...READ.accounts, { profileId: 'p8', state: 'signed-in-here', facts: facts('x@x.io'), folder: true }] } })
+    await mount()
+    await click(button('Remove'))
+    expect([...(q('[data-testid="remote-remove-listing"]')?.querySelectorAll('li') ?? [])].map((li) => li.textContent)).toEqual(['Work', 'an account no longer on this computer'])
+  })
+})
+
+describe('an account with no name, in a Machines card\'s sentences (final review F-3)', () => {
+  const nameless = () => useAccountProfilesStore.setState({ profiles: [...useAccountProfilesStore.getState().profiles, { id: 'p4', name: '', accountEmail: '', active: true } as never] })
+
+  it('the machine\'s own sign-in: its row, Remove and the sign-out confirm say "an account with no name"', async () => {
+    nameless()
+    install({ read: { ...READ, accounts: [READ.accounts[0], { profileId: 'p4', state: 'machine-own', facts: facts('s@x.io'), folder: false }] } })
+    await mount()
+    expect(row('Account')?.querySelector('[data-testid="remote-account-sub"]')?.textContent).toBe('Rocky was already signed in as an account with no name, so that sign-in is used.')
+    expect((row('Account')?.querySelector('[data-testid="remote-account-signout"]') as HTMLElement).title).toBe('Sign an account with no name out on Rocky')
+    await click(button('Remove'))
+    expect(q('[data-testid="remote-remove-listing"]')?.textContent).toContain('An account with no name is signed in there by Rocky\'s own sign-in, which Remove leaves as it is.')
+    await click(button('Keep it'))
+    await click(row('Account')?.querySelector('[data-testid="remote-account-signout"]'))
+    expect(q('[data-testid="remote-own-signout-confirm"]')?.textContent).toContain('An account with no name is signed in on Rocky by that machine\'s own sign-in (its ~/.claude), not one the app made.')
+  })
+
+  it('the machine does not answer: it names what stays signed in there the same way', async () => {
+    nameless()
+    install({
+      read: { ...READ, own: null, accounts: [READ.accounts[0], { profileId: 'p4', state: 'signed-in-here', facts: facts('n@x.io'), folder: true }] },
+      remove: { ok: false, notAnswering: true, message: 'rocky.lan could not be reached: it did not answer.' },
+    })
+    await mount()
+    await click(button('Remove'))
+    expect([...(q('[data-testid="remote-remove-listing"]')?.querySelectorAll('li') ?? [])].map((li) => li.textContent)).toEqual(['Work', 'an account with no name'])
+    await click(button('Sign out and remove'))
+    expect(q('[data-testid="remote-remove-not-answering"]')?.textContent).toContain('now. Work and an account with no name stay signed in on Rocky (nick@rocky.lan:22) until you sign them out there')
+  })
+})
+
+describe('"Accounts here" lists this computer\'s accounts with their sign-in there', () => {
+  it('signed in: Sign out; not signed in: Sign in on <machine>; the machine\'s own sign-in says so', async () => {
+    install()
+    await mount()
+    expect(q('[data-testid="remote-machine-accounts"]')?.textContent).toContain('Accounts here')
+    expect(rows().map((r) => r.dataset.who)).toEqual(['Work', 'Personal', 'Shared'])
+    expect(row('Work')?.querySelector('[data-testid="remote-account-state"]')?.textContent).toBe('Signed in on Rocky')
+    expect(row('Work')?.querySelector('[data-testid="remote-account-signout"]')).not.toBeNull()
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-state"]')?.textContent).toBe('Not signed in')
+    expect(row('Personal')?.querySelector('[data-testid="remote-account-signin"]')?.textContent).toBe('Sign in on Rocky')
+    expect(row('Shared')?.querySelector('[data-testid="remote-account-sub"]')?.textContent).toBe('Rocky was already signed in as Shared, so that sign-in is used.')
+    // Each row names its provider; no other provider's rows are drawn.
+    for (const r of rows()) expect(r.textContent).toContain('Claude Code')
+  })
+
+  it('Sign in on <machine> opens a sign-in tab on the saved config that reaches it', async () => {
+    install()
+    await mount()
+    await click(row('Personal')?.querySelector('[data-testid="remote-account-signin"]'))
+    const signIn = useSessionStore.getState().sessions.find((s) => s.remoteAccountSignIn)
+    expect(signIn).toMatchObject({ label: 'Sign in on Rocky: Personal', profileId: 'p2', sessionType: 'ssh', transient: true, shellOnly: true })
+  })
+
+  // R5-2 (round 5): the sign-in tab names its account by the one naming
+  // rule (hostAccountNamer: the profile's name, else its alias, else its
+  // email), over the stores. Final review round 3 (F3-1): an account with no
+  // name as "an account with no name", and one this computer does not hold
+  // as "an account no longer on this computer", in lower case at the end of
+  // its tab name (it said "that account").
+  it('the sign-in tab names its account by the one naming rule', () => {
+    const before = useSettingsStore.getState().settings
+    const aliases = { 'w@x.io': 'Desk', 'a@x.io': 'Laptop' }
+    try {
+      useSettingsStore.setState({ settings: { ...before, accountAliases: aliases } })
+      const profiles = [
+        ...useAccountProfilesStore.getState().profiles,
+        { id: 'p5', name: '', accountEmail: 'a@x.io', active: true } as never,
+        { id: 'p6', name: '', accountEmail: 'e@x.io', active: true } as never,
+        { id: 'p7', name: '', accountEmail: '', active: true } as never,
+      ]
+      useAccountProfilesStore.setState({ profiles })
+      const ids = ['p1', 'p5', 'p6', 'p7', 'p9']
+      expect(ids.map(hostAccountName)).toEqual(['Work', 'Laptop', 'e@x.io', 'an account with no name', 'an account no longer on this computer'])
+      expect(ids.map(hostAccountName)).toEqual(ids.map(hostAccountNamer(profiles, aliases)))
+    } finally {
+      useSettingsStore.setState({ settings: before })
+    }
+  })
+
+  it('Sign out signs that account out there; it waits while a tab on that account runs there', async () => {
+    install()
+    useSessionStore.setState({ sessions: [{ id: 't1', label: 'api', workingDirectory: '', model: '', color: '#fff', status: 'idle', createdAt: 1, sessionType: 'ssh', provider: 'claude', sshConfig: { ...SSH }, profileId: 'p1' } as never] })
+    await mount()
+    const out = row('Work')?.querySelector('[data-testid="remote-account-signout"]') as HTMLButtonElement
+    expect(out.disabled).toBe(true)
+    expect(out.title).toBe('A tab runs on this account here')
+    await act(async () => { useSessionStore.setState({ sessions: [] }) })
+    await settle()
+    await click(row('Work')?.querySelector('[data-testid="remote-account-signout"]'))
+    expect(remote.accountSignOut).toHaveBeenCalledWith({ did: DID, profileId: 'p1' })
+    expect(q('[data-testid="remote-notice"]')?.textContent).toContain('Signed Work out on Rocky')
+  })
+
+  it('the machine\'s own sign-in: Sign out asks first, naming it so, and only the confirm sends confirmMachineOwn (Q5)', async () => {
+    install()
+    await mount()
+    await click(row('Shared')?.querySelector('[data-testid="remote-account-signout"]'))
+    expect(remote.accountSignOut).not.toHaveBeenCalled()
+    const confirm = q('[data-testid="remote-own-signout-confirm"]')
+    expect(confirm?.textContent).toContain('Shared is signed in on Rocky by that machine\'s own sign-in (its ~/.claude), not one the app made.')
+    await click(button('Keep it'))
+    expect(remote.accountSignOut).not.toHaveBeenCalled()
+    await click(row('Shared')?.querySelector('[data-testid="remote-account-signout"]'))
+    await click(button('Sign out Rocky\'s own sign-in'))
+    expect(remote.accountSignOut).toHaveBeenCalledWith({ did: DID, profileId: 'p3', confirmMachineOwn: true })
+  })
+
+  it('main answers that it is the machine\'s own sign-in (the read was older): the card asks then', async () => {
+    install({ signOut: { ok: false, needsConfirm: 'machine-own', state: 'machine-own', message: 'Work is signed in on Rocky by that machine\'s own sign-in' } })
+    await mount()
+    await click(row('Work')?.querySelector('[data-testid="remote-account-signout"]'))
+    expect(remote.accountSignOut).toHaveBeenCalledTimes(1)
+    expect(q('[data-testid="remote-own-signout-confirm"]')).not.toBeNull()
+    expect(q('[data-testid="remote-notice"]')?.textContent).toBe('')
+  })
+})
+
+describe('Remove lists the accounts signed in there (frame 4)', () => {
+  it('names the accounts it signs out first, and the machine\'s own sign-in it leaves', async () => {
+    install()
+    await mount()
+    await click(button('Remove'))
+    const listing = q('[data-testid="remote-remove-listing"]')
+    expect([...(listing?.querySelectorAll('li') ?? [])].map((li) => li.textContent)).toEqual(['Work'])
+    expect(listing?.textContent).toContain('Remove Rocky (nick@rocky.lan:22)? This account is signed in there and is signed out first:')
+    expect(listing?.textContent).toContain('Shared is signed in there by Rocky\'s own sign-in, which Remove leaves as it is.')
+    expect(listing?.textContent).toContain('Then the session helper and its folder in ~/.aicc are deleted.')
+    await click(button('Sign out and remove'))
+    expect(remote.remove).toHaveBeenCalledWith(DID)
+  })
+
+  it('the machine does not answer: asks again in those words, and Remove anyway forgets it', async () => {
+    install({ remove: { ok: false, notAnswering: true, message: 'rocky.lan could not be reached: it did not answer.' } })
+    await mount()
+    await click(button('Remove'))
+    await click(button('Sign out and remove'))
+    const again = q('[data-testid="remote-remove-not-answering"]')
+    expect(again?.textContent).toContain('Rocky (nick@rocky.lan:22) did not answer, so nothing can be signed out there now. Work stays signed in on Rocky (nick@rocky.lan:22) until you sign it out there, or end that sign-in in your Claude account settings on claude.ai. The app forgets Rocky (nick@rocky.lan:22); its folder in ~/.aicc stays.')
+    expect(q('[data-testid="remote-notice"]')?.textContent).toBe('')
+    await click(button('Remove anyway'))
+    expect(remote.remove).toHaveBeenLastCalledWith(DID, { forget: true })
+  })
+
+  it('a Remove that failed for another reason does not ask the not-answering question', async () => {
+    install({ remove: { ok: false, message: 'The session helper on rocky.lan did not list its sessions, so nothing was removed.' } })
+    await mount()
+    await click(button('Remove'))
+    await click(button('Sign out and remove'))
+    expect(q('[data-testid="remote-remove-not-answering"]')).toBeNull()
+    expect(q('[data-testid="remote-notice"]')?.textContent).toContain('did not list its sessions')
+  })
+
+  it('no account signed in there: today\'s question and button', async () => {
+    install({ read: { ...READ, own: null, accounts: READ.accounts.map((a) => ({ ...a, state: 'not-signed-in' as const, facts: null, folder: false })) } })
+    await mount()
+    await click(button('Remove'))
+    expect(q('[aria-label="Confirm removing Rocky"]')?.querySelector('span')?.textContent).toBe('Remove the session helper from Rocky (nick@rocky.lan:22)? Its folder in ~/.aicc there is deleted.')
+    expect(button('Sign out and remove')).toBeUndefined()
+  })
+})

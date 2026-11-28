@@ -22,6 +22,8 @@ describe('AccountLaunchGate is suppressed by the boot-gate chain', () => {
     // while it is up shows its dialog (launchDialogsSuppressed).
     expect(APP).toContain('<AccountLaunchGate suppressed={launchDialogsSuppressed(bootGate)} />')
     expect(APP).toContain('<LaunchAckConfirm suppressed={launchDialogsSuppressed(bootGate)} />')
+    // 2.1.3-beta.20 section 5: the not-signed-in notice of a helper tab, beside it.
+    expect(APP).toContain('<HostSignInNotice suppressed={launchDialogsSuppressed(bootGate)} />')
     expect(APP).not.toContain('suppressed={bootGate !== null}')
   })
 
@@ -29,6 +31,7 @@ describe('AccountLaunchGate is suppressed by the boot-gate chain', () => {
     const uses = APP.match(/<AccountLaunchGate\b/g) ?? []
     expect(uses.length, 'exactly one render site').toBe(1)
     expect((APP.match(/<LaunchAckConfirm\b/g) ?? []).length, 'exactly one confirm render site').toBe(1)
+    expect((APP.match(/<HostSignInNotice\b/g) ?? []).length, 'exactly one notice render site').toBe(1)
   })
 
   it('SentinelPanel keeps its own suppression', () => {

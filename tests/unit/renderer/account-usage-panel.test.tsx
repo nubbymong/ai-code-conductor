@@ -6,12 +6,16 @@
 // active-guard. AccountCard now renders a parked card with NO sign-in and greys
 // it. These tests pin exactly that: an inactive row offers neither button and
 // shows the parked message; an active row still does.
+//
+// nubbymong/aicc_planning#445 (the approved mockup v1): "Refresh sign-in"
+// moved into the card's menu as "Sign in again now", the blue button reads
+// "Sign in again", and every meter says what is LEFT.
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import React from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { act } from 'react'
-import { AccountCard, CodexAccountCard, codexCreditsText } from '../../../src/renderer/components/AccountUsagePanel'
-import type { AccountUsage, UsageBucket } from '../../../src/shared/usage-types'
+import { AccountCard, CodexAccountCard, codexCreditsText, PARKED_LINE } from '../../../src/renderer/components/AccountUsagePanel'
+import { USAGE_DETAIL_RENEWING, USAGE_DETAIL_DUPLICATE, USAGE_DETAIL_EXPIRED, USAGE_DETAIL_WRONG_ACCOUNT, type AccountUsage, type UsageBucket } from '../../../src/shared/usage-types'
 import type { AccountView, ProviderAccountUsageView } from '../../../src/shared/providers'
 import { resolveIdentityColor } from '../../../src/shared/identity-colors'
 import { formatResetTime } from '../../../src/renderer/utils/terminalFormatting'
@@ -41,11 +45,26 @@ function buttonTexts(c: HTMLElement): string[] {
   return Array.from(c.querySelectorAll('button')).map((b) => b.textContent?.trim() ?? '')
 }
 
+/** Opens a card's menu (it is portalled onto document.body), reads each item
+ *  and closes it again; [] for a card with no menu. */
+function readMenu<T>(c: HTMLElement, read: (item: Element) => T): T[] {
+  const trigger = c.querySelector('[data-testid="account-usage-menu"]') as HTMLElement | null
+  if (!trigger) return []
+  act(() => { trigger.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  const items = Array.from(document.body.querySelectorAll('[role="menuitem"]')).map(read)
+  act(() => { trigger.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  return items
+}
+/** The menu's item labels. */
+const openMenu = (c: HTMLElement) => readMenu(c, (i) => i.firstChild?.textContent?.trim() ?? '')
+/** Each item's smaller line under its label ('' for none). */
+const menuDetails = (c: HTMLElement) => readMenu(c, (i) => i.querySelector('span')?.textContent ?? '')
+
 describe('AccountCard — active/inactive awareness', () => {
   it('an inactive account shows NO sign-in button and the parked message', () => {
     const onSignIn = vi.fn()
     const r = render(<AccountCard row={row({ status: 'inactive', active: false })} theme="dark" onSignIn={onSignIn} />)
-    expect(buttonTexts(r.container)).toEqual([]) // neither "Sign in" nor "Refresh sign-in"
+    expect(buttonTexts(r.container)).toEqual([]) // no Sign in again, and no menu to sign in from
     expect(r.container.textContent).toContain('Inactive')
     expect(r.container.textContent).toMatch(/Parked/i)
     r.unmount()
@@ -69,28 +88,28 @@ describe('AccountCard — active/inactive awareness', () => {
     r.unmount()
   })
 
-  it('an active signed-out account still offers "Sign in"', () => {
+  it('an active signed-out account still offers "Sign in again"', () => {
     const r = render(<AccountCard row={row({ status: 'needs-login', active: true })} theme="dark" onSignIn={vi.fn()} />)
-    expect(buttonTexts(r.container)).toContain('Sign in')
+    expect(buttonTexts(r.container)).toContain('Sign in again')
     expect(r.container.textContent).not.toMatch(/Parked/i)
     r.unmount()
   })
 
-  it('an active signed-in account still offers "Refresh sign-in"', () => {
+  it('an active signed-in account still offers "Sign in again now", in its menu', () => {
     const r = render(<AccountCard row={row({ status: 'ok', active: true, buckets: [] })} theme="dark" onSignIn={vi.fn()} />)
-    expect(buttonTexts(r.container)).toContain('Refresh sign-in')
+    expect(openMenu(r.container)).toContain('Sign in again now')
     r.unmount()
   })
 
   it('an undefined active field is treated as active (no migration, no greying)', () => {
     const r = render(<AccountCard row={row({ status: 'needs-login' })} theme="dark" onSignIn={vi.fn()} />)
-    expect(buttonTexts(r.container)).toContain('Sign in')
+    expect(buttonTexts(r.container)).toContain('Sign in again')
     r.unmount()
   })
 
   // Usage track MP3 review (D5): an account of a provider that is off offers
   // nothing to act on and no sign-in countdown: nothing of it was read.
-  it('an account of a provider that is off shows no "Refresh sign-in", no countdown and no warnings', () => {
+  it('an account of a provider that is off shows no menu, no countdown and no warnings', () => {
     const auth = { profileId: 'profile-x-1', hasRefreshToken: true, refreshTokenExpiresAt: Date.now() + 3 * 86_400_000, duplicateOfProfileIds: ['profile-y-1'], identityMismatch: true, accountEmail: 'x@example.com', oauthEmail: 'y@example.com' }
     const r = render(<AccountCard row={row({ status: 'off', active: true })} auth={auth} theme="dark" onSignIn={vi.fn()} />)
     expect(buttonTexts(r.container)).toEqual([])
@@ -112,10 +131,13 @@ describe('AccountCard: identity, D2 and ages (usage track MP4)', () => {
   afterEach(() => { vi.useRealTimers() })
 
   // MP4 review F5: the canvas Errors state, exactly as the component words it.
-  it('an account signed in with no usable token, and one whose read failed, say so exactly', () => {
-    const dash = String.fromCharCode(0x2014)
-    const signedIn = render(<AccountCard row={row({ status: 'error', detail: 'signed in' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
-    expect(signedIn.container.querySelector('p')?.textContent).toBe(`Signed in ${dash} open a session to refresh usage.`)
+  // nubbymong/aicc_planning#445: signed in with no usable token is the Refreshing state now: the app
+  // renews the sign-in by itself.
+  it('an account signed in with no usable token is Refreshing; one whose read failed says so exactly', () => {
+    const signedIn = render(<AccountCard row={row({ status: 'error', detail: USAGE_DETAIL_RENEWING })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(signedIn.container, 'account-usage-state-pill')?.textContent).toBe('Refreshing…')
+    expect(q(signedIn.container, 'account-usage-card-foot')?.textContent).toBe('Renewing its sign-in by itself')
+    expect(signedIn.container.textContent).not.toMatch(/open a session|Couldn't load/)
     signedIn.unmount()
     const limited = render(<AccountCard row={row({ status: 'error', detail: 'HTTP 429' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
     expect(limited.container.querySelector('p')?.textContent).toBe("Couldn't load usage (HTTP 429).")
@@ -125,7 +147,7 @@ describe('AccountCard: identity, D2 and ages (usage track MP4)', () => {
   // MP4 review F6: each bar names its bucket.
   it('each bar names the window it measures', () => {
     const r = render(<AccountCard row={row({ buckets: [bucket('5h', 34, at(15, 10)), bucket('Weekly', 58, at(9, 0, 30))] })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
-    expect(Array.from(r.container.querySelectorAll('[role="progressbar"]')).map((b) => b.getAttribute('aria-label'))).toEqual(['5h usage', 'Weekly usage'])
+    expect(Array.from(r.container.querySelectorAll('[role="progressbar"]')).map((b) => b.getAttribute('aria-label'))).toEqual(['5h left', 'Weekly left'])
     r.unmount()
   })
 
@@ -152,8 +174,8 @@ describe('AccountCard: identity, D2 and ages (usage track MP4)', () => {
     const past = at(9, 40)
     const r = render(<AccountCard row={row({ buckets: [bucket('5h', 34, past), bucket('Weekly', 58, at(9, 0, 30))] })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
     expect(r.container.textContent).toContain(`Reset ${formatResetTime(past)}, no reading since`)
-    expect(r.container.textContent).not.toContain('34%')
-    expect(r.container.textContent).toContain('58%')
+    expect(r.container.textContent).not.toContain('66% left')
+    expect(r.container.textContent).toContain('42% left')
     expect(r.container.querySelectorAll('[role="progressbar"]')).toHaveLength(1)
     r.unmount()
   })
@@ -178,9 +200,11 @@ describe('AccountCard: an account a running session uses', () => {
     r.unmount()
   })
 
-  it('a current figure reads "Updated <age>", as any other', () => {
+  // nubbymong/aicc_planning#445 (the mockup): a current figure is live from its open session, In use.
+  it('a current figure reads "Live from its open session", In use', () => {
     const r = render(<AccountCard row={row({ buckets: [bucket('Weekly', 5, at(9, 0, 30))], stale: false, inSession: true, fetchedAt: NOW - 10_000 })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
-    expect(r.container.textContent).toContain('Updated just now')
+    expect(r.container.textContent).toContain('Live from its open session')
+    expect(q(r.container, 'account-usage-state-pill')?.textContent).toBe('In use')
     r.unmount()
   })
 
@@ -189,7 +213,8 @@ describe('AccountCard: an account a running session uses', () => {
     expect(r.container.textContent).toContain("Waiting for this account's session.")
     expect(r.container.textContent).not.toMatch(/Couldn't load|No usage limits|open a session/)
     expect(r.container.querySelectorAll('[role="progressbar"]')).toHaveLength(0)
-    expect(buttonTexts(r.container)).toEqual(['Refresh sign-in'])
+    expect(openMenu(r.container)).toEqual(['Sign in again now'])
+    expect(menuDetails(r.container)).toEqual(['Resets the forced sign-in countdown. Opens a terminal for this account.'])
     r.unmount()
   })
 
@@ -240,15 +265,18 @@ function cxCard(o: { account?: Partial<AccountView>; view?: Partial<ProviderAcco
 describe('CodexAccountCard (usage track MP4)', () => {
   afterEach(() => { vi.useRealTimers() })
 
-  it('an account with an open session: name, sign-in method, Default and plan, its bars, "Updated just now", and nothing to sign in', () => {
+  it('an account with an open session: name, sign-in method, plan and Default, In use, its bars of what is left, "Updated just now", and nothing to sign in', () => {
     const r = cxCard({ account: { isProviderDefault: true } })
     expect(q(r.container, 'account-usage-name')?.textContent).toBe('Work')
     expect(q(r.container, 'account-usage-sub')?.textContent).toBe('ChatGPT sign-in')
     expect(q(r.container, 'account-usage-chip')?.style.backgroundColor).toBe(rgb('#3ba8d4'))
-    expect(Array.from(r.container.querySelectorAll('[data-testid="account-usage-pill"]')).map((p) => p.textContent)).toEqual(['Default', 'Plus'])
-    expect(r.container.textContent).toContain('18%')
-    expect(r.container.textContent).toContain('47%')
-    expect(r.container.textContent).toContain('Updated just now')
+    // The mockup's order: the plan first, then Default.
+    expect(Array.from(r.container.querySelectorAll('[data-testid="account-usage-pill"]')).map((p) => p.textContent)).toEqual(['Plus', 'Default'])
+    expect(q(r.container, 'account-usage-state-pill')?.textContent).toBe('In use')
+    expect(r.container.textContent).toContain('82% left')
+    expect(r.container.textContent).toContain('53% left')
+    expect(r.container.textContent).toContain('Updated just now, from its open session')
+    expect(openMenu(r.container)).toEqual([])
     expect(buttonTexts(r.container)).toEqual([])
     expect(r.container.textContent).not.toMatch(/Forced sign-in|countdown/i)
     r.unmount()
@@ -267,8 +295,8 @@ describe('CodexAccountCard (usage track MP4)', () => {
     const past = at(11, 40)
     const r = cxCard({ view: { source: 'last-seen', buckets: [bucket('5h', 12, past), bucket('Weekly', 41, at(18, 0, 30))] } })
     expect(r.container.textContent).toContain(`Reset ${formatResetTime(past)}, no reading since`)
-    expect(r.container.textContent).not.toContain('12%')
-    expect(r.container.textContent).toContain('41%')
+    expect(r.container.textContent).not.toContain('88% left')
+    expect(r.container.textContent).toContain('59% left')
     r.unmount()
   })
 
@@ -291,21 +319,26 @@ describe('CodexAccountCard (usage track MP4)', () => {
     r.unmount()
   })
 
-  it('a parked account shows Inactive and the parked line, and no plan or bars', () => {
-    const r = cxCard({ account: { lifecycle: 'inactive' }, view: { status: 'inactive', buckets: [] } })
+  it('a parked account shows Inactive and the parked line, and no plan, bars or menu', () => {
+    const r = cxCard({ account: { lifecycle: 'inactive', isProviderDefault: true }, view: { status: 'inactive', buckets: [] } })
     expect(Array.from(r.container.querySelectorAll('[data-testid="account-usage-pill"]')).map((p) => p.textContent)).toEqual(['Inactive'])
-    expect(r.container.textContent).toMatch(/Parked/)
+    expect(r.container.textContent).toContain(PARKED_LINE)
+    expect(buttonTexts(r.container)).toEqual([])
     expect(r.container.querySelectorAll('[role="progressbar"]')).toHaveLength(0)
     r.unmount()
   })
 
-  it('a signed-out account offers "Sign in again", with its last-seen reading', () => {
+  // nubbymong/aicc_planning#445 (the mockup's signed-out card): the reason, when it was last read and
+  // the Sign in again button; no bars from a sign-in that no longer works.
+  it('a signed-out account offers "Sign in again" and says when it was last read', () => {
     const onSignInAgain = vi.fn()
     const r = cxCard({ onSignInAgain, account: { lastKnownAuthState: 'signed-out' }, view: { status: 'not-signed-in', source: 'last-seen', readingAt: NOW - 2 * 3_600_000 } })
-    expect(buttonTexts(r.container)).toEqual(['Sign in again'])
-    expect(r.container.textContent).toContain('18%')
-    expect(r.container.textContent).toContain('As of 2 h ago, from its latest session')
-    act(() => { (r.container.querySelector('button') as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe('Signed out')
+    expect(r.container.textContent).toContain('Last reading 2 h ago')
+    expect(r.container.querySelectorAll('[role="progressbar"]')).toHaveLength(0)
+    expect(q(r.container, 'account-usage-codex-card')?.getAttribute('data-state')).toBe('sign-in')
+    const signIn = Array.from(r.container.querySelectorAll('button')).find((b) => b.textContent === 'Sign in again') as HTMLElement
+    act(() => { signIn.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
     expect(onSignInAgain).toHaveBeenCalledTimes(1)
     r.unmount()
   })
@@ -403,8 +436,8 @@ describe('the credits row (P3.14)', () => {
 
     it('a card with credits keeps every other part of the card: the bars, the plan and the age line', () => {
       const r = cxCard({ view: withCredits({ hasCredits: true, unlimited: false, balance: 1250 }) })
-      expect(r.container.textContent).toContain('18%')
-      expect(r.container.textContent).toContain('47%')
+      expect(r.container.textContent).toContain('82% left')
+      expect(r.container.textContent).toContain('53% left')
       expect(r.container.textContent).toContain('Plus')
       expect(r.container.textContent).toContain('Updated just now')
       r.unmount()
@@ -413,16 +446,17 @@ describe('the credits row (P3.14)', () => {
     it('a last-seen view shows its credits above "As of ..."', () => {
       const r = cxCard({ view: withCredits({ hasCredits: true, unlimited: false, balance: 1250 }, { source: 'last-seen', readingAt: NOW - 3 * 3_600_000 }) })
       const row = creditsRow(r.container)!
-      const as = Array.from(r.container.querySelectorAll('p')).find((p) => p.textContent?.startsWith('As of'))!
-      expect(as).toBeTruthy()
+      const as = q(r.container, 'account-usage-card-foot')!
+      expect(as.textContent).toContain('As of 3 h ago')
       expect(row.compareDocumentPosition(as) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
       r.unmount()
     })
 
-    it('a signed-out account\'s last-seen credits show beside "Sign in again"', () => {
+    // nubbymong/aicc_planning#445 (the mockup's signed-out card): no bars, so no credits under them.
+    it('a signed-out account shows no credits row, only "Sign in again"', () => {
       const r = cxCard({ account: { lastKnownAuthState: 'signed-out' }, view: withCredits({ hasCredits: true, unlimited: false, balance: 1250 }, { status: 'not-signed-in', source: 'last-seen', readingAt: NOW - 3_600_000 }) })
-      expect(creditsRow(r.container)!.textContent).toBe(`Credits${count(1250)} credits`)
-      expect(buttonTexts(r.container)).toEqual(['Sign in again'])
+      expect(creditsRow(r.container)).toBeNull()
+      expect(buttonTexts(r.container)).toContain('Sign in again')
       r.unmount()
     })
 
@@ -488,5 +522,251 @@ describe('the credits row (P3.14)', () => {
       expect(claudeRow(r.container)!.className).toBe('flex items-center justify-between text-[0.8125rem] mt-1 pt-2 border-t border-surface0/60')
       r.unmount()
     })
+  })
+})
+
+// nubbymong/aicc_planning#445 (the approved mockup v1): each card state as
+// the card draws it, the meters as what is LEFT (the sorted-on one bold), the
+// plan pill from the stored sign-in, Most room, the loading meters, and the
+// card menu wired to the page's actions.
+describe('the card states (aicc_planning#445)', () => {
+  const card = (c: HTMLElement) => c.querySelector('[data-testid="account-usage-card"]') as HTMLElement
+  const auth = (over: Record<string, unknown> = {}) => ({ profileId: 'profile-x-1', hasRefreshToken: true, expiresAt: NOW - 3_600_000, refreshTokenExpiresAt: NOW + 19 * 86_400_000 + 60_000, ...over })
+  const okRow = (over: Partial<AccountUsage> = {}) => row({ buckets: [bucket('5h', 9, at(16, 10)), bucket('Weekly', 36, at(9, 0, 30))], fetchedAt: NOW - 2 * 60_000, ...over })
+
+  it('Ready: meters say what is left with their reset, the 5h one bold; the foot ages and counts down', () => {
+    const r = render(<AccountCard row={okRow()} auth={auth({ expiresAt: NOW + 3_600_000 })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(card(r.container).getAttribute('data-state')).toBe('ready')
+    const meters = Array.from(r.container.querySelectorAll('[data-testid="account-usage-meter"]'))
+    expect(meters.map((m) => m.querySelector('[data-testid="account-usage-left"]')?.textContent)).toEqual(['91% left', '64% left'])
+    expect(meters[0].textContent).toContain(`resets ${formatResetTime(at(16, 10))}`)
+    expect(meters.map((m) => m.getAttribute('data-bold'))).toEqual(['true', null])
+    expect(Array.from(r.container.querySelectorAll('[role="progressbar"]')).map((b) => b.getAttribute('aria-valuenow'))).toEqual(['91', '64'])
+    expect(q(r.container, 'account-usage-card-foot')?.textContent).toBe('Updated 2 min agoForced sign-in in 19 days')
+    r.unmount()
+  })
+
+  it('sorted by weekly left, the weekly meter is the bold one', () => {
+    const r = render(<AccountCard row={okRow()} theme="dark" onSignIn={vi.fn()} now={NOW} sort="weekly" />)
+    expect(Array.from(r.container.querySelectorAll('[data-testid="account-usage-meter"]')).map((m) => m.getAttribute('data-bold'))).toEqual([null, 'true'])
+    r.unmount()
+  })
+
+  it('a per-model meter stays, small, and is never the bold one', () => {
+    const fable: UsageBucket = { key: 'weekly:Fable', label: 'Fable', group: 'weekly', percent: 22, resetsAt: at(9, 0, 30), severity: 'normal' }
+    const r = render(<AccountCard row={okRow({ buckets: [fable, ...okRow().buckets] })} theme="dark" onSignIn={vi.fn()} now={NOW} sort="weekly" />)
+    const meters = Array.from(r.container.querySelectorAll('[data-testid="account-usage-meter"]'))
+    expect(meters.map((m) => m.firstElementChild?.firstElementChild?.textContent)).toEqual(['Fable', '5h', 'Weekly'])
+    expect(meters.map((m) => m.getAttribute('data-bold'))).toEqual([null, null, 'true'])
+    expect(meters[0].querySelector('[role="progressbar"]')?.className).toContain('h-[5px]')
+    r.unmount()
+  })
+
+  it('the plan pill comes from the stored sign-in\'s subscription type; an unknown one shows none', () => {
+    const max = render(<AccountCard row={okRow()} auth={auth({ subscriptionType: 'max' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(Array.from(max.container.querySelectorAll('[data-testid="account-usage-pill"]')).map((p) => p.textContent)).toEqual(['Max'])
+    max.unmount()
+    const odd = render(<AccountCard row={okRow({ isPrimary: true })} auth={auth({ subscriptionType: 'mystery' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(Array.from(odd.container.querySelectorAll('[data-testid="account-usage-pill"]')).map((p) => p.textContent)).toEqual(['Primary'])
+    odd.unmount()
+  })
+
+  // Review F5: the usage tier the stored sign-in carries beside its plan.
+  it('a Max plan names its usage tier, as the mockup does', () => {
+    const r = render(<AccountCard row={okRow()} auth={auth({ subscriptionType: 'max', rateLimitTier: 'default_claude_max_20x' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(Array.from(r.container.querySelectorAll('[data-testid="account-usage-pill"]')).map((p) => p.textContent)).toEqual(['Max 20x'])
+    r.unmount()
+  })
+
+  it('Refreshing: the spinner pill, the last reading dimmed, and the foot says it renews itself', () => {
+    const r = render(<AccountCard row={okRow({ stale: true, fetchedAt: NOW - 3 * 3_600_000 })} auth={auth()} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(card(r.container).getAttribute('data-state')).toBe('refreshing')
+    expect(q(r.container, 'account-usage-state-pill')?.textContent).toBe('Refreshing…')
+    expect(q(r.container, 'account-usage-meters')?.className).toContain('opacity-50')
+    expect(r.container.textContent).toContain('91% left')
+    expect(q(r.container, 'account-usage-card-foot')?.textContent).toBe('Renewing its sign-in by itself · last reading 3 h agoForced sign-in in 19 days')
+    r.unmount()
+  })
+
+  it('In use: the live pill and "Live from its open session"', () => {
+    const r = render(<AccountCard row={okRow({ inSession: true })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(card(r.container).getAttribute('data-state')).toBe('in-use')
+    expect(q(r.container, 'account-usage-state-pill')?.textContent).toBe('In use')
+    expect(q(r.container, 'account-usage-card-foot')?.textContent).toBe('Live from its open session')
+    r.unmount()
+  })
+
+  it('Out of 5h until <time>: the used-up meter says when it is back', () => {
+    const back = at(18, 40)
+    const r = render(<AccountCard row={okRow({ buckets: [bucket('5h', 100, back), bucket('Weekly', 70, at(9, 0, 30))] })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(card(r.container).getAttribute('data-state')).toBe('out')
+    expect(q(r.container, 'account-usage-out')?.textContent).toBe(`Out of 5h until ${formatResetTime(back)}`)
+    expect(r.container.querySelector('[data-testid="account-usage-meter"]')?.textContent).toBe(`5h0% leftback at ${formatResetTime(back)}`)
+    r.unmount()
+  })
+
+  it('Out of the week: a used-up weekly window says so', () => {
+    const back = at(9, 0, 30)
+    const r = render(<AccountCard row={okRow({ buckets: [bucket('5h', 10, at(16)), bucket('Weekly', 100, back)] })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(r.container, 'account-usage-out')?.textContent).toBe(`Out of the week until ${formatResetTime(back)}`)
+    r.unmount()
+  })
+
+  it('Sign in again, expired: the day it ran out, why, when it was last read, and the button', () => {
+    const onSignIn = vi.fn()
+    const expired = NOW - 6 * 86_400_000
+    const r = render(<AccountCard row={row({ status: 'needs-login', detail: 'not signed in' })} auth={auth({ refreshTokenExpiresAt: expired })} lastReadingAt={NOW - 6 * 86_400_000} theme="dark" onSignIn={onSignIn} now={NOW} />)
+    expect(card(r.container).getAttribute('data-state')).toBe('sign-in')
+    expect(card(r.container).className).toContain('border-red/35')
+    expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe(`Sign-in expired on ${new Date(expired).toLocaleDateString([], { day: 'numeric', month: 'short' })}`)
+    expect(r.container.textContent).toContain('Its long-lived sign-in ran out, so Claude Code needs you to sign in once.')
+    expect(r.container.textContent).toContain('Last reading 6 days ago')
+    // Signing in is the card's own button; the menu holds no second one.
+    expect(openMenu(r.container)).toEqual([])
+    const button = Array.from(r.container.querySelectorAll('button')).find((b) => b.textContent === 'Sign in again') as HTMLElement
+    act(() => { button.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(onSignIn).toHaveBeenCalledTimes(1)
+    r.unmount()
+  })
+
+  it('Sign in again with no sign-in stored says "Not signed in"', () => {
+    const r = render(<AccountCard row={row({ status: 'needs-login', detail: 'not signed in' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe('Not signed in')
+    expect(r.container.textContent).toContain('This account has no sign-in stored')
+    r.unmount()
+  })
+
+  // nubbymong/aicc_planning#444 review P4-1: each reason main gives for Sign in
+  // again is named on the card, with an action that can clear it.
+  const clickText = (c: HTMLElement, text: string) => {
+    const b = Array.from(c.querySelectorAll('button')).find((x) => x.textContent === text) as HTMLElement | undefined
+    expect(b, `a "${text}" button`).toBeDefined()
+    act(() => { b!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+  }
+
+  it('Sign in again, duplicate: names the profile on the same account and offers signing in as its own account', () => {
+    const onSignIn = vi.fn()
+    const dup = { kind: 'duplicate' as const, account: 'x@example.com', profileIds: ['profile-y-2'] }
+    const r = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_DUPLICATE, signInProblem: dup })} auth={auth({ duplicateOfProfileIds: ['profile-y-2'] })} nameOf={(id) => (id === 'profile-y-2' ? 'Work' : undefined)} theme="dark" onSignIn={onSignIn} now={NOW} />)
+    expect(card(r.container).getAttribute('data-state')).toBe('sign-in')
+    expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe('Signed in to the same account as Work')
+    expect(r.container.textContent).toContain('x@example.com')
+    expect(r.container.textContent).toMatch(/as its own account/)
+    // Not the missing or expired wording: it is signed in.
+    expect(r.container.textContent).not.toMatch(/Not signed in|no sign-in stored|ran out/)
+    // Signing in as the same account again cannot clear it.
+    expect(buttonTexts(r.container)).not.toContain('Sign in again')
+    clickText(r.container, 'Sign in as its own account')
+    expect(onSignIn).toHaveBeenCalledTimes(1)
+    r.unmount()
+  })
+
+  it('Sign in again, duplicate of several or unnamed profiles: says how many, or "another profile"', () => {
+    const two = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_DUPLICATE, signInProblem: { kind: 'duplicate', account: 'x@example.com', profileIds: ['a', 'b'] } })} nameOf={(id) => ({ a: 'Work', b: 'Home' } as Record<string, string>)[id]} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(two.container, 'account-usage-signin-reason')?.textContent).toBe('Signed in to the same account as Work and Home')
+    two.unmount()
+    const unnamed = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_DUPLICATE })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(unnamed.container, 'account-usage-signin-reason')?.textContent).toBe('Signed in to the same account as another profile')
+    unnamed.unmount()
+  })
+
+  it('Sign in again, wrong account: names the account it is on and the one it is labelled, and signs in as that one', () => {
+    const onSignIn = vi.fn()
+    const wrong = { kind: 'wrong-account' as const, signedInAs: 'other@example.com', labelledAs: 'x@example.com' }
+    const r = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_WRONG_ACCOUNT, signInProblem: wrong })} auth={auth({ identityMismatch: true, accountEmail: 'x@example.com', oauthEmail: 'other@example.com' })} theme="dark" onSignIn={onSignIn} now={NOW} />)
+    expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe('Signed in as other@example.com, labelled x@example.com')
+    expect(r.container.textContent).toContain('Sign it in again as x@example.com')
+    expect(r.container.textContent).not.toMatch(/Not signed in|no sign-in stored|ran out/)
+    clickText(r.container, 'Sign in again')
+    expect(onSignIn).toHaveBeenCalledTimes(1)
+    r.unmount()
+  })
+
+  it('Sign in again, expired by the service\'s answer alone (no expiry stored): "Sign-in expired"', () => {
+    const r = render(<AccountCard row={row({ status: 'needs-login', detail: USAGE_DETAIL_EXPIRED })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(r.container, 'account-usage-signin-reason')?.textContent).toBe('Sign-in expired')
+    expect(r.container.textContent).toContain('Its long-lived sign-in ran out')
+    r.unmount()
+  })
+
+  it('Parked: greyed, the parked line, Inactive, and nothing to act on', () => {
+    const r = render(<AccountCard row={row({ status: 'inactive', active: false })} auth={auth({ subscriptionType: 'pro' })} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(card(r.container).getAttribute('data-state')).toBe('parked')
+    expect(card(r.container).className).toContain('opacity-60')
+    expect(r.container.textContent).toContain(PARKED_LINE)
+    expect(Array.from(r.container.querySelectorAll('[data-testid="account-usage-pill"]')).map((p) => p.textContent)).toEqual(['Inactive'])
+    expect(q(r.container, 'account-usage-countdown')).toBeNull()
+    r.unmount()
+  })
+
+  it('the account with the most room is outlined with the "Most room" pill', () => {
+    const r = render(<AccountCard row={okRow()} theme="dark" onSignIn={vi.fn()} now={NOW} best />)
+    expect(card(r.container).getAttribute('data-best')).toBe('true')
+    expect(card(r.container).className).toContain('border-green/55')
+    expect(q(r.container, 'account-usage-best')?.textContent).toBe('Most room')
+    r.unmount()
+    const plain = render(<AccountCard row={okRow()} theme="dark" onSignIn={vi.fn()} now={NOW} />)
+    expect(q(plain.container, 'account-usage-best')).toBeNull()
+    plain.unmount()
+  })
+
+  it('drawn from the profile before its reading: identity at once, meters animating', () => {
+    const profile = { id: 'profile-x-1', name: 'Acct', accountEmail: 'p@example.com', createdAt: 0 }
+    const r = render(<AccountCard profile={profile} theme="dark" onSignIn={vi.fn()} now={NOW} loading />)
+    expect(q(r.container, 'account-usage-name')?.textContent).toBe('p@example.com')
+    expect(card(r.container).getAttribute('data-state')).toBe('pending')
+    expect(card(r.container).getAttribute('aria-busy')).toBe('true')
+    expect(q(r.container, 'account-usage-loading')).not.toBeNull()
+    expect(r.container.querySelectorAll('[role="progressbar"]')).toHaveLength(0)
+    expect(q(r.container, 'account-usage-card-foot')?.textContent).toBe('Reading usage…')
+    r.unmount()
+  })
+
+  it('a fresh reading on its way: the last one stays, dimmed, its bars sweeping', () => {
+    const r = render(<AccountCard row={okRow({ fetchedAt: NOW - 3 * 3_600_000 })} theme="dark" onSignIn={vi.fn()} now={NOW} loading />)
+    const meters = q(r.container, 'account-usage-loading')!
+    expect(meters.className).toContain('opacity-50')
+    expect(meters.querySelector('[role="progressbar"]')?.className).toContain('statusline-pending-track')
+    expect(r.container.textContent).toContain('91% left')
+    expect(q(r.container, 'account-usage-card-foot')?.textContent).toBe('Last reading 3 h ago · reading again')
+    r.unmount()
+  })
+
+  it('the menu: "Read usage again", then "Sign in again now" with what it resets; each calls its action', () => {
+    const onSignIn = vi.fn()
+    const onReadAgain = vi.fn()
+    const r = render(<AccountCard row={okRow()} auth={auth({ expiresAt: NOW + 3_600_000, refreshTokenExpiresAt: NOW + 5.5 * 86_400_000 })} theme="dark" onSignIn={onSignIn} onReadAgain={onReadAgain} now={NOW} />)
+    expect(q(r.container, 'account-usage-menu')?.getAttribute('aria-label')).toBe('More actions for x@example.com')
+    expect(openMenu(r.container)).toEqual(['Read usage again', 'Sign in again now'])
+    expect(menuDetails(r.container)).toEqual(['', 'Resets the 5-day forced sign-in countdown. Opens a terminal for this account.'])
+    const pick = (key: string) => {
+      act(() => { q(r.container, 'account-usage-menu')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+      act(() => { (document.body.querySelector(`[data-testid="account-usage-menu-${key}"]`) as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    }
+    pick('read-again')
+    expect(onReadAgain).toHaveBeenCalledTimes(1)
+    pick('sign-in-now')
+    expect(onSignIn).toHaveBeenCalledTimes(1)
+    r.unmount()
+  })
+
+  it('a Codex card\'s menu reads it again; there is no sign-in countdown to reset', () => {
+    const onReadAgain = vi.fn()
+    const r = render(
+      <CodexAccountCard account={cxAccount()} view={cxView({ source: 'read' })} name="Work" method="ChatGPT sign-in" colour={null} now={NOW} onSignInAgain={vi.fn()} onReadAgain={onReadAgain} />,
+    )
+    expect(openMenu(r.container)).toEqual(['Read usage again'])
+    act(() => { q(r.container, 'account-usage-menu')!.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    act(() => { (document.body.querySelector('[data-testid="account-usage-menu-read-again"]') as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(onReadAgain).toHaveBeenCalledTimes(1)
+    r.unmount()
+  })
+
+  it('a Codex card names its email beside how it signs in, as the mockup does', () => {
+    const r = render(
+      <CodexAccountCard account={cxAccount()} view={cxView()} name="Codex H" email="h@example.com" method="ChatGPT sign-in" colour={null} now={NOW} onSignInAgain={vi.fn()} />,
+    )
+    expect(q(r.container, 'account-usage-sub')?.textContent).toBe('h@example.com · ChatGPT sign-in')
+    r.unmount()
   })
 })

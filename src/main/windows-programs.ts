@@ -828,15 +828,28 @@ function assertProfileLookupNames(names: readonly string[]): void {
  *  UTF-8 bytes, so no console code page can change a character of it and no
  *  profile banner can be mistaken for it. No double quote anywhere in it, so
  *  Windows PowerShell's command line cannot split it. THROWS for a name
- *  PROFILE_LOOKUP_NAME refuses. */
+ *  PROFILE_LOOKUP_NAME refuses.
+ *
+ *  After the profile, the command loads a module only for a command named
+ *  with its module ($PSModuleAutoLoadingPreference 'ModuleQualified'), and
+ *  names each cmdlet it runs with its module. With no module analysis cache
+ *  yet (a new user profile; the GitHub Windows runner), Windows PowerShell
+ *  5.1 otherwise looks through every module on its module path for a cmdlet
+ *  named bare (Select-Object), and Get-Command does the same for each name
+ *  it does not find, an application included. On a test PC with 600 modules
+ *  on the path, a lookup that found nothing took 3.7 s that way and 0.4 s
+ *  this way. A probe of the old command against this one in Windows
+ *  PowerShell 5.1 gave the same answers: the same path for a program it
+ *  found (cmd.exe), and the same empty answer for a missing name. */
 export function powerShellProfileLookupCommand(names: readonly string[]): string {
   assertProfileLookupNames(names)
   const list = names.map((n) => `'${n}'`).join(',')
   return [
     "$ErrorActionPreference = 'SilentlyContinue'",
-    "$env:PATH = (@($env:PATH -split ';') | Where-Object { $_.Trim() -match '^\\x22?[A-Za-z]:[\\\\/]' -and $_ -notmatch '%' }) -join ';'",
+    "$PSModuleAutoLoadingPreference = 'ModuleQualified'",
+    "$env:PATH = (@($env:PATH -split ';') | Microsoft.PowerShell.Core\\Where-Object { $_.Trim() -match '^\\x22?[A-Za-z]:[\\\\/]' -and $_ -notmatch '%' }) -join ';'",
     "$found = ''",
-    `foreach ($name in @(${list})) { $c = Get-Command -Name $name -CommandType Application | Select-Object -First 1; if ($c) { $found = [string]$c.Source; break } }`,
+    `foreach ($name in @(${list})) { $c = Microsoft.PowerShell.Core\\Get-Command -Name $name -CommandType Application | Microsoft.PowerShell.Utility\\Select-Object -First 1; if ($c) { $found = [string]$c.Source; break } }`,
     `[Console]::Out.Write('${PROFILE_ANSWER_BEGIN}' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($found)) + '${PROFILE_ANSWER_END}')`,
   ].join('; ')
 }

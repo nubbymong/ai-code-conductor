@@ -60,6 +60,7 @@ import { PROMPT_ENTER_DELAY_MS } from '../../session-input/enter-delay'
 // subprocess environment, realm paths, the CLI runner and discovery.
 export {
   codexCommandLine, cliCommandLine, codexShellEnv, runCodexCli, defaultCodexRunDeps, makeCodexKillTree, makeCodexProcessLister,
+  codexReviewArgs, codexReviewCommandLine, CODEX_REVIEW_EFFORTS, CODEX_REVIEW_DEFAULT_EFFORT,
   codexChainPids, codexLeftoverPids, codexRecordRunMembers, codexRunMemberAlive, codexChainAlone, CODEX_OBSERVE_MAX_READS, CODEX_OBSERVE_MAX_IN_FLIGHT, CODEX_OBSERVE_QUIET_READS, CODEX_OBSERVE_AT_MS, parseWindowsProcessTable, parsePosixProcessTable, parseLinuxStat, WINDOWS_PROCESS_QUERY,
   CODEX_KILL_SETTLE_MS, CODEX_PROCESS_TABLE_TIMEOUT_MS, CODEX_TASKKILL_TIMEOUT_MS, CODEX_TREE_PRIME_MS, CODEX_PRIME_TABLE_TIMEOUT_MS, codexWrapperLinePids, CODEX_KILL_WORST_MS, flushPendingCodexKills,
 } from './cli-runner'

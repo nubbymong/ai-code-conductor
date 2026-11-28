@@ -54,8 +54,8 @@ vi.mock('node:child_process', async (importOriginal) => {
 import {
   _setRootsForTest, _setCredentialFolderRuleForTest, getProfileConfigDir, getAccountIdentityDir, getProfilesRoot,
   copyCredentialFile, writeCanonicalIdentity, withProfileHome, profileRealmLaunch, credentialFoldersVerdict,
-  checkProfileCredentialFolders, checkEveryProfileCredentialFolders, startOwnerOnlyCredentialFolders,
-  startProfileStepsSettled, startProfileStepsPending, profileCredentialFoldersChecked,
+  checkProfileCredentialFolders, _checkEveryProfileCredentialFoldersForTest, startOwnerOnlyCredentialFolders,
+  startProfileStepsSettled, startProfileStepsPending, profileCredentialFoldersChecked, _readyHomeAfterStepsSettledForTest,
   upsertProfile, setPrimaryProfile, syncPrimaryCredentialsWithGlobal, sharedRoot, captureGlobalLogin,
   restoreProfileHomeFromCanonical, listProfiles, cleanupSessionHomes, getSessionHomesRoot, SHARED_DIR_NAMES,
   CREDENTIAL_FOLDER_REFUSAL, CREDENTIAL_FOLDER_PENDING, CREDENTIAL_FOLDER_UNCHECKED, MANAGED_LAUNCH_REFUSAL,
@@ -169,7 +169,13 @@ beforeEach(() => {
   fs.writeFileSync(src, NEW_CREDENTIAL)
 })
 
-afterEach(() => {
+afterEach(async () => {
+  // The start's ready-home check after its profile steps (account-profiles.ts
+  // startOwnerOnlyCredentialFolders, when the steps make no account) is not
+  // awaited by the start: it ends here, inside this test, so none of its
+  // Windows PowerShell calls is read as the next test's.
+  await startProfileStepsSettled()
+  await _readyHomeAfterStepsSettledForTest()
   _setCredentialFolderRuleForTest(null)
   _setRootsForTest(null)
   _resetProviderRegistryForTest()
@@ -672,7 +678,7 @@ describe('a new profile takes a home already made and checked, so its first sign
 
   it('checked homes kept ready: a capture writes the new profile\'s sign-in and identity at once, and another home is made ready', async () => {
     const calls = useRule(() => true)
-    await checkEveryProfileCredentialFolders()
+    await _checkEveryProfileCredentialFoldersForTest()
     const captured = captureGlobalLogin()
     expect(captured).not.toBeNull()
     const newHome = getProfileConfigDir(captured!.id)
@@ -682,7 +688,7 @@ describe('a new profile takes a home already made and checked, so its first sign
     expect(credentialFoldersVerdict([newHome, path.join(newHome, '.claude'), path.join(newHome, 'identity')])).toEqual({ ok: true })
     // The home the capture took was asked before the capture began.
     expect(calls.flat().some((d) => d.startsWith(newHome))).toBe(false)
-    await checkEveryProfileCredentialFolders()
+    await _checkEveryProfileCredentialFoldersForTest()
     expect(listProfiles().map((p) => p.id)).toEqual([captured!.id])
   })
 
@@ -703,12 +709,12 @@ describe('a new profile takes a home already made and checked, so its first sign
     // The home it took was the one checked before the capture began.
     expect(calls.flat().some((d) => d.startsWith(newHome))).toBe(false)
     expect(refusals()).toEqual([])
-    await checkEveryProfileCredentialFolders()
+    await _checkEveryProfileCredentialFoldersForTest()
   })
 
   it('no checked home ready (the rule refuses it): the capture writes nothing and leaves no profile', async () => {
     useRule(() => false)
-    await checkEveryProfileCredentialFolders()
+    await _checkEveryProfileCredentialFoldersForTest()
     expect(captureGlobalLogin()).toBeNull()
     expect(listProfiles()).toEqual([])
     expect(fs.readdirSync(getProfilesRoot()).filter((n) => n.startsWith('profile-') && n !== ID)).toEqual([])
@@ -800,14 +806,14 @@ describe('a new profile takes a home already made and checked, so its first sign
       for (const d of dirs) seen.push([d, fs.existsSync(d)])
       return madeAndPassed(dirs)
     })
-    await checkEveryProfileCredentialFolders()
+    await _checkEveryProfileCredentialFoldersForTest()
     // The rule was asked about the ready home only once nothing was there: it made all three.
     expect(seen.filter(([d]) => readySet.includes(d))).toEqual(readySet.map((d) => [d, false]))
     // The home it made is the one the next new profile takes.
     const captured = captureGlobalLogin()
     expect(captured).not.toBeNull()
     expect(fs.readFileSync(path.join(getProfileConfigDir(captured!.id), '.claude', '.credentials.json'), 'utf8')).toBe(NEW_CREDENTIAL)
-    await checkEveryProfileCredentialFolders()
+    await _checkEveryProfileCredentialFoldersForTest()
   })
 
   it('a ready home that was never checked is not taken: the capture writes nothing and leaves no profile', async () => {

@@ -35,6 +35,7 @@ import SetupDialog from './components/SetupDialog'
 import { AppLoadingScreen } from './components/AppLoadingScreen'
 import { shouldShowWhatsNew, seenVersionOf } from './onboarding/whats-new-gate'
 import AccountLaunchGate from './components/AccountLaunchGate'
+import HostSignInNotice from './components/HostSignInNotice'
 import LaunchAckConfirm from './components/LaunchAckConfirm'
 import { grantLaunchAcknowledgement } from './stores/launchAckStore'
 import NewAccountPrompt from './components/NewAccountPrompt'
@@ -1668,6 +1669,10 @@ export default function App() {
             itself does not suppress it: a session launched while the offer is
             up shows its dialog (launchDialogsSuppressed, P3.5 VM finding V1). */}
         <AccountLaunchGate suppressed={launchDialogsSuppressed(bootGate)} />
+        {/* 2.1.3-beta.20 section 5 (frame 2): a helper tab whose account is
+            not signed in on its machine asks how it signs in there. Same
+            placement and suppression as the account gate beside it. */}
+        <HostSignInNotice suppressed={launchDialogsSuppressed(bootGate)} />
         {/* WP2: the per-launch confirm for an unverified sign-in (a
             provider's own home shared with other apps on this computer).
             Same placement and the same suppression rule as the account gate

@@ -49,9 +49,12 @@ const fetchAllAccountsUsageStreaming = vi.fn(async (onResult: (u: AccountUsage) 
   }
 })
 const knownUsageLabels = vi.fn(() => ['5h', 'Weekly', 'Fable'])
+/** nubbymong/aicc_planning#445 (review F1): each profile's newest figure, stale. */
+const lastKnownUsage = vi.fn((): AccountUsage[] => [{ ...usage('p1'), stale: true, fetchedAt: 5 }])
 vi.mock('../../../src/main/usage/account-usage', () => ({
   fetchAllAccountsUsage: vi.fn(), fetchAccountUsage: vi.fn(),
   knownUsageLabels: () => knownUsageLabels(),
+  lastKnownUsage: () => lastKnownUsage(),
   claudeAccountDataAllowed: () => h.claudeOn(),
   fetchAllAccountsUsageStreaming: (cb: (u: AccountUsage) => void, opts?: { shouldContinue?: () => boolean }) => fetchAllAccountsUsageStreaming(cb, opts),
 }))
@@ -359,5 +362,32 @@ describe('accountUsage:knownLabels handler', () => {
   it('a failure reads as no labels, never a throw', async () => {
     knownUsageLabels.mockImplementationOnce(() => { throw new Error('disk') })
     expect(await handlers.get(IPC.ACCOUNT_USAGE_KNOWN_LABELS)!(fromApp(fakeEvent()))).toEqual([])
+  })
+})
+
+// nubbymong/aicc_planning#445 (review F1): the page's last readings at its
+// first opening. Read-only: the handler takes no input and hands back
+// lastKnownUsage's answer (cached figures, no credential read, no request).
+describe('accountUsage:lastKnown handler', () => {
+  const lastKnown = (ev: any, ...a: any[]) => handlers.get(IPC.ACCOUNT_USAGE_LAST_KNOWN)!(fromApp(ev), ...a)
+
+  it("returns each profile's last known figure and ignores anything sent with the request", async () => {
+    expect(IPC.ACCOUNT_USAGE_LAST_KNOWN).toBe('accountUsage:lastKnown')
+    const want = [{ ...usage('p1'), stale: true, fetchedAt: 5 }]
+    expect(await lastKnown(fakeEvent())).toEqual(want)
+    expect(await lastKnown(fakeEvent(), { profileId: '..\\..\\x', refresh: true })).toEqual(want)
+    expect(fetchAllAccountsUsageStreaming).not.toHaveBeenCalled()
+    expect(h.readAllProfileAuthInfo).not.toHaveBeenCalled()
+  })
+
+  it('a failure reads as no figures, never a throw', async () => {
+    lastKnownUsage.mockImplementationOnce(() => { throw new Error('disk') })
+    expect(await lastKnown(fakeEvent())).toEqual([])
+  })
+
+  it("answers only the app's own window", async () => {
+    const untrusted = { sender: { mainFrame: { frame: 'other' } }, senderFrame: { frame: 'other' } }
+    appWindow.webContents = { mainFrame: appFrame }
+    expect(await handlers.get(IPC.ACCOUNT_USAGE_LAST_KNOWN)!(untrusted)).not.toEqual([{ ...usage('p1'), stale: true, fetchedAt: 5 }])
   })
 })

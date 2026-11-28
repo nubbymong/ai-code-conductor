@@ -75,16 +75,16 @@ function goldenNoResume(opts: {
       // path). Either way the line first names Claude Code for the picker,
       // which starts that one.
       return win32
-        ? `Set-Location -LiteralPath '${escapedCwd}'; $env:CCC_CLAUDE_BIN = ${quotedBin}; & 'C:\\nodejs\\node.exe' ${quotedPicker}${agentsFlag}${extraFlags}; exit`
+        ? `Microsoft.PowerShell.Management\\Set-Location -LiteralPath '${escapedCwd}'; $env:CCC_CLAUDE_BIN = ${quotedBin}; & 'C:\\nodejs\\node.exe' ${quotedPicker}${agentsFlag}${extraFlags}; exit`
         : `cd '${posixCwd}' && export CCC_CLAUDE_BIN=${quotedBin} && if { unalias node; command -v node; } >/dev/null 2>&1; then set -- node ${quotedPicker}; else printf '%s\\n' 'Node.js was not found, so the resume list was skipped.'; set -- "$CCC_CLAUDE_BIN"; fi && "$@"${agentsFlag}${extraFlags}; exit`
     } else {
       return win32
-        ? `Set-Location -LiteralPath '${escapedCwd}'; ${lookup}& ${quotedBin}${agentsFlag}${extraFlags}; exit`
+        ? `Microsoft.PowerShell.Management\\Set-Location -LiteralPath '${escapedCwd}'; ${lookup}& ${quotedBin}${agentsFlag}${extraFlags}; exit`
         : `cd '${posixCwd}' && ${quotedBin}${agentsFlag}${extraFlags}; exit`
     }
   }
   return win32
-    ? `Set-Location -LiteralPath '${escapedCwd}'; ${lookup}& ${quotedBin}${agentsFlag}${extraFlags}; exit`
+    ? `Microsoft.PowerShell.Management\\Set-Location -LiteralPath '${escapedCwd}'; ${lookup}& ${quotedBin}${agentsFlag}${extraFlags}; exit`
     : `cd '${posixCwd}' && ${quotedBin}${agentsFlag}${extraFlags}; exit`
 }
 
@@ -127,7 +127,7 @@ describe('buildClaudeLaunchCommand — GOLDEN (no resumeUuid, byte-identical)', 
       platform: 'win32', cwd: "F:\\o'brien", claudeBin: CLAUDE,
       extraFlags: '', agentsFlag: '', useResumePicker: false, pickerScript: null,
     })
-    expect(out).toContain("Set-Location -LiteralPath 'F:\\o''brien'")
+    expect(out).toContain("Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'F:\\o''brien'")
   })
 
   it('uses clean single-escape for posix cwds with a quote (fixes the old double-escape)', () => {
@@ -181,7 +181,7 @@ describe('buildClaudeLaunchCommand — RESUME (resumeUuid present)', () => {
     expect(out).not.toContain('resume-picker.js')
     expect(out).not.toContain('node ')
     // direct claude launch with --resume first
-    expect(out).toBe(`Set-Location -LiteralPath '${CWD.replace(/'/g, "''")}'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CLAUDE}' --resume ${UUID}${AGENTS}${EXTRA}; exit`)
+    expect(out).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath '${CWD.replace(/'/g, "''")}'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CLAUDE}' --resume ${UUID}${AGENTS}${EXTRA}; exit`)
     // ordering: --resume precedes --settings / --mcp-config / --agents
     expect(out.indexOf('--resume')).toBeLessThan(out.indexOf('--settings'))
     expect(out.indexOf('--resume')).toBeLessThan(out.indexOf('--agents'))

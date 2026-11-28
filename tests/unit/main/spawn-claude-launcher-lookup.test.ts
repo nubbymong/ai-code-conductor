@@ -143,7 +143,7 @@ describe('Windows: right before a launcher on every route that starts Claude Cod
           const line = build(route.node, { ...route.opts, claudeBin, ...extra })
           const agents = agentsFromEnv ? ' --agents ${env:CCC_AGENTS}' : ''
           const after = route.after.replace(' --model opus', `${agents} --model opus`)
-          expect(line, claudeBin).toBe(`${agentsFromEnv ? LEAD : ''}Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${claudeBin}'${after}; exit`)
+          expect(line, claudeBin).toBe(`${agentsFromEnv ? LEAD : ''}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${claudeBin}'${after}; exit`)
         }
       })
     }
@@ -152,14 +152,14 @@ describe('Windows: right before a launcher on every route that starts Claude Cod
   it('a line that starts claude.exe is as before', () => {
     for (const route of DIRECT) {
       const line = build(route.node, { ...route.opts, claudeBin: EXE })
-      expect(line, route.name).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}'${route.after}; exit`)
+      expect(line, route.name).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}'${route.after}; exit`)
       expect(line).not.toContain('NoDefaultCurrentDirectoryInExePath')
     }
   })
 
   it('a line that starts the resume list does not carry them: the picker keeps its own children to the same rule', () => {
     const line = build(NODE, { useResumePicker: true, pickerScript: PICKER })
-    expect(line).toBe(`Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = '${CMD}'; & '${NODE}' '${PICKER}' --model opus; exit`)
+    expect(line).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = '${CMD}'; & '${NODE}' '${PICKER}' --model opus; exit`)
   })
 
   it('macOS and Linux lines are unchanged', () => {

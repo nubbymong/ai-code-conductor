@@ -111,11 +111,12 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('registerRemoteMachinesHandlers', () => {
-  it('registers exactly the eight machines:remote:* channels (2.1.3-beta.19 section 1.2: the kept sessions, End of one, End of a tab\'s own)', () => {
+  it('registers exactly the ten machines:remote:* channels (2.1.3-beta.19 section 1.2: the kept sessions, End of one, End of a tab\'s own; 2.1.3-beta.20 section 3: the accounts and a sign-out)', () => {
     register()
     expect([...handlers.keys()].sort()).toEqual([
       IPC.MACHINES_REMOTE_STATE, IPC.MACHINES_REMOTE_PREPARE, IPC.MACHINES_REMOTE_ADD, IPC.MACHINES_REMOTE_CHECK, IPC.MACHINES_REMOTE_REMOVE,
       IPC.MACHINES_REMOTE_SESSIONS, IPC.MACHINES_REMOTE_END_SESSION, IPC.MACHINES_REMOTE_END_TAB,
+      IPC.MACHINES_REMOTE_ACCOUNTS, IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT, IPC.MACHINES_REMOTE_ACCOUNTS_ADOPT,
     ].sort())
     expect([...handlers.keys()].every((c) => c.startsWith('machines:remote:'))).toBe(true)
   })
@@ -269,6 +270,76 @@ describe('the cards', () => {
     expect((await call(IPC.MACHINES_REMOTE_CHECK, DID)).ok).toBe(false)
     expect((await call(IPC.MACHINES_REMOTE_REMOVE, DID)).ok).toBe(false)
     expect(h.stored).toBe(kept)
+    expect(ssh.calls).toHaveLength(0)
+  })
+})
+
+// 2.1.3-beta.20 section 3 (Sign in on this machine): the accounts list and a
+// sign-out answer only the app window, take a device id and a profile id of
+// their shapes and a confirmation that is a boolean, and start no ssh
+// otherwise; Remove's options pass only `forget: true`.
+describe('the accounts doors (2.1.3-beta.20 section 3)', () => {
+  it('asked by anything but the app window: no accounts, no sign-out, no ssh', async () => {
+    register()
+    for (const stranger of strangers) {
+      expect(await handlers.get(IPC.MACHINES_REMOTE_ACCOUNTS)!(stranger)).toEqual({ machines: [] })
+      expect(await handlers.get(IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT)!(stranger, { did: DID, profileId: 'profile-a' })).toEqual({ ok: false, message: MACHINES_NOT_APP })
+    }
+    expect(ssh.calls).toHaveLength(0)
+  })
+
+  it('a sign-out with a device id, profile id or confirmation of another shape is refused before anything is asked', async () => {
+    register()
+    for (const req of [undefined, null, 7, 'x', {}, { did: 'ABC', profileId: 'profile-a' }, { did: DID }, { did: DID, profileId: '../x' }, { did: DID, profileId: 'Profile' }, { did: DID, profileId: 'p'.repeat(129) }]) {
+      expect((await call(IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT, req)).ok, JSON.stringify(req)).toBe(false)
+    }
+    expect(await call(IPC.MACHINES_REMOTE_ACCOUNT_SIGN_OUT, { did: DID, profileId: 'profile-a', confirmMachineOwn: 'yes' })).toEqual({ ok: false, message: 'That sign-out was not asked for as the app asks it.' })
+    expect(ssh.calls).toHaveLength(0)
+  })
+
+  it('Remove takes `forget` only as true: then the machine is forgotten without reaching it', async () => {
+    register()
+    const w = watch()
+    await call(IPC.MACHINES_REMOTE_REMOVE, DID, { forget: 'yes' })
+    expect(w.remove).toHaveBeenLastCalledWith(DID, {})
+    expect(ssh.calls.length).toBeGreaterThan(0)
+    const before = ssh.calls.length
+    const r = await call(IPC.MACHINES_REMOTE_REMOVE, DID, { forget: true })
+    expect(w.remove).toHaveBeenLastCalledWith(DID, { forget: true })
+    expect(r.ok).toBe(true)
+    expect(r.message).toMatch(/forgot Rocky .*its folder in ~\/\.aicc there stays/)
+    expect(ssh.calls.length).toBe(before)
+    expect((h.stored as { machines: unknown[] }).machines).toEqual([])
+  })
+})
+
+// 2.1.3-beta.20 fix round (NIT-10): Remove and Sign out wait as long as their
+// execs may run, so their answer never says "no answer" while they still run.
+describe('the accounts doors wait for their execs (NIT-10)', () => {
+  it('Remove waits past its list, its sign-outs and its removal; Sign out past its list, reads and two sign-outs', async () => {
+    const handlersModule = await import('../../../src/main/ipc/remote-machines-handlers')
+    const { EXEC_TIMEOUT_MS } = await import('../../../src/main/remote-helper/ssh-exec')
+    const { REMOVE_SIGN_OUT_EXEC_MS, SIGN_OUT_EXEC_MS } = await import('../../../src/main/remote-helper/host-accounts')
+    expect(handlersModule.REMOTE_REMOVE_TIMEOUT_MS).toBeGreaterThan(2 * EXEC_TIMEOUT_MS + REMOVE_SIGN_OUT_EXEC_MS)
+    expect(handlersModule.REMOTE_SIGN_OUT_TIMEOUT_MS).toBeGreaterThan(3 * EXEC_TIMEOUT_MS + 2 * SIGN_OUT_EXEC_MS)
+    expect(REMOVE_SIGN_OUT_EXEC_MS).toBeGreaterThan(handlersModule.REMOTE_ACTION_TIMEOUT_MS)
+  })
+})
+
+// Round 2 (R1): Adopt answers only the app window, and takes a device id and
+// 1 to 64 profile ids of this computer's shape, nothing else, before
+// anything is asked.
+describe('the Adopt door (round 2, R1)', () => {
+  it('asked by anything but the app window, or with values of another shape, adopts nothing and starts no ssh', async () => {
+    register()
+    for (const stranger of strangers) {
+      expect(await handlers.get(IPC.MACHINES_REMOTE_ACCOUNTS_ADOPT)!(stranger, { did: DID, profileIds: ['profile-a'] })).toEqual({ ok: false, message: MACHINES_NOT_APP, adopted: [] })
+    }
+    for (const req of [undefined, null, 'x', {}, { did: 'ABC', profileIds: ['profile-a'] }, { did: DID }, { did: DID, profileIds: [] }, { did: DID, profileIds: 'profile-a' }, { did: DID, profileIds: ['../x'] }, { did: DID, profileIds: ['profile-a', 7] }, { did: DID, profileIds: Array.from({ length: 65 }, (_, i) => `profile-${i}`) }]) {
+      const r = await call(IPC.MACHINES_REMOTE_ACCOUNTS_ADOPT, req)
+      expect(r.ok, JSON.stringify(req)).toBe(false)
+      expect(r.adopted).toEqual([])
+    }
     expect(ssh.calls).toHaveLength(0)
   })
 })

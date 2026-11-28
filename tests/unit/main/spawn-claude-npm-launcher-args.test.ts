@@ -54,10 +54,10 @@ describe('npm\'s claude.cmd started by the line: every argument stays text to cm
   it('ordinary values are built as before: a space, parentheses, an apostrophe, a launcher under Program Files (x86)', () => {
     const value = 'C:\\Users\\Tom & Jerry (x)\\it\'s\\settings.json'
     expect(buildClaudeLaunchCommand({ ...BASE, extraFlags: ` --model 'opus'${settings(value)}`, userArgs: '--verbose' }))
-      .toBe(`Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --model 'opus' --settings 'C:\\Users\\Tom & Jerry (x)\\it''s\\settings.json' '--verbose'; exit`)
+      .toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --model 'opus' --settings 'C:\\Users\\Tom & Jerry (x)\\it''s\\settings.json' '--verbose'; exit`)
     const x86 = 'C:\\Program Files (x86)\\nodejs\\claude.cmd'
     expect(buildClaudeLaunchCommand({ ...BASE, claudeBin: x86, extraFlags: settings('C:\\cfg\\s.json') }))
-      .toBe(`Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${x86}' --settings 'C:\\cfg\\s.json'; exit`)
+      .toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${x86}' --settings 'C:\\cfg\\s.json'; exit`)
   })
 
   // Mutation to prove this can fail: drop the check (the line is built and cmd.exe reads the character as syntax).
@@ -72,7 +72,7 @@ describe('npm\'s claude.cmd started by the line: every argument stays text to cm
   it('the same characters in a value with a space are inside the quotes PowerShell adds: built', () => {
     for (const c of ['&', '|', '<', '>', '^', '(', ')']) {
       const value = `C:\\R ${c} D\\s.json`
-      expect(buildClaudeLaunchCommand({ ...BASE, extraFlags: settings(value) }), c).toBe(`Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --settings ${q(value)}; exit`)
+      expect(buildClaudeLaunchCommand({ ...BASE, extraFlags: settings(value) }), c).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --settings ${q(value)}; exit`)
     }
   })
 
@@ -86,14 +86,14 @@ describe('npm\'s claude.cmd started by the line: every argument stays text to cm
     const agentsFlag = ` --agents ${q(JSON.stringify({ r: { description: 'd', prompt: 'p' } }))}`
     expect(() => buildClaudeLaunchCommand({ ...BASE, agentsFlag })).toThrow(/the value of --agents holds a character/)
     expect(buildClaudeLaunchCommand({ ...BASE, agentsFromEnv: true, agentsValueLength: 40 }))
-      .toBe(`$PSNativeCommandArgumentPassing = 'Legacy'; Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --agents \${env:CCC_AGENTS}; exit`)
+      .toBe(`$PSNativeCommandArgumentPassing = 'Legacy'; Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --agents \${env:CCC_AGENTS}; exit`)
   })
 
   it('a word PowerShell would read (a variable or an escape outside quotes) is refused', () => {
     expect(() => buildClaudeLaunchCommand({ ...BASE, extraFlags: ' --effort $high' })).toThrow(/the value of --effort holds a character/)
     expect(() => buildClaudeLaunchCommand({ ...BASE, extraFlags: ' --effort hi`gh' })).toThrow(REFUSED)
     // Inside single quotes `$` is text, and text cmd.exe reads as text.
-    expect(buildClaudeLaunchCommand({ ...BASE, extraFlags: settings('C:\\$x\\s.json') })).toBe(`Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --settings 'C:\\$x\\s.json'; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, extraFlags: settings('C:\\$x\\s.json') })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --settings 'C:\\$x\\s.json'; exit`)
   })
 
   it('the user\'s own words are checked as well, by the option they belong to', () => {
@@ -110,7 +110,7 @@ describe('npm\'s claude.cmd started by the line: every argument stays text to cm
   it('an exact resume and a claude.bat are checked alike; a claude.ps1 launcher has its arguments checked', () => {
     const uuid = '123e4567-e89b-12d3-a456-426614174000'
     expect(() => buildClaudeLaunchCommand({ ...BASE, resumeUuid: uuid, extraFlags: settings('C:\\R&D\\s.json') })).toThrow(REFUSED)
-    expect(buildClaudeLaunchCommand({ ...BASE, resumeUuid: uuid, extraFlags: settings('C:\\cfg\\s.json') })).toBe(`Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --resume ${uuid} --settings 'C:\\cfg\\s.json'; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, resumeUuid: uuid, extraFlags: settings('C:\\cfg\\s.json') })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${CMD}' --resume ${uuid} --settings 'C:\\cfg\\s.json'; exit`)
     expect(() => buildClaudeLaunchCommand({ ...BASE, claudeBin: BAT, extraFlags: settings('C:\\R&D\\s.json') })).toThrow(REFUSED)
     expect(() => buildClaudeLaunchCommand({ ...BASE, claudeBin: PS1, extraFlags: settings('C:\\R&D\\s.json') })).toThrow(REFUSED)
   })
@@ -132,7 +132,7 @@ describe('a curly single quote in a value or in the launcher\'s path, on a line 
   /** A curly double quote pair, which PowerShell takes as double quotes. */
   const [LDQ, RDQ] = [0x201c, 0x201d].map((c) => String.fromCharCode(c))
   const name = (cq: string): string => `U+${cq.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`
-  const built = (flags: string, bin = CMD): string => `Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${bin}'${flags}; exit`
+  const built = (flags: string, bin = CMD): string => `Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& '${bin}'${flags}; exit`
 
   it('a value holding one, quoted by the builder: refused or built exactly as with an apostrophe', () => {
     for (const cq of QUOTES) {
@@ -172,7 +172,7 @@ describe('a curly single quote in a value or in the launcher\'s path, on a line 
     for (const cq of QUOTES) {
       const bin = `C:\\Users\\it${cq}s npm\\claude.cmd`
       expect(buildClaudeLaunchCommand({ ...BASE, claudeBin: bin, extraFlags: settings('C:\\cfg\\s.json') }), name(cq))
-        .toBe(`Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& 'C:\\Users\\it${cq}${cq}s npm\\claude.cmd' --settings 'C:\\cfg\\s.json'; exit`)
+        .toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${LAUNCHER_PROGRAM_LOOKUP}& 'C:\\Users\\it${cq}${cq}s npm\\claude.cmd' --settings 'C:\\cfg\\s.json'; exit`)
       expect(() => buildClaudeLaunchCommand({ ...BASE, claudeBin: `C:\\R${cq}&D\\claude.cmd` }), name(cq)).toThrow(/cmd\.exe would read a character in the launcher's own path as more than text/)
     }
   })
@@ -180,7 +180,7 @@ describe('a curly single quote in a value or in the launcher\'s path, on a line 
 
 describe('the resume list is started by node.exe, which cmd.exe never reads: its arguments are as in beta.2', () => {
   const RD = { pickerScript: 'C:\\R&D\\res\\scripts\\resume-picker.js', extraFlags: `${settings('C:\\R&D\\res\\s.json')} --mcp-config ${q('C:\\R(D)\\res\\mcp.json')}` }
-  const line = (bin: string): string => `Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = '${bin}'; & 'C:\\Program Files\\nodejs\\node.exe' '${RD.pickerScript}' --settings 'C:\\R&D\\res\\s.json' --mcp-config 'C:\\R(D)\\res\\mcp.json'; exit`
+  const line = (bin: string): string => `Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = '${bin}'; & 'C:\\Program Files\\nodejs\\node.exe' '${RD.pickerScript}' --settings 'C:\\R&D\\res\\s.json' --mcp-config 'C:\\R(D)\\res\\mcp.json'; exit`
 
   // Mutation to prove this can fail: check the picker's line as one cmd.exe reads (refused with "Cannot start the resume list").
   it('a native claude.exe with the app\'s folders at a path cmd.exe would read: the resume list starts, as in beta.2', () => {
@@ -202,13 +202,13 @@ describe('the resume list is started by node.exe, which cmd.exe never reads: its
     ;(globalThis as any).__nodeExe = undefined
     ;(mod as any)._resetPickerNodeFoundForTest()
     expect(() => buildClaudeLaunchCommand({ ...BASE, claudeBin: CMD, useResumePicker: true, ...RD })).toThrow(REFUSED)
-    expect(buildClaudeLaunchCommand({ ...BASE, claudeBin: EXE, useResumePicker: true, ...RD })).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --settings 'C:\\R&D\\res\\s.json' --mcp-config 'C:\\R(D)\\res\\mcp.json'; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, claudeBin: EXE, useResumePicker: true, ...RD })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --settings 'C:\\R&D\\res\\s.json' --mcp-config 'C:\\R(D)\\res\\mcp.json'; exit`)
   })
 })
 
 describe('a claude.exe started directly gets its arguments without cmd.exe: nothing changes', () => {
   it('a value without a space holding & is built as before', () => {
-    expect(buildClaudeLaunchCommand({ ...BASE, claudeBin: EXE, extraFlags: settings('C:\\R&D\\s.json') })).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --settings 'C:\\R&D\\s.json'; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, claudeBin: EXE, extraFlags: settings('C:\\R&D\\s.json') })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --settings 'C:\\R&D\\s.json'; exit`)
   })
 
   it('off Windows nothing here applies', () => {

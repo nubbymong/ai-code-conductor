@@ -305,8 +305,10 @@ describe('the Pi\'s setup notes 3, 6, 7 and 8, as Add, Check and Remove run them
       for (const rm of text.match(/rm -rf -- "[^"]*"/g) ?? []) expect(['rm -rf -- "${HOME:?}/.aicc/${D:?}"', 'rm -rf -- "${A:?}/sessions/${X:?}"'], `${name}: ${rm}`).toContain(rm)
       for (const mk of text.match(/mkdir "[^"]*"/g) ?? []) expect(mk, name).toMatch(/^mkdir "\$(HOME\/\.aicc|A|A\/helper|T)"$/)
       // An emptied folder goes by rmdir: a staged or replaced helper folder,
-      // an earlier build's helper folder at a Check (2.1.3-beta.19), ~/.aicc, the run folder.
-      for (const rd of text.match(/rmdir -- "[^"]*"/g) ?? []) expect(rd, name).toMatch(/^rmdir -- "(\$T|\$Q|\$\{A:\?\}\/helper\/\$\{V:\?\}|\$HOME\/\.aicc|\/tmp\/aicc-\$u)"$/)
+      // an earlier build's helper folder at a Check (2.1.3-beta.19), ~/.aicc,
+      // the run folder, and (2.1.3-beta.20 section 3.1.8) ~/.aicc/accounts
+      // once Remove's sign-outs left it empty.
+      for (const rd of text.match(/rmdir -- "[^"]*"/g) ?? []) expect(rd, name).toMatch(/^rmdir -- "(\$T|\$Q|\$\{A:\?\}\/helper\/\$\{V:\?\}|\$HOME\/\.aicc|\$HOME\/\.aicc\/accounts|\/tmp\/aicc-\$u)"$/)
       // Every delete and every folder made is one of those: none is spelled another way.
       expect((text.match(/\brm -rf\b/g) ?? []).length, name).toBe((text.match(/rm -rf -- "[^"]*"/g) ?? []).length)
       expect((text.match(/\bmkdir\b/g) ?? []).length, name).toBe((text.match(/mkdir "[^"]*"/g) ?? []).length)

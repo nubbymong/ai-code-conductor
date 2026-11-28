@@ -115,9 +115,15 @@ rather than pretending otherwise.
 everything else in your settings still run, and a session can read and write
 whatever you can. A hook you configure runs under whichever account the session
 uses, so treat it as shared across accounts. Isolation also stops at this
-machine: an SSH session uses the remote's own login. And CCC never holds or
-refreshes a login token itself: Claude Code signs in from the account's own
-stored login exactly as it does in a normal terminal.
+machine: a usual SSH session uses the remote's own login, and a Claude Code tab
+through the session helper (preview) uses its account's own sign-in on that
+machine. CCC does not sign an account in for you: Claude Code signs in from the
+account's own stored login exactly as it does in a normal terminal. The one
+exception is renewal: for a Claude Code account that nothing on this computer is
+using, the Usage page renews a sign-in that is still valid, at the address
+Claude Code itself uses (PRIVACY.md lists it). So does a Claude Code tab through
+the session helper (preview) when it reads that account's limits for its status
+line, at most once a minute.
 
 ## Choosing your assistants (Claude Code and Codex)
 
@@ -587,13 +593,15 @@ not show it. The conversation itself stays in Claude Code's files.
 ### Codex usage
 
 The **Usage page** (the person icon on the left rail, once you have two or
-more accounts) has a Codex section beside the Claude Code one. Each Codex
-account shows its 5-hour and weekly allowance and its plan:
+more accounts) shows every account at once, Codex beside Claude Code, as one
+grid of cards: sort by 5h left, Weekly left or Name, and with both assistants
+on, show one of them. Each Codex account shows its 5-hour and weekly allowance
+and its plan:
 
 - from an open session on the account, when there is one (**Updated**);
 - otherwise, for an account signed in with ChatGPT, from a short check CCC
   asks Codex to run in that account's own folder when you open the page,
-  press **Refresh** or use the card's **Retry** (about a second, one account
+  press **Refresh** or use the card's **Read usage again** (about a second, one account
   at a time). It never runs for an API-key account, for *This computer's
   Codex*, or for an account a session or review is using;
 - otherwise from the account's latest session, marked **As of** with its age.

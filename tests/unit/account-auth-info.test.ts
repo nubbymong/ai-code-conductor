@@ -13,18 +13,19 @@ import { join } from 'path'
 // the label-vs-home divergence disappears while the duplication remains. Both
 // checks are therefore required, and these tests pin that.
 
-const h = vi.hoisted(() => ({ root: '', profiles: [] as Array<{ id: string; accountEmail: string }> }))
+const h = vi.hoisted(() => ({ root: '', profiles: [] as Array<{ id: string; accountEmail: string; active?: boolean }>, warned: [] as string[] }))
 
 vi.mock('../../src/main/account-profiles', () => ({
   getProfileConfigDir: (id: string) => join(h.root, id),
   listProfiles: () => h.profiles
 }))
+vi.mock('../../src/main/debug-logger', () => ({ logWarn: (m: string) => { h.warned.push(m) } }))
 
-import { readAllProfileAuthInfo, readProfileAuthInfo } from '../../src/main/account-auth-info'
+import { readAllProfileAuthInfo, readProfileAuthInfo, signInProblemOf, readClaudeSignInProblem } from '../../src/main/account-auth-info'
 
 function seed(
   id: string,
-  opts: { oauthEmail?: string; refreshToken?: string; expiresAt?: number; refreshTokenExpiresAt?: number; noCreds?: boolean } = {}
+  opts: { oauthEmail?: string; refreshToken?: string; expiresAt?: number; refreshTokenExpiresAt?: number; noCreds?: boolean; rateLimitTier?: unknown } = {}
 ): void {
   const home = join(h.root, id)
   mkdirSync(join(home, '.claude'), { recursive: true })
@@ -37,7 +38,8 @@ function seed(
           refreshToken: opts.refreshToken ?? 'r'.repeat(20),
           expiresAt: opts.expiresAt ?? 1785800025758,
           refreshTokenExpiresAt: opts.refreshTokenExpiresAt ?? 1787000000000,
-          subscriptionType: 'team'
+          subscriptionType: 'team',
+          ...(opts.rateLimitTier !== undefined ? { rateLimitTier: opts.rateLimitTier } : {}),
         }
       })
     )
@@ -65,6 +67,17 @@ describe('readProfileAuthInfo', () => {
     expect(info.refreshTokenExpiresAt).toBe(222)
     expect(info.subscriptionType).toBe('team')
     expect(info.oauthEmail).toBe('a@example.com')
+  })
+
+  // nubbymong/aicc_planning#445 (review F5): the usage tier beside the plan
+  // (the Account usage page's "Max 20x"); a value that is not a string is none.
+  it('reads the usage tier beside the plan, and only a string', () => {
+    seed('p1', { rateLimitTier: 'default_claude_max_20x' })
+    expect(readProfileAuthInfo('p1').rateLimitTier).toBe('default_claude_max_20x')
+    seed('p2', { rateLimitTier: 20 })
+    expect(readProfileAuthInfo('p2').rateLimitTier).toBeUndefined()
+    seed('p3')
+    expect(readProfileAuthInfo('p3').rateLimitTier).toBeUndefined()
   })
 
   it('flags missing credentials instead of throwing', () => {
@@ -180,5 +193,106 @@ describe('readAllProfileAuthInfo identity cross-check', () => {
     const infos = readAllProfileAuthInfo()
     expect(infos).toHaveLength(1)
     expect(infos[0].credentialsMissing).toBe(true)
+  })
+})
+
+// nubbymong/aicc_planning#444: the Account usage page asks for a sign-in again
+// for a duplicate or wrong-account profile. That stops the account's usage
+// read, so a duplicate counts only a twin that can actually spend this
+// profile's sign-in: one that is active, holds a sign-in (a refresh token) and
+// whose own home is the same account. The panel's wider duplicate warning
+// (duplicateOfProfileIds) is unchanged.
+describe('signInProblemOf / readClaudeSignInProblem', () => {
+  beforeEach(() => {
+    h.root = mkdtempSync(join(tmpdir(), 'auth-info-'))
+    h.profiles = []
+    h.warned.length = 0
+  })
+  afterEach(() => {
+    try { rmSync(h.root, { recursive: true, force: true }) } catch { /* ignore */ }
+  })
+  const all = (ids: string[]) => new Set(ids)
+
+  it('an active, signed-in twin whose home is the same account is a duplicate, named with the account', () => {
+    h.profiles = [
+      { id: 'p1', accountEmail: 'one@example.test' },
+      { id: 'p2', accountEmail: 'two@example.test' }
+    ]
+    seed('p1', { oauthEmail: 'two@example.test' })
+    seed('p2', { oauthEmail: 'two@example.test' })
+    const infos = readAllProfileAuthInfo({ quiet: true })
+    expect(signInProblemOf(infos, 'p1', all(['p1', 'p2']))).toEqual({ kind: 'duplicate', account: 'two@example.test', profileIds: ['p2'] })
+    expect(signInProblemOf(infos, 'p2', all(['p1', 'p2']))).toEqual({ kind: 'duplicate', account: 'two@example.test', profileIds: ['p1'] })
+    expect(readClaudeSignInProblem('p1')).toEqual({ kind: 'duplicate', account: 'two@example.test', profileIds: ['p2'] })
+  })
+
+  it('a PARKED twin is not a duplicate: the working account keeps its reading', () => {
+    h.profiles = [
+      { id: 'p1', accountEmail: 'two@example.test' },
+      { id: 'p2', accountEmail: 'two@example.test', active: false }
+    ]
+    seed('p1', { oauthEmail: 'two@example.test' })
+    seed('p2', { oauthEmail: 'two@example.test' })
+    expect(readClaudeSignInProblem('p1')).toBeNull()
+    // The panel's warning still names it.
+    expect(readAllProfileAuthInfo({ quiet: true })[0].duplicateOfProfileIds).toEqual(['p2'])
+  })
+
+  it('a SIGNED-OUT twin is not a duplicate, whether its home names the account or only its label does', () => {
+    h.profiles = [
+      { id: 'p1', accountEmail: 'two@example.test' },
+      { id: 'p2', accountEmail: 'two@example.test' },
+      { id: 'p3', accountEmail: 'two@example.test' }
+    ]
+    seed('p1', { oauthEmail: 'two@example.test' })
+    seed('p2', { oauthEmail: 'two@example.test', noCreds: true })
+    seed('p3', { noCreds: true })
+    expect(readClaudeSignInProblem('p1')).toBeNull()
+  })
+
+  it('a twin that matches only by its label (its home names no account) is not proof of a duplicate', () => {
+    h.profiles = [
+      { id: 'p1', accountEmail: 'two@example.test' },
+      { id: 'p2', accountEmail: 'two@example.test' }
+    ]
+    seed('p1', { oauthEmail: 'two@example.test' })
+    seed('p2')
+    expect(readClaudeSignInProblem('p1')).toBeNull()
+  })
+
+  it('a twin whose sign-in holds no refresh token cannot spend this one: not a duplicate', () => {
+    h.profiles = [
+      { id: 'p1', accountEmail: 'two@example.test' },
+      { id: 'p2', accountEmail: 'two@example.test' }
+    ]
+    seed('p1', { oauthEmail: 'two@example.test' })
+    seed('p2', { oauthEmail: 'two@example.test', refreshToken: '' })
+    expect(readClaudeSignInProblem('p1')).toBeNull()
+  })
+
+  it('a profile signed in as a different account than its label is the wrong account, with both named', () => {
+    h.profiles = [{ id: 'p1', accountEmail: 'one@example.test' }]
+    seed('p1', { oauthEmail: 'other@example.test' })
+    expect(readClaudeSignInProblem('p1')).toEqual({ kind: 'wrong-account', signedInAs: 'other@example.test', labelledAs: 'one@example.test' })
+  })
+
+  it('a profile on its own account, or one not listed, has no problem', () => {
+    h.profiles = [{ id: 'p1', accountEmail: 'one@example.test' }]
+    seed('p1', { oauthEmail: 'one@example.test' })
+    expect(readClaudeSignInProblem('p1')).toBeNull()
+    expect(readClaudeSignInProblem('nope')).toBeNull()
+  })
+
+  it('quiet: the check the usage page makes once per account logs nothing; the panel read still warns', () => {
+    h.profiles = [
+      { id: 'p1', accountEmail: 'two@example.test' },
+      { id: 'p2', accountEmail: 'two@example.test' }
+    ]
+    seed('p1', { oauthEmail: 'two@example.test' })
+    seed('p2', { oauthEmail: 'two@example.test' })
+    readClaudeSignInProblem('p1')
+    expect(h.warned).toEqual([])
+    readAllProfileAuthInfo()
+    expect(h.warned).toHaveLength(1)
   })
 })

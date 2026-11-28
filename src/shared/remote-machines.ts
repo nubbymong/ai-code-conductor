@@ -12,13 +12,15 @@ export const REMOTE_SESSIONS_SETTING = 'remoteSessionsThroughHelper'
  *  finding 6; 2.1.3-beta.18 section 3.2: its status line, hooks and the
  *  Conductor's tools go through the helper too; 2.1.3-beta.19: arm64
  *  machines, the account and its limits, and SSH Persistent tabs kept until
- *  they are ended). Short paragraphs, one blank line apart (the Settings
+ *  they are ended; 2.1.3-beta.20 sections 3 and 5: the tab runs on its
+ *  config's account, signed in on that machine, and Switch Account moves
+ *  it). Short paragraphs, one blank line apart (the Settings
  *  page shows them with whitespace-pre-line; 2.1.3-beta.19 release smoke):
  *  which tabs go through, what goes through with them, SSH against SSH
  *  Persistent, and what the preview does not take yet. */
 export const REMOTE_SWITCH_TEXT = [
   'Preview, off by default. A Claude Code tab whose saved config signs in by key, with no post-connect command and no container, to a Linux x86-64 or arm64 machine you added and checked on the Machines page, runs through the session helper there: nothing is typed into the host\'s shell to set it up or start it, and a dropped connection comes back within two minutes with what you missed.',
-  'Its status line, its hooks (the attention mark, the Watchdog) and the Conductor\'s tools (the Agent Canvas, the browser, and image paste and Snap) go through the helper too, and no address or token of this computer is sent to the host: the session\'s own settings go in ~/.aicc on that machine and are removed when its session ends; ones left by quitting the app or by a dropped connection are removed at the next start, or at the next Check on the Machines page. Its status line names the account Claude Code\'s config names on that machine, and shows the weekly limits by model and extra usage when this computer holds that account and has a current reading for it; otherwise it says not available. Prompt buttons and broadcast type into it as into any Claude Code tab.',
+  'Its status line, its hooks (the attention mark, the Watchdog) and the Conductor\'s tools (the Agent Canvas, the browser, and image paste and Snap) go through the helper too, and no address or token of this computer is sent to the host: the session\'s own settings go in ~/.aicc on that machine and are removed when its session ends; ones left by quitting the app or by a dropped connection are removed at the next start, or at the next Check on the Machines page. A config that names an account starts on that account\'s sign-in on that machine (its own sign-in there, or the machine\'s own sign-in when that is the same account) and starts nothing until that account is signed in there: sign it in on that machine from the machine\'s card on the Machines page, or from the account\'s card on the Account usage page. Switch Account moves the tab to another account, with its conversation; a config with no account starts on the machine\'s own sign-in. Its status line names the account the tab runs on, and shows the weekly limits by model and extra usage when this computer holds that account and has a current reading for it; otherwise it says not available. Prompt buttons and broadcast type into it as into any Claude Code tab.',
   'A tab whose Connection is SSH ends its session when you close it or quit, and Restart on such a tab starts a new conversation (type /resume there to pick the earlier one up). An SSH Persistent tab (the default for a config that never chose a Connection) runs through the helper too, on a machine whose logind does not end your processes when you log out, and is kept there until you end it: close it and choose Leave running, quit the app or update it, and the next start brings it back where it was; End, in its tab\'s close question or on the Machines page, ends it. A config with a session still under tmux keeps the usual SSH path until that session is ended.',
   'Not through the helper yet: password sign-in, containers, post-connect commands, macOS and Windows machines, and Codex. Every other SSH tab, and every new tab while this is off, runs the usual way. Applies to tabs opened after the change.',
 ].join('\n\n')
@@ -124,10 +126,24 @@ export type RemoteConsent =
   | { ok: true; token: string; target: string; text: string }
   | { ok: false; message: string }
 
+/** 2.1.3-beta.20 section 3.1.8: Remove's options. Remove signs out each
+ *  account signed in on the machine while it answers, then removes the
+ *  helper. `forget`: the machine did not answer and the user chose to remove
+ *  it anyway; the app forgets it without reaching it (its `~/.aicc` stays,
+ *  and the answer names the accounts still signed in there and where to end
+ *  each). */
+export interface RemoteRemoveOptions {
+  forget?: boolean
+}
+
 /** What an Add, a Check or a Remove did, in a plain sentence. */
 export interface RemoteActionResult {
   ok: boolean
   message: string
+  /** 2.1.3-beta.20 section 5: a Remove that could not reach the machine
+   *  (nothing was signed out or removed there). The card then asks again in
+   *  the not-answering words, with Remove anyway (RemoteRemoveOptions.forget). */
+  notAnswering?: true
 }
 
 /** What main sends the SSH flow overlay when a tab starts through the session

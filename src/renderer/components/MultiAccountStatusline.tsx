@@ -13,7 +13,7 @@ import { RateLimitBar, RateLimitBarPending, RateLimitBarNoReading } from './term
 import type { AccountProfile } from '../../shared/account-types'
 import type { UsageBucket } from '../../shared/usage-types'
 import type { AccountsSnapshot, AccountView, IdentityView, ProviderId } from '../../shared/providers'
-import { bucketPastReset, footerHiddenLabelsFor } from '../../shared/usage-labels'
+import { bucketPastReset, footerHiddenLabelsFor, isModelBucket } from '../../shared/usage-labels'
 import { formatResetTime } from '../utils/terminalFormatting'
 import {
   useProviderAccountsStore, accountForLegacyId, accountDisplayName, providerView, signInMethodLabel, ACCOUNT_NAME_FALLBACK,
@@ -650,21 +650,9 @@ function shownBuckets(a: { buckets: UsageBucket[] }, hidden: string[]): UsageBuc
   return a.buckets.filter((b) => !hidden.includes(b.label))
 }
 
-/**
- * Whether a bucket is a PER-MODEL weekly (Fable, and whatever follows it) as
- * opposed to a time window (5h, Weekly-all).
- *
- * Group alone cannot decide this: `usage-buckets.ts` gives a per-model weekly
- * `group: 'weekly'`, the same as weekly-all. What it does do is encode the model
- * into the key as `<kind>:<model display name>`, leaving that segment empty for
- * the time windows -- so the key is the producer's own answer to the question.
- * The legacy synthesis in this file uses bare keys with no colon at all, which
- * lands on "not a model bucket", which is right.
- */
-export function isModelBucket(b: UsageBucket): boolean {
-  const i = b.key.indexOf(':')
-  return i >= 0 && b.key.slice(i + 1).trim() !== ''
-}
+// isModelBucket moved to shared/usage-labels.ts (the Account usage page reads
+// it too, nubbymong/aicc_planning#445); re-exported here for this file's callers.
+export { isModelBucket }
 
 export type RagState = 'green' | 'amber' | 'red'
 

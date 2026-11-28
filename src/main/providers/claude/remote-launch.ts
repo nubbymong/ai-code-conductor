@@ -22,9 +22,24 @@
 // event the app keeps.
 // Pure, with no import that reaches Electron: core asks this launch under
 // plain Node too (tests/live/remote-helper-device.live.ts).
+//
+// 2.1.3-beta.20 section 3 (Sign in on this machine): a tab whose account is
+// signed in on the host in a folder of its own (`~/.aicc/accounts/<profile
+// id>/`, core's) runs with that folder as the CLI's config folder
+// (CLAUDE_CONFIG_DIR, `configDir`), and its session file carries the host
+// user's own settings made fit for an account's folder, as the folder's own
+// settings copy does (sanitizeClaudeManagedSettings, the copy this
+// computer's account homes get). A sign-in tab (`signIn`) runs the CLI's own
+// `claude auth login` in that folder instead of a session. The package's
+// remote accounts (CLAUDE_REMOTE_ACCOUNTS) name the rest: the sign-in's files
+// and fields, the folder's links into `~/.claude` (the one shared-folder list,
+// shared/account-folder.ts, and CLAUDE.md), and `claude auth logout`.
 import { concatHookMaps, helperHooksBlockFor, helperStatusCommand } from '../../hooks/helper-hook-commands'
 import { HELPER_HOOK_KINDS } from '../../session-helper/protocol'
-import type { ProviderRemoteLaunch, RemoteAccountUsage, RemoteHelperCommands, RemoteHostField, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchMachine, RemoteLaunchOptions, RemoteStatusLine } from '../types'
+import { SHARED_DIR_NAMES } from '../../../shared/account-folder'
+import { DEFAULT_CLI_AUTH_METHOD, isCliAuthMethod } from '../../../shared/account-web-session'
+import { sanitizeClaudeManagedSettings } from './managed-launch'
+import type { ProviderRemoteLaunch, RemoteAccounts, RemoteAccountUsage, RemoteHelperCommands, RemoteHostField, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchMachine, RemoteLaunchOptions, RemoteStatusLine } from '../types'
 
 /** Where the CLI is started when the machine's check found none. */
 const REMOTE_CLI_FALLBACK = '/usr/local/bin/claude'
@@ -59,8 +74,13 @@ export function claudeRemoteEnv(o: RemoteLaunchOptions): Record<string, string> 
   }
   if (settings?.clickableQuestions !== true) env.CLAUDE_CODE_DISABLE_MOUSE_CLICKS = '1'
   if (settings?.disableBackgroundTasks !== false) env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1'
+  // 2.1.3-beta.20 section 3.1.7: the account's own folder on the host, when it is signed in there.
+  if (o.configDir) env[CLAUDE_CONFIG_VAR] = o.configDir
   return env
 }
+
+/** The variable that names Claude Code's config folder. */
+export const CLAUDE_CONFIG_VAR = 'CLAUDE_CONFIG_DIR'
 
 /** The settings files Claude Code reads for a session, whose hooks the
  *  session's settings file carries first: the user's, then the session
@@ -84,6 +104,68 @@ export const CLAUDE_HOST_READS: readonly RemoteHostRead[] = [
  *  `~/.claude.json`), read through the session helper's field mode, never
  *  the file. Core reads it at every start of the tab, launch or attach. */
 export const CLAUDE_ACCOUNT_FIELD: RemoteHostField = { file: '.claude.json', key: 'oauthAccount.emailAddress' }
+
+/** 2.1.3-beta.20 section 3.1.6: the account field of a tab whose CLI runs in
+ *  the account's own folder on the host: that folder's `.claude.json`, as a
+ *  path under the home folder; the host's own (CLAUDE_ACCOUNT_FIELD) for one
+ *  that runs on the host's own sign-in. None for a sign-in tab, or a folder
+ *  that is not under the home folder the check read. */
+export function claudeAccountField(o: RemoteLaunchOptions, m: RemoteLaunchMachine): RemoteHostField | null {
+  if (o.signIn) return null
+  if (!o.configDir) return CLAUDE_ACCOUNT_FIELD
+  const home = `${m.home.replace(/\/+$/, '')}/`
+  return o.configDir.startsWith(home) && o.configDir.length > home.length
+    ? { file: `${o.configDir.slice(home.length).replace(/\/+$/, '')}/${CLAUDE_ACCOUNT_FIELD.file}`, key: CLAUDE_ACCOUNT_FIELD.key }
+    : null
+}
+
+/** The host user's own settings (the `home` host read) as an account's
+ *  folder takes them: sanitizeClaudeManagedSettings's copy, which leaves out
+ *  every key that would carry another sign-in into the account (an
+ *  `apiKeyHelper`, an `env` entry naming a token or an endpoint), as this
+ *  computer's account homes get theirs (account-profiles.ts
+ *  writeSanitisedSettingsCopy). Null: no such file, or one the sanitiser
+ *  refuses (not JSON, not an object, too deep): then no copy at all. */
+export function claudeAccountSettingsText(reads: readonly RemoteHostFile[]): string | null {
+  const home = CLAUDE_HOST_READS[0]
+  const text = reads.find((r) => r.from === home.from && r.path === home.path)?.content ?? null
+  if (text === null) return null
+  return sanitizeClaudeManagedSettings(text).text
+}
+
+/** 2.1.3-beta.20 section 3: Claude Code's accounts on a host (RemoteAccounts):
+ *  the machine's own sign-in is `~/.claude.json` and `~/.claude/.credentials.json`;
+ *  an account folder's, its own `.claude.json` and `.credentials.json`
+ *  (CLAUDE_CONFIG_DIR keeps both there). Its fields: the account
+ *  (`oauthAccount.emailAddress`) and the plan, tier and expiry of its
+ *  credentials, every one on the helper's field-mode list (helper/src/field.rs
+ *  ALLOWED_KEYS), never a token. The folder links the shared folders and
+ *  CLAUDE.md to `~/.claude`, and keeps settings.json as the sanitised copy. */
+export const CLAUDE_REMOTE_ACCOUNTS: RemoteAccounts = Object.freeze({
+  profiles: async () => (await import('../../account-profiles')).listProfiles(),
+  files: {
+    own: { identity: CLAUDE_ACCOUNT_FIELD.file, credentials: '.claude/.credentials.json' },
+    folder: { identity: '.claude.json', credentials: '.credentials.json' },
+  },
+  keys: { identity: CLAUDE_ACCOUNT_FIELD.key, plan: 'claudeAiOauth.subscriptionType', tier: 'claudeAiOauth.rateLimitTier', expiresAt: 'claudeAiOauth.expiresAt' },
+  links: { home: '.claude', folders: SHARED_DIR_NAMES, files: ['CLAUDE.md'] },
+  configVar: CLAUDE_CONFIG_VAR,
+  signOut: { program: 'claude', args: ['auth', 'logout'] },
+  settingsCopy: (reads: readonly RemoteHostFile[]) => ({ name: 'settings.json', content: claudeAccountSettingsText(reads) }),
+})
+
+/** The CLI's own sign-in, in the words claude-cli-auth.ts claudeAuthCommand
+ *  gives a sign-in on this computer: `claude auth login --<method>`, the
+ *  account's own method (2.1.3-beta.20 fix round, MINOR-5: a Claude
+ *  subscription, the Anthropic Console or single sign-on; the default for
+ *  one never told otherwise, and for anything that is not one of the CLI's
+ *  choices), with `--email` for an address-shaped email, so the sign-in page
+ *  asks for that account. */
+export function claudeSignInArgs(email: string | undefined, method?: string): string[] {
+  const args = ['auth', 'login', `--${isCliAuthMethod(method) ? method : DEFAULT_CLI_AUTH_METHOD}`]
+  if (email && /^[^\s"'`;&|<>$()\\]+@[^\s"'`;&|<>$()\\]+$/.test(email) && email.length <= 254) args.push('--email', email)
+  return args
+}
 
 /** 2.1.3-beta.19 section 3: the weekly bars and extra usage of a tab whose
  *  account field named an account this computer holds: its Claude Code
@@ -134,8 +216,12 @@ export function hooksOfSettingsText(text: string | null): Record<string, unknown
  *  is the session's effort (2.1.3-beta.18 fix round, item 2: without the copy
  *  a helper tab ran at the model's default effort, today's SSH tab at the
  *  user's). Throws when the helper's path or store cannot be put in a command
- *  safely: the tab then takes the usual SSH path. */
-export function claudeRemoteSettings(helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): Record<string, unknown> {
+ *  safely: the tab then takes the usual SSH path. `account` (2.1.3-beta.20
+ *  section 3.1.7): the tab runs in an account's own folder, so the user's
+ *  settings are its sanitised copy (claudeAccountSettingsText), as that
+ *  folder's settings.json is: a --settings file must not carry back what the
+ *  copy leaves out. */
+export function claudeRemoteSettings(helper: RemoteHelperCommands, reads: readonly RemoteHostFile[], account = false): Record<string, unknown> {
   const target = { helperPath: helper.helperPath, store: helper.store, sid: helper.sid, launcher: 'sh' as const }
   const statusCommand = helperStatusCommand(target)
   // The nine events the app takes, as buildHelperHooksBlock gives a held session on this computer.
@@ -143,7 +229,8 @@ export function claudeRemoteSettings(helper: RemoteHelperCommands, reads: readon
   if (statusCommand === null || own === null) throw new Error('the session helper\'s path on the host cannot be put in a status line or hook command safely')
   const hooks = concatHookMaps(...reads.map((r) => hooksOfSettingsText(r.content)), own)
   const home = CLAUDE_HOST_READS[0]
-  const user = { ...settingsOfText(reads.find((r) => r.from === home.from && r.path === home.path)?.content ?? null) }
+  const userText = account ? claudeAccountSettingsText(reads) : reads.find((r) => r.from === home.from && r.path === home.path)?.content ?? null
+  const user = { ...settingsOfText(userText) }
   delete user.mcpServers
   return { ...user, statusLine: { type: 'command', command: statusCommand }, hooks }
 }
@@ -246,16 +333,26 @@ function sessionFileArgs(helper: RemoteHelperCommands, tools: boolean): string[]
   return ['--settings', at(REMOTE_SETTINGS_FILE), ...(tools ? ['--mcp-config', at(REMOTE_MCP_FILE)] : [])]
 }
 
+/** 2.1.3-beta.20 section 3.1.4: a sign-in tab's launch: the CLI's own sign-in
+ *  in the account's folder (its CLAUDE_CONFIG_DIR, from claudeRemoteEnv),
+ *  with no session files and nothing kept of a status or hook event. Throws
+ *  for a sign-in with no account folder: it would sign in the host's own. */
+function claudeSignInLaunch(o: RemoteLaunchOptions, m: RemoteLaunchMachine): RemoteLaunch {
+  if (!o.configDir) throw new Error('a sign-in on the host needs the account\'s own folder there')
+  return { program: m.claudePath ?? REMOTE_CLI_FALLBACK, args: claudeSignInArgs(o.signIn?.email, o.signIn?.method), env: claudeRemoteEnv(o), files: [], statusKeep: [], hookKeep: [] }
+}
+
 export const claudeRemoteLaunch: ProviderRemoteLaunch = {
-  hostReads: () => CLAUDE_HOST_READS,
-  accountField: () => CLAUDE_ACCOUNT_FIELD,
+  hostReads: (o: RemoteLaunchOptions) => (o.signIn ? [] : CLAUDE_HOST_READS),
+  accountField: claudeAccountField,
   accountUsage: () => CLAUDE_ACCOUNT_USAGE,
-  launch: (o: RemoteLaunchOptions, m: RemoteLaunchMachine, helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): RemoteLaunch => ({
+  accounts: () => CLAUDE_REMOTE_ACCOUNTS,
+  launch: (o: RemoteLaunchOptions, m: RemoteLaunchMachine, helper: RemoteHelperCommands, reads: readonly RemoteHostFile[]): RemoteLaunch => (o.signIn ? claudeSignInLaunch(o, m) : {
     program: m.claudePath ?? REMOTE_CLI_FALLBACK,
     args: [...sessionFileArgs(helper, o.tools), ...claudeRemoteArgs(o)],
     env: claudeRemoteEnv(o),
     files: [
-      { name: REMOTE_SETTINGS_FILE, content: `${JSON.stringify(claudeRemoteSettings(helper, reads), null, 2)}\n` },
+      { name: REMOTE_SETTINGS_FILE, content: `${JSON.stringify(claudeRemoteSettings(helper, reads, !!o.configDir), null, 2)}\n` },
       ...(o.tools ? [{ name: REMOTE_MCP_FILE, content: `${JSON.stringify(claudeRemoteMcp(helper), null, 2)}\n` }] : []),
     ],
     statusKeep: CLAUDE_STATUS_KEEP,

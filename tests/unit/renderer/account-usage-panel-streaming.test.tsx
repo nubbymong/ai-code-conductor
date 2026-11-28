@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
 //
-// Plan P3: the account-usage page shows a skeleton per account up front and fills
-// each row as its usage STREAMS in, instead of one all-or-nothing "Loading…" gate.
-// These mount the real panel with the streaming IPC mocked and assert: skeletons
-// render before any usage lands, each resolves independently as its result
-// arrives, and a manual Refresh returns rows to skeletons and re-streams.
+// Plan P3: the account-usage page fills each card as its usage STREAMS in,
+// instead of one all-or-nothing "Loading…" gate. nubbymong/aicc_planning#445
+// (the approved mockup v1): every card is drawn at once from the account
+// list (and the last readings the page saw), its meters animate until its
+// fresh reading lands, and the cards are sorted and banded only once every
+// reading has settled. These mount the real panel with the streaming IPC
+// mocked and assert: cards render before any usage lands, each fills
+// independently as its result arrives, a Refresh keeps each card in place
+// and re-streams, the sort applies once the readings settle, and the sort
+// and the provider filter are kept in the saved settings.
 import React from 'react'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createRoot, type Root } from 'react-dom/client'
@@ -15,11 +20,12 @@ import type { AccountsSnapshot, AccountView, ProviderAccountUsageView, ProviderU
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
-vi.mock('../../../src/renderer/hooks/useReauthAccount', () => ({ useReauthAccount: () => vi.fn() }))
+const { reauth } = vi.hoisted(() => ({ reauth: vi.fn() }))
+vi.mock('../../../src/renderer/hooks/useReauthAccount', () => ({ useReauthAccount: () => reauth }))
 vi.mock('../../../src/renderer/hooks/useThemeController', () => ({ useResolvedTheme: () => 'dark', useThemeController: () => {} }))
 vi.mock('../../../src/renderer/components/PageFrame', () => ({
-  default: ({ children, actions }: { children: React.ReactNode; actions?: React.ReactNode }) =>
-    <div data-testid="page-frame"><div data-testid="pf-actions">{actions}</div>{children}</div>,
+  default: ({ children, actions, context }: { children: React.ReactNode; actions?: React.ReactNode; context?: React.ReactNode }) =>
+    <div data-testid="page-frame"><div data-testid="pf-context">{context}</div><div data-testid="pf-actions">{actions}</div>{children}</div>,
 }))
 
 const list = vi.fn<() => Promise<AccountProfile[]>>()
@@ -32,7 +38,9 @@ const latest = (): StreamCtl => streams[streams.length - 1]
 const fetchAllStream = vi.fn((onResult: (u: AccountUsage) => void) => new Promise<void>((resolve, reject) => {
   streams.push({ emit: (u) => act(() => onResult(u)), done: () => resolve(), reject: (e) => reject(e) })
 }))
-const fetchOne = vi.fn(async () => null)
+const fetchOne = vi.fn(async (_id: string): Promise<AccountUsage | null> => null)
+/** Main's read-only last readings (review F1): each profile's newest figure, stale. */
+const lastKnown = vi.fn(async (): Promise<AccountUsage[]> => [])
 /** The provider-neutral usage stream (MP3), driven the same way. */
 interface ProviderStreamCtl { emit: (v: ProviderAccountUsageView) => void; done: (r?: ProviderUsageStreamResult) => void; reject: (e: unknown) => void }
 const providerStreams: ProviderStreamCtl[] = []
@@ -41,102 +49,151 @@ const usageStream = vi.fn((_providerId: string, onResult: (v: ProviderAccountUsa
 }))
 const usageOne = vi.fn(async (_accountId: string, _opts?: { read?: boolean }): Promise<unknown> => ({ ok: false, code: 'not-found' }))
 const usageStreamStop = vi.fn(async (_providerId: string) => ({ ok: true }))
+/** The saved settings (the sort and filter are kept there, per viewer). */
+const configSave = vi.fn(async (_key: string, _data: unknown) => true)
 
 Object.defineProperty(window, 'electronAPI', {
   writable: true, configurable: true,
-  value: { accountProfiles: { list, authInfo }, accountUsage: { fetchAllStream, fetchOne }, providerAccounts: { usageStream, usageOne, usageStreamStop } },
+  value: {
+    accountProfiles: { list, authInfo },
+    accountUsage: { fetchAllStream, fetchOne, lastKnown },
+    providerAccounts: { usageStream, usageOne, usageStreamStop },
+    config: { save: configSave },
+  },
 })
 
-const { default: AccountUsagePanel, FOCUS_REFRESH_MS } = await import('../../../src/renderer/components/AccountUsagePanel')
+const { default: AccountUsagePanel, FOCUS_REFRESH_MS, SETTLE_CAP_MS, forgetAccountUsagePage, RENEWAL_LINE } = await import('../../../src/renderer/components/AccountUsagePanel')
+const LAYOUT = await import('../../../src/renderer/components/account-usage-layout')
 const { useSettingsStore, DEFAULT_SETTINGS } = await import('../../../src/renderer/stores/settingsStore')
 const { useProviderAccountsStore } = await import('../../../src/renderer/stores/providerAccountsStore')
 const { choiceSettings } = await import('../../../src/renderer/onboarding/provider-choice')
 
-const profile = (id: string): AccountProfile => ({ id, name: id, accountEmail: `${id}@x.com`, createdAt: 0 })
-const usage = (profileId: string, percent: number): AccountUsage => ({
+const profile = (id: string, over: Partial<AccountProfile> = {}): AccountProfile => ({ id, name: id, accountEmail: `${id}@x.com`, createdAt: 0, ...over })
+/** A reading: `percent` of the 5h window USED (the card shows what is left). */
+const usage = (profileId: string, percent: number, weekly?: number): AccountUsage => ({
   profileId, email: `${profileId}@x.com`, name: profileId, isPrimary: false, active: true,
-  status: 'ok', buckets: [{ key: 'session:', label: '5h', group: 'session', percent, resetsAt: '', severity: 'normal' }], fetchedAt: Date.now(),
+  status: 'ok',
+  buckets: [
+    { key: 'session:', label: '5h', group: 'session', percent, resetsAt: '', severity: 'normal' },
+    ...(typeof weekly === 'number' ? [{ key: 'weekly_all:', label: 'Weekly', group: 'weekly', percent: weekly, resetsAt: '', severity: 'normal' }] : []),
+  ],
+  fetchedAt: Date.now(),
 })
 
 let container: HTMLDivElement
 let root: Root
-const skeletons = () => container.querySelectorAll('[data-testid="account-usage-skeleton"]')
+const all = (testId: string) => container.querySelectorAll(`[data-testid="${testId}"]`)
+const one = (testId: string) => container.querySelector(`[data-testid="${testId}"]`) as HTMLElement | null
+const skeletons = () => all('account-usage-skeleton')
+const loading = () => all('account-usage-loading')
+const cards = () => Array.from(container.querySelectorAll('[data-account-key]')) as HTMLElement[]
+/** The cards' keys in the order the page draws them. */
+const order = () => cards().map((c) => c.getAttribute('data-account-key'))
+const bandIds = () => Array.from(container.querySelectorAll('[data-testid^="account-usage-band-"]')).filter((b) => b.tagName === 'SECTION').map((b) => b.getAttribute('data-testid'))
 const flush = async () => { await act(async () => { await Promise.resolve(); await Promise.resolve() }) }
+const click = async (el: Element | null) => { await act(async () => { (el as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
+const refresh = () => click(one('account-usage-refresh'))
+/** Picks a card's menu item (the menu is portalled onto document.body). */
+async function pickMenu(card: Element, key: string) {
+  await click(card.querySelector('[data-testid="account-usage-menu"]'))
+  await click(document.body.querySelector(`[data-testid="account-usage-menu-${key}"]`))
+}
 
 beforeEach(() => {
   list.mockReset(); authInfo.mockReset(); fetchAllStream.mockClear(); fetchOne.mockReset(); streams.length = 0
   usageStream.mockClear(); usageOne.mockClear(); usageStreamStop.mockClear(); providerStreams.length = 0
-  authInfo.mockResolvedValue([]); fetchOne.mockResolvedValue(null)
+  configSave.mockClear(); reauth.mockClear(); lastKnown.mockReset()
+  authInfo.mockResolvedValue([]); fetchOne.mockResolvedValue(null); lastKnown.mockResolvedValue([])
+  forgetAccountUsagePage()
   container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container)
 })
-afterEach(() => { act(() => root.unmount()); container.remove() })
+afterEach(() => {
+  act(() => root.unmount()); container.remove()
+  useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS }, isLoaded: true })
+  useProviderAccountsStore.setState({ snapshot: null, loaded: false })
+  vi.useRealTimers()
+})
 
-async function mount() {
-  await act(async () => { root.render(<AccountUsagePanel onClose={() => {}} onReauthNavigate={() => {}} />) })
+async function mount(props: { onClose?: () => void; onReauthNavigate?: () => void } = {}) {
+  await act(async () => { root.render(<AccountUsagePanel onClose={props.onClose ?? (() => {})} onReauthNavigate={props.onReauthNavigate ?? (() => {})} />) })
   await flush()
 }
 
-describe('AccountUsagePanel — streaming skeletons (plan P3)', () => {
-  it('shows a skeleton per account before any usage lands, then resolves each as it streams in', async () => {
+describe('AccountUsagePanel — every card at once, meters animating until each reading lands', () => {
+  it('draws a card per account before any usage lands, then fills each in place as it streams in', async () => {
     list.mockResolvedValue([profile('a'), profile('b'), profile('c')])
     await mount()
 
-    // Before any result: three skeletons, no account cards.
-    expect(skeletons().length).toBe(3)
-    expect(container.textContent).not.toContain('a@x.com')
+    // Before any result: every card, named, each with animating meters.
+    expect(cards()).toHaveLength(3)
+    expect(loading()).toHaveLength(3)
+    expect(container.textContent).toContain('a@x.com')
+    expect(container.textContent).toContain('c@x.com')
+    expect(one('pf-context')?.textContent).toBe('3 accounts')
 
-    // Stream the first account -> its row resolves, the other two stay skeletons.
+    // Stream the first account -> its meters fill, the other two keep animating.
     latest().emit(usage('a', 41))
     await flush()
-    expect(skeletons().length).toBe(2)
-    expect(container.textContent).toContain('a@x.com')
-    expect(container.textContent).toContain('41%')
+    expect(loading()).toHaveLength(2)
+    expect(container.textContent).toContain('59% left')
 
     // Stream the rest.
     latest().emit(usage('b', 12)); latest().emit(usage('c', 7))
     await flush()
-    expect(skeletons().length).toBe(0)
-    expect(container.textContent).toContain('b@x.com')
-    expect(container.textContent).toContain('c@x.com')
+    expect(loading()).toHaveLength(0)
+    expect(container.textContent).toContain('88% left')
+    expect(container.textContent).toContain('93% left')
     latest().done()
   })
 
-  it('renders placeholder skeletons while the account list itself is still resolving', async () => {
+  it('renders placeholder cards while the account list itself is still resolving', async () => {
     let resolveList!: (p: AccountProfile[]) => void
     list.mockReturnValue(new Promise<AccountProfile[]>((r) => { resolveList = r }))
     await act(async () => { root.render(<AccountUsagePanel onClose={() => {}} onReauthNavigate={() => {}} />) })
-    // List not resolved yet: placeholder skeletons, no "No accounts found".
+    // List not resolved yet: placeholders, no "No accounts found".
     expect(skeletons().length).toBeGreaterThan(0)
     expect(container.textContent).not.toMatch(/No accounts found/)
     resolveList([profile('a')])
     await flush()
-    expect(skeletons().length).toBe(1) // now one per real account
+    expect(skeletons()).toHaveLength(0)
+    expect(cards()).toHaveLength(1) // now one per real account
+    expect(loading()).toHaveLength(1)
     latest().done()
   })
 
   it('shows "No accounts found" only once the list resolves empty', async () => {
     list.mockResolvedValue([])
     await mount()
+    latest().done(); await flush()
     expect(container.textContent).toMatch(/No accounts found/)
-    expect(skeletons().length).toBe(0)
+    expect(skeletons()).toHaveLength(0)
   })
 
-  it('a manual Refresh returns rows to skeletons and re-streams', async () => {
+  it('a parked account is drawn as parked at once, never as loading', async () => {
+    list.mockResolvedValue([profile('a'), profile('p', { active: false })])
+    await mount()
+    expect(cards().map((c) => c.getAttribute('data-state'))).toEqual(['pending', 'parked'])
+    expect(loading()).toHaveLength(1)
+    latest().done()
+  })
+
+  it('a Refresh keeps each card in place with its last reading dimmed, and re-streams', async () => {
     list.mockResolvedValue([profile('a')])
     await mount()
-    latest().emit(usage('a', 20)); await flush()
-    expect(container.textContent).toContain('20%')
-    expect(skeletons().length).toBe(0)
+    latest().emit(usage('a', 20)); latest().done(); await flush()
+    expect(container.textContent).toContain('80% left')
+    expect(loading()).toHaveLength(0)
 
-    // Click Refresh (rendered into the mocked PageFrame actions slot).
-    const refresh = container.querySelector('[data-testid="pf-actions"] button') as HTMLElement
-    await act(async () => { refresh.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await refresh()
     await flush()
-    // Back to a skeleton until the new stream lands.
-    expect(skeletons().length).toBe(1)
+    // The card keeps its last figure, dimmed and animating, until the new one lands.
     expect(fetchAllStream).toHaveBeenCalledTimes(2)
+    expect(loading()).toHaveLength(1)
+    expect(loading()[0].className).toContain('opacity-50')
+    expect(container.textContent).toContain('80% left')
     latest().emit(usage('a', 55)); await flush()
-    expect(container.textContent).toContain('55%')
+    expect(container.textContent).toContain('45% left')
+    expect(loading()).toHaveLength(0)
     latest().done()
   })
 
@@ -145,53 +202,313 @@ describe('AccountUsagePanel — streaming skeletons (plan P3)', () => {
     await mount()
     const old = latest() // stream #1
 
-    // Refresh before #1 delivered anything -> stream #2, row reset to a skeleton.
-    const refresh = container.querySelector('[data-testid="pf-actions"] button') as HTMLElement
-    await act(async () => { refresh.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    // Refresh before #1 delivered anything -> stream #2.
+    await refresh()
     await flush()
     expect(streams.length).toBe(2)
 
-    // A late result from the SUPERSEDED stream must not repopulate the row.
+    // A late result from the SUPERSEDED stream must not fill the card.
     old.emit(usage('a', 99))
     await flush()
-    expect(container.textContent).not.toContain('99%')
-    expect(skeletons().length).toBe(1) // still waiting on stream #2
+    expect(container.textContent).not.toContain('1% left')
+    expect(loading()).toHaveLength(1) // still waiting on stream #2
 
     // The current stream fills it.
     latest().emit(usage('a', 7)); await flush()
-    expect(container.textContent).toContain('7%')
+    expect(container.textContent).toContain('93% left')
     latest().done()
   })
 
-  it('a rejected account-list load shows an error, not "No accounts found" or an endless skeleton', async () => {
+  it('a rejected account-list load shows an error, not "No accounts found" or an endless animation', async () => {
     list.mockRejectedValue(new Error('profiles read failed'))
     await mount()
     expect(container.textContent).toMatch(/Couldn.t load account usage/i)
     expect(container.textContent).not.toMatch(/No accounts found/)
-    expect(skeletons().length).toBe(0)
+    expect(skeletons()).toHaveLength(0)
+    expect(loading()).toHaveLength(0)
   })
 
-  it('a stream that fails mid-way turns the unresolved rows terminal (Retry), not permanent skeletons', async () => {
+  it('a stream that fails mid-way turns the unread cards terminal, and "Read usage again" reads that one', async () => {
     list.mockResolvedValue([profile('a'), profile('b')])
     await mount()
     latest().emit(usage('a', 33)) // a resolves
     await flush()
-    expect(skeletons().length).toBe(1) // b still streaming
+    expect(loading()).toHaveLength(1) // b still streaming
 
     // The stream itself fails before b arrives.
     latest().reject(new Error('stream died'))
     await flush()
-    expect(skeletons().length).toBe(0) // no endless shimmer
-    expect(container.textContent).toContain('a@x.com') // a kept its card
-    expect(container.querySelectorAll('[data-testid="account-usage-unavailable"]').length).toBe(1) // b terminal
+    expect(loading()).toHaveLength(0) // no endless animation
+    expect(container.textContent).toContain('67% left') // a kept its reading
+    expect(all('account-usage-unavailable')).toHaveLength(1) // b terminal
 
-    // Retry on the terminal row fetches just that account.
+    // "Read usage again" in b's menu fetches just that account.
     fetchOne.mockResolvedValueOnce(usage('b', 44))
-    const retry = container.querySelector('[data-testid="account-usage-unavailable"] button') as HTMLElement
-    await act(async () => { retry.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await pickMenu(cards().find((c) => c.getAttribute('data-account-key') === 'claude:b')!, 'read-again')
     await flush()
     expect(fetchOne).toHaveBeenCalledWith('b')
-    expect(container.textContent).toContain('44%')
+    expect(container.textContent).toContain('56% left')
+  })
+
+  it('the card menu: "Sign in again now" opens the sign-in for that account and goes to the sessions', async () => {
+    list.mockResolvedValue([profile('a')])
+    const onClose = vi.fn()
+    const onReauthNavigate = vi.fn()
+    await mount({ onClose, onReauthNavigate })
+    latest().emit(usage('a', 20)); latest().done(); await flush()
+    await pickMenu(cards()[0], 'sign-in-now')
+    expect(reauth).toHaveBeenCalledWith({ id: 'a', name: 'a' }, expect.any(Function))
+    expect(onReauthNavigate).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  // nubbymong/aicc_planning#444 review P4-1: the sign-in tab is told why, so
+  // its banner says which account to choose (not the duplicate's own).
+  it('a duplicate card\'s "Sign in as its own account" opens the sign-in with its reason, named by the other card', async () => {
+    list.mockResolvedValue([profile('a'), profile('b', { name: 'Work' })])
+    await mount()
+    const dup = { kind: 'duplicate' as const, account: 'shared@x.com', profileIds: ['b'] }
+    latest().emit({ ...usage('a', 0), status: 'needs-login', buckets: [], detail: 'duplicate account', signInProblem: dup })
+    latest().emit(usage('b', 30)); latest().done(); await flush()
+    const a = cards().find((c) => c.getAttribute('data-account-key') === 'claude:a')!
+    expect(a.querySelector('[data-testid="account-usage-signin-reason"]')?.textContent).toBe('Signed in to the same account as Work')
+    await click(Array.from(a.querySelectorAll('button')).find((b) => b.textContent === 'Sign in as its own account')!)
+    expect(reauth).toHaveBeenCalledWith({ id: 'a', name: 'a' }, expect.any(Function), dup)
+  })
+
+  it('a card\'s "Read usage again" animates that card alone while it reads', async () => {
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    latest().emit(usage('a', 20)); latest().emit(usage('b', 30)); latest().done(); await flush()
+    let resolveOne!: (u: AccountUsage) => void
+    fetchOne.mockReturnValueOnce(new Promise<AccountUsage>((r) => { resolveOne = r }))
+    await pickMenu(cards().find((c) => c.getAttribute('data-account-key') === 'claude:b')!, 'read-again')
+    expect(loading()).toHaveLength(1)
+    expect(cards().find((c) => c.getAttribute('data-account-key') === 'claude:b')!.getAttribute('aria-busy')).toBe('true')
+    await act(async () => { resolveOne(usage('b', 5)) })
+    await flush()
+    expect(loading()).toHaveLength(0)
+    expect(container.textContent).toContain('95% left')
+  })
+
+  it('opening the page again draws every card from the last readings at once, in their last places', async () => {
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    latest().emit(usage('a', 80)); latest().emit(usage('b', 10)); latest().done(); await flush()
+    expect(order()).toEqual(['claude:b', 'claude:a'])
+    act(() => root.unmount())
+
+    // Reopened: the list has not resolved yet, and nothing has streamed.
+    let resolveList!: (p: AccountProfile[]) => void
+    list.mockReturnValue(new Promise<AccountProfile[]>((r) => { resolveList = r }))
+    root = createRoot(container)
+    await act(async () => { root.render(<AccountUsagePanel onClose={() => {}} onReauthNavigate={() => {}} />) })
+    expect(skeletons()).toHaveLength(0)
+    expect(order()).toEqual(['claude:b', 'claude:a'])
+    expect(container.textContent).toContain('90% left')
+    expect(container.textContent).toContain('20% left')
+    // Their meters animate until the fresh readings land.
+    resolveList([profile('a'), profile('b')])
+    await flush()
+    expect(loading()).toHaveLength(2)
+    latest().done()
+  })
+})
+
+// Review F1: the first opening after a start draws every card from main's
+// last readings (usage-snapshots.json and the live cache), not fresh: the
+// meters still animate until each fresh reading lands.
+describe('the first opening draws each card from its last known reading (aicc_planning#445)', () => {
+  const old = (profileId: string, percent: number, ageMs: number): AccountUsage => ({ ...usage(profileId, percent), stale: true, fetchedAt: Date.now() - ageMs })
+
+  it('every card shows its last known figure at once, its meters animating until the fresh one lands', async () => {
+    lastKnown.mockResolvedValue([old('a', 30, 3 * 3_600_000)])
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    expect(lastKnown).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toContain('70% left')
+    // Not fresh: both cards still read, a's last reading dimmed.
+    expect(loading()).toHaveLength(2)
+    expect(cards()[0].querySelector('[data-testid="account-usage-card-foot"]')?.textContent).toBe('Last reading 3 h ago · reading again')
+    latest().emit(usage('a', 10)); await flush()
+    expect(container.textContent).toContain('90% left')
+    expect(container.textContent).not.toContain('70% left')
+    expect(loading()).toHaveLength(1)
+    latest().done()
+  })
+
+  it('a last known figure never replaces a newer reading this run already has', async () => {
+    lastKnown.mockResolvedValue([old('a', 30, 3 * 3_600_000)])
+    list.mockResolvedValue([profile('a')])
+    await mount()
+    latest().emit(usage('a', 10)); latest().done(); await flush()
+    await refresh(); await flush()
+    expect(container.textContent).toContain('90% left')
+    expect(container.textContent).not.toContain('70% left')
+    latest().done()
+  })
+
+  it('a card that must sign in again says when it was last read, from the last known figure', async () => {
+    lastKnown.mockResolvedValue([old('a', 30, 6 * 86_400_000)])
+    list.mockResolvedValue([profile('a')])
+    await mount()
+    latest().emit({ ...usage('a', 0), status: 'needs-login', buckets: [], detail: 'session expired' }); latest().done(); await flush()
+    expect(cards()[0].getAttribute('data-state')).toBe('sign-in')
+    expect(container.textContent).toContain('Last reading 6 days ago')
+  })
+
+  it('a main process with no last readings (an older one) draws the cards as before', async () => {
+    lastKnown.mockRejectedValue(new Error('no handler'))
+    list.mockResolvedValue([profile('a')])
+    await mount()
+    expect(cards()).toHaveLength(1)
+    expect(loading()).toHaveLength(1)
+    latest().emit(usage('a', 10)); latest().done(); await flush()
+    expect(container.textContent).toContain('90% left')
+  })
+})
+
+// Review F4: the e2e layout spec measures a probe built from the layout
+// constants; these pin that the page itself draws with them.
+describe('the page draws with the layout constants the e2e spec measures (aicc_planning#445)', () => {
+  it("the body, each band's grid, each card and each name carry them", async () => {
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    latest().emit(usage('a', 10)); latest().emit(usage('b', 80)); latest().done(); await flush()
+    expect(one('account-usage-body')?.className).toBe(LAYOUT.ACCOUNT_USAGE_BODY_CLASS)
+    const grids = Array.from(container.querySelectorAll('section[data-testid^="account-usage-band-"] > div'))
+    expect(grids.length).toBeGreaterThan(0)
+    for (const g of grids) expect(g.className).toBe(LAYOUT.ACCOUNT_USAGE_GRID_CLASS)
+    for (const c of cards()) expect(c.className.startsWith(`${LAYOUT.ACCOUNT_USAGE_CARD_CLASS} `)).toBe(true)
+    for (const n of Array.from(all('account-usage-name'))) expect(n.className).toBe(LAYOUT.ACCOUNT_USAGE_NAME_CLASS)
+  })
+})
+
+describe('settle, then sort (aicc_planning#445)', () => {
+  it('nothing reorders while the readings arrive; once they settle the cards sort and band', async () => {
+    list.mockResolvedValue([profile('a'), profile('b'), profile('c')])
+    await mount()
+    // a has the least room, c the most; they land in the list's order.
+    latest().emit(usage('a', 80)); latest().emit(usage('b', 50)); latest().emit(usage('c', 10))
+    await flush()
+    expect(order()).toEqual(['claude:a', 'claude:b', 'claude:c'])
+    expect(bandIds()).toEqual([])
+    expect(one('account-usage-lead')?.textContent).toBe('Reading each account’s usage…')
+
+    latest().done(); await flush()
+    expect(order()).toEqual(['claude:c', 'claude:b', 'claude:a'])
+    expect(bandIds()).toEqual(['account-usage-band-most', 'account-usage-band-some'])
+    expect(one('account-usage-band-most')?.querySelector('[data-testid="account-usage-band-count"]')?.textContent).toBe('2')
+    // The account with the most room: outlined, its pill, and the summary.
+    expect(cards()[0].getAttribute('data-best')).toBe('true')
+    expect(cards().filter((c) => c.getAttribute('data-best'))).toHaveLength(1)
+    expect(one('account-usage-lead')?.textContent).toBe('Most room now: c@x.com, 90% of 5h left.')
+    expect(one('account-usage-counts')?.textContent).toBe('3 ready')
+  })
+
+  it('a Refresh keeps the order while it reads, then sorts by the new readings once they settle', async () => {
+    list.mockResolvedValue([profile('a'), profile('b'), profile('c')])
+    await mount()
+    latest().emit(usage('a', 80)); latest().emit(usage('b', 50)); latest().emit(usage('c', 10)); latest().done()
+    await flush()
+    expect(order()).toEqual(['claude:c', 'claude:b', 'claude:a'])
+
+    await refresh(); await flush()
+    latest().emit(usage('a', 0)); latest().emit(usage('b', 60)); latest().emit(usage('c', 100))
+    await flush()
+    // Every reading is in, but the stream has not finished: nothing moves.
+    expect(order()).toEqual(['claude:c', 'claude:b', 'claude:a'])
+    latest().done(); await flush()
+    expect(order()).toEqual(['claude:a', 'claude:b', 'claude:c'])
+    expect(bandIds()).toEqual(['account-usage-band-most', 'account-usage-band-some', 'account-usage-band-not'])
+    expect(cards()[2].getAttribute('data-state')).toBe('out')
+  })
+
+  it('every state lands in its band: Most room, Some room, and Not usable now', async () => {
+    const soon = new Date(Date.now() + 3_600_000).toISOString()
+    list.mockResolvedValue([profile('ok'), profile('low'), profile('out'), profile('gone'), profile('parked', { active: false })])
+    await mount()
+    latest().emit(usage('ok', 10))
+    latest().emit(usage('low', 70))
+    latest().emit({ ...usage('out', 100), buckets: [{ key: 'session:', label: '5h', group: 'session', percent: 100, resetsAt: soon, severity: 'normal' }] })
+    latest().emit({ ...usage('gone', 0), status: 'needs-login', buckets: [], detail: 'not signed in' })
+    latest().emit({ ...usage('parked', 0), status: 'inactive', active: false, buckets: [] })
+    latest().done(); await flush()
+    const band = (id: string) => Array.from(one(`account-usage-band-${id}`)?.querySelectorAll('[data-account-key]') ?? []).map((c) => c.getAttribute('data-state'))
+    expect(band('most')).toEqual(['ready'])
+    expect(band('some')).toEqual(['ready'])
+    expect(band('not')).toEqual(['out', 'sign-in', 'parked'])
+    expect(one('account-usage-counts')?.textContent).toMatch(/^2 ready1 out until .+1 to sign in1 parked$/)
+  })
+})
+
+// Review F8: one stream that never ends must not hold back every card's
+// place for ever: once nothing has arrived for SETTLE_CAP_MS, the cards are
+// sorted by what has arrived.
+describe('a stream that never ends (aicc_planning#445, review F8)', () => {
+  it('sorts by what arrived once nothing more has come for the cap, and not before', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    latest().emit(usage('a', 80)); latest().emit(usage('b', 10))
+    await flush()
+    // The stream never finishes.
+    await act(async () => { vi.advanceTimersByTime(SETTLE_CAP_MS - 1_000) })
+    expect(order()).toEqual(['claude:a', 'claude:b'])
+    expect(bandIds()).toEqual([])
+    await act(async () => { vi.advanceTimersByTime(1_000) })
+    expect(order()).toEqual(['claude:b', 'claude:a'])
+    expect(bandIds()).toEqual(['account-usage-band-most', 'account-usage-band-some'])
+  })
+
+  it('each new reading starts the wait again', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    list.mockResolvedValue([profile('a'), profile('b'), profile('c')])
+    await mount()
+    latest().emit(usage('a', 80)); await flush()
+    await act(async () => { vi.advanceTimersByTime(SETTLE_CAP_MS - 1_000) })
+    latest().emit(usage('b', 10)); await flush()
+    await act(async () => { vi.advanceTimersByTime(SETTLE_CAP_MS - 1_000) })
+    expect(bandIds()).toEqual([])
+    await act(async () => { vi.advanceTimersByTime(1_000) })
+    expect(bandIds()).not.toEqual([])
+  })
+})
+
+describe('the sort and the provider filter, kept per viewer (aicc_planning#445)', () => {
+  it('the sort applies at once and is saved; the page opens on the saved sort', async () => {
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    latest().emit(usage('a', 10, 90)); latest().emit(usage('b', 60, 20)); latest().done()
+    await flush()
+    expect(order()).toEqual(['claude:a', 'claude:b'])
+    expect(one('account-usage-sort-5h')?.getAttribute('aria-pressed')).toBe('true')
+
+    await click(one('account-usage-sort-weekly'))
+    await flush()
+    expect(order()).toEqual(['claude:b', 'claude:a'])
+    expect(one('account-usage-sort-weekly')?.getAttribute('aria-pressed')).toBe('true')
+    expect(useSettingsStore.getState().settings.accountUsageSort).toBe('weekly')
+    expect(configSave).toHaveBeenCalledWith('settings', expect.objectContaining({ accountUsageSort: 'weekly' }))
+    // The weekly meter is the bold one now.
+    expect(cards()[0].querySelector('[data-bold="true"]')?.textContent).toContain('Weekly')
+
+    await click(one('account-usage-sort-name'))
+    await flush()
+    expect(order()).toEqual(['claude:a', 'claude:b'])
+    expect(bandIds()).toEqual(['account-usage-band-all'])
+    expect(configSave).toHaveBeenLastCalledWith('settings', expect.objectContaining({ accountUsageSort: 'name' }))
+  })
+
+  it('a saved sort is read back when the page opens', async () => {
+    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, accountUsageSort: 'weekly' }, isLoaded: true })
+    list.mockResolvedValue([profile('a'), profile('b')])
+    await mount()
+    latest().emit(usage('a', 10, 90)); latest().emit(usage('b', 60, 20)); latest().done()
+    await flush()
+    expect(one('account-usage-sort-weekly')?.getAttribute('aria-pressed')).toBe('true')
+    expect(order()).toEqual(['claude:b', 'claude:a'])
+    expect(configSave).not.toHaveBeenCalled()
   })
 })
 
@@ -200,33 +517,45 @@ describe('AccountUsagePanel — streaming skeletons (plan P3)', () => {
 // credential file), not the usage stream. It shows the one D5 line; turning
 // Claude Code back on loads the page as before.
 describe('AccountUsagePanel with Claude Code off (D5)', () => {
-  afterEach(() => { useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS }, isLoaded: true }) })
-
   it('calls neither authInfo nor the usage stream, and shows only the D5 line', async () => {
     useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, claudeEnabled: false }, isLoaded: true })
     list.mockResolvedValue([profile('a')])
     await mount()
     expect(authInfo).not.toHaveBeenCalled()
     expect(fetchAllStream).not.toHaveBeenCalled()
+    expect(lastKnown).not.toHaveBeenCalled()
     expect(container.textContent).toContain('Claude Code is off. Turn it on in Settings, Accounts to see its accounts.')
-    expect(skeletons().length).toBe(0)
+    expect(skeletons()).toHaveLength(0)
+    expect(cards()).toHaveLength(0)
     expect(container.textContent).not.toContain('a@x.com')
     expect(container.textContent).not.toMatch(/countdown/i)
     // Refresh while off reads nothing either.
-    const refresh = container.querySelector('[data-testid="pf-actions"] button') as HTMLElement
-    await act(async () => { refresh.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await refresh()
     await flush()
     expect(authInfo).not.toHaveBeenCalled()
     expect(fetchAllStream).not.toHaveBeenCalled()
   })
 
-  // Usage track MP4: with Codex not on, the page is exactly the Claude page:
-  // no section headings and no Codex call (row 14).
-  it('with Codex not on, nothing of Codex is asked for and there are no section headings', async () => {
+  it('a page opened again while Claude Code is off shows nothing of it from the last opening', async () => {
+    list.mockResolvedValue([profile('a')])
+    await mount()
+    latest().emit(usage('a', 10)); latest().done(); await flush()
+    act(() => root.unmount())
+    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, claudeEnabled: false }, isLoaded: true })
+    root = createRoot(container)
+    await mount()
+    expect(cards()).toHaveLength(0)
+    expect(container.textContent).not.toContain('a@x.com')
+  })
+
+  // Usage track MP4: with Codex not on, nothing of Codex is asked for and
+  // there is no provider filter (row 14).
+  it('with Codex not on, nothing of Codex is asked for and there is no provider filter', async () => {
     list.mockResolvedValue([profile('a'), profile('b')])
     await mount()
     expect(usageStream).not.toHaveBeenCalled()
-    expect(container.querySelector('[data-testid^="account-usage-section-"]')).toBeNull()
+    expect(one('account-usage-provider')).toBeNull()
+    expect(one('account-usage-sort')).not.toBeNull()
     latest().done()
   })
 
@@ -240,13 +569,12 @@ describe('AccountUsagePanel with Claude Code off (D5)', () => {
     expect(fetchAllStream).toHaveBeenCalled()
     latest().emit(usage('a', 12))
     await flush()
-    expect(container.textContent).toContain('12%')
+    expect(container.textContent).toContain('88% left')
   })
 })
 
-// Usage track MP4 (the approved canvas, Account usage option A): sections by
-// provider. Claude-only is the page as it was; Codex-only has the D5 line, then
-// the Codex section; with both, each section has its heading and count.
+// Usage track MP4, as one grid (aicc_planning#445): both providers' cards
+// share the grid; the provider filter replaces the per-provider sections.
 const cxAccount = (id: string, over: Partial<AccountView> = {}): AccountView => ({
   id, providerId: 'codex', identityId: `identity-${id}`, lifecycle: 'active', isProviderDefault: false, isReviewerDefault: false,
   authMethod: 'browser', lastKnownAuthState: 'signed-in', operationalState: 'ready', identityAssurance: 'user-asserted',
@@ -263,20 +591,15 @@ const cxView = (accountId: string, percent: number): ProviderAccountUsageView =>
   accountId, providerId: 'codex', status: 'ok', source: 'live', readingAt: Date.now(),
   buckets: [{ key: 'codex/300:', label: '5h', group: 'session', percent, resetsAt: '', severity: 'normal' }],
 })
-const heading = (p: string) => container.querySelector(`[data-testid="account-usage-section-${p}"]`) as HTMLElement | null
-const foot = () => container.querySelector('[data-testid="account-usage-foot"]')?.textContent ?? ''
+const foot = () => one('account-usage-foot')?.textContent ?? ''
 const latestCx = (): ProviderStreamCtl => providerStreams[providerStreams.length - 1]
+const filterButtons = () => Array.from(one('account-usage-provider')?.querySelectorAll('button') ?? []).map((b) => b.textContent)
 
-describe('AccountUsagePanel by provider (usage track MP4)', () => {
-  afterEach(() => {
-    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS }, isLoaded: true })
-    useProviderAccountsStore.setState({ snapshot: null, loaded: false })
-    vi.useRealTimers()
-  })
-  const modes = (o: { claude: boolean; withCodex: boolean }, accounts: AccountView[]) => {
+describe('AccountUsagePanel with both providers (usage track MP4, as one grid)', () => {
+  const modes = (o: { claude: boolean; withCodex: boolean }, accounts: AccountView[], extra: Record<string, unknown> = {}) => {
     // The switches as Settings saves them (an answer, either way).
     const saved = { ...choiceSettings(o.withCodex ? 'both' : 'claude'), claudeEnabled: o.claude }
-    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, ...saved, codexAnswered: true }, isLoaded: true })
+    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS, ...saved, codexAnswered: true, ...extra }, isLoaded: true })
     useProviderAccountsStore.setState({ snapshot: snapshotOf(accounts), loaded: true })
   }
 
@@ -293,19 +616,18 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
     root = createRoot(container)
   })
 
-  it('Claude-only: no headings, the foot says allowances only and keeps the countdown sentence', async () => {
+  it('Claude-only: no filter, the foot says allowances only and how sign-ins renew', async () => {
     modes({ claude: true, withCodex: false }, [cxAccount('x')])
     list.mockResolvedValue([profile('a')])
     await mount()
-    expect(heading('claude')).toBeNull()
-    expect(heading('codex')).toBeNull()
+    expect(one('account-usage-provider')).toBeNull()
     expect(usageStream).not.toHaveBeenCalled()
     expect(foot()).toContain('Allowances only. Token use and estimated cost are in Tokenomics.')
-    expect(foot()).toMatch(/The countdown is the point at which an interactive sign-in becomes unavoidable/)
+    expect(foot()).toContain(RENEWAL_LINE)
     latest().done()
   })
 
-  it('Codex-only: the D5 line, then the Codex section with its count; nothing of Claude Code is read', async () => {
+  it('Codex-only: the D5 line, then the Codex cards; nothing of Claude Code is read', async () => {
     modes({ claude: false, withCodex: true }, [cxAccount('w'), cxAccount('r')])
     await mount()
     expect(list).not.toHaveBeenCalled()
@@ -314,88 +636,124 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
     // Opening the page reads afresh (MP8 round 2, ADR-022 bound 7).
     expect(usageStream).toHaveBeenCalledWith('codex', expect.any(Function), { read: true })
     expect(container.textContent).toContain('Claude Code is off. Turn it on in Settings, Accounts to see its accounts.')
-    expect(heading('claude')).toBeNull()
-    expect(heading('codex')?.textContent).toBe('Codex2 accounts')
-    // Skeletons until each view streams in.
-    expect(skeletons().length).toBe(2)
+    expect(one('account-usage-provider')).toBeNull()
+    expect(one('pf-context')?.textContent).toBe('2 accounts')
+    // Every card at once, animating until each view streams in.
+    expect(order()).toEqual(['codex:w', 'codex:r'])
+    expect(loading()).toHaveLength(2)
     latestCx().emit(cxView('w', 18))
     await flush()
-    expect(skeletons().length).toBe(1)
+    expect(loading()).toHaveLength(1)
     expect(container.textContent).toContain('Name w')
-    expect(container.textContent).toContain('18%')
+    expect(container.textContent).toContain('82% left')
     latestCx().emit(cxView('r', 6))
     latestCx().done({ ok: true, provider: 'on', accounts: 2 })
     await flush()
-    expect(skeletons().length).toBe(0)
+    expect(loading()).toHaveLength(0)
     expect(foot()).toContain('Allowances only.')
-    expect(foot()).not.toMatch(/countdown/)
+    expect(foot()).not.toContain(RENEWAL_LINE)
     // The D5 line comes first.
     const text = container.textContent ?? ''
-    expect(text.indexOf('Claude Code is off')).toBeLessThan(text.indexOf('Codex2 accounts'))
+    expect(text.indexOf('Claude Code is off')).toBeLessThan(text.indexOf('Name w'))
   })
 
-  it('both: a heading with the count for each provider, Claude Code first', async () => {
+  it('both: one grid, Claude Code\'s cards first in the list\'s order, and the filter offers each provider', async () => {
     modes({ claude: true, withCodex: true }, [cxAccount('w')])
     list.mockResolvedValue([profile('a'), profile('b')])
     await mount()
-    expect(heading('claude')?.textContent).toBe('Claude Code2 accounts')
-    expect(heading('codex')?.textContent).toBe('Codex1 account')
-    const order = Array.from(container.querySelectorAll('[data-testid^="account-usage-section-"]')).map((h) => h.getAttribute('data-testid'))
-    expect(order).toEqual(['account-usage-section-claude', 'account-usage-section-codex'])
+    expect(order()).toEqual(['claude:a', 'claude:b', 'codex:w'])
+    expect(filterButtons()).toEqual(['All', 'Claude Code', 'Codex'])
+    expect(one('account-usage-provider-all')?.getAttribute('aria-pressed')).toBe('true')
     latest().emit(usage('a', 30)); latest().emit(usage('b', 40)); latest().done()
     latestCx().emit(cxView('w', 18)); latestCx().done()
     await flush()
     expect(container.textContent).toContain('a@x.com')
-    expect(container.textContent).toContain('18%')
+    expect(container.textContent).toContain('82% left')
+    // Settled: sorted across providers by 5h left.
+    expect(order()).toEqual(['codex:w', 'claude:a', 'claude:b'])
+    expect(cards()[0].querySelector('[data-testid="provider-mark-codex"]')).not.toBeNull()
   })
 
-  it('a Codex stream that fails leaves Retry rows, and Retry reads that one account', async () => {
+  it('the filter shows one provider\'s cards, is saved, and is read back when the page opens', async () => {
+    modes({ claude: true, withCodex: true }, [cxAccount('w')])
+    list.mockResolvedValue([profile('a')])
+    await mount()
+    latest().emit(usage('a', 30)); latest().done(); latestCx().emit(cxView('w', 18)); latestCx().done()
+    await flush()
+    await click(one('account-usage-provider-codex'))
+    await flush()
+    expect(order()).toEqual(['codex:w'])
+    expect(one('pf-context')?.textContent).toBe('1 account')
+    expect(useSettingsStore.getState().settings.accountUsageProvider).toBe('codex')
+    expect(configSave).toHaveBeenCalledWith('settings', expect.objectContaining({ accountUsageProvider: 'codex' }))
+
+    // Opened again: still Codex only.
+    act(() => root.unmount())
+    root = createRoot(container)
+    await mount()
+    expect(one('account-usage-provider-codex')?.getAttribute('aria-pressed')).toBe('true')
+    expect(order()).toEqual(['codex:w'])
+
+    await click(one('account-usage-provider-all'))
+    await flush()
+    expect(order()).toEqual(['codex:w', 'claude:a'])
+  })
+
+  it('a saved filter for a provider switched off shows every card and no filter, and is kept for when it is back', async () => {
+    modes({ claude: true, withCodex: false }, [cxAccount('w')], { accountUsageProvider: 'codex' })
+    list.mockResolvedValue([profile('a')])
+    await mount()
+    expect(one('account-usage-provider')).toBeNull()
+    expect(order()).toEqual(['claude:a'])
+    expect(useSettingsStore.getState().settings.accountUsageProvider).toBe('codex')
+    latest().done()
+  })
+
+  it('a Codex stream that fails leaves its cards to read again, and "Read usage again" reads that one account', async () => {
     modes({ claude: false, withCodex: true }, [cxAccount('w')])
     await mount()
     latestCx().reject(new Error('stream died'))
     await flush()
-    expect(skeletons().length).toBe(0)
-    const unavailable = container.querySelectorAll('[data-testid="account-usage-unavailable"]')
-    expect(unavailable.length).toBe(1)
+    expect(loading()).toHaveLength(0)
+    expect(all('account-usage-unavailable')).toHaveLength(1)
     usageOne.mockResolvedValueOnce({ ok: true, usage: cxView('w', 44) })
-    await act(async () => { (unavailable[0].querySelector('button') as HTMLElement).dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await pickMenu(cards()[0], 'read-again')
     await flush()
-    // A card's Retry reads afresh (MP8 round 2).
+    // A card's "Read usage again" reads afresh (MP8 round 2).
     expect(usageOne).toHaveBeenCalledWith('w', { read: true })
-    expect(container.textContent).toContain('44%')
+    expect(container.textContent).toContain('56% left')
   })
 
   it('ignores a late Codex view from a stream a Refresh superseded', async () => {
     modes({ claude: false, withCodex: true }, [cxAccount('w')])
     await mount()
     const old = latestCx()
-    const refresh = container.querySelector('[data-testid="pf-actions"] button') as HTMLElement
-    await act(async () => { refresh.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await refresh()
     await flush()
     expect(providerStreams.length).toBe(2)
     old.emit(cxView('w', 99))
     await flush()
-    expect(container.textContent).not.toContain('99%')
-    expect(skeletons().length).toBe(1)
+    expect(container.textContent).not.toContain('1% left')
+    expect(loading()).toHaveLength(1)
     latestCx().emit(cxView('w', 7)); latestCx().done()
     await flush()
-    expect(container.textContent).toContain('7%')
+    expect(container.textContent).toContain('93% left')
   })
 
-  it('a Codex that main answers is off has no section', async () => {
+  it('a Codex that main answers is off has no cards', async () => {
     modes({ claude: false, withCodex: true }, [cxAccount('w')])
     await mount()
-    expect(heading('codex')).not.toBeNull()
+    expect(cards()).toHaveLength(1)
     latestCx().done({ ok: true, provider: 'off', accounts: 0 })
     await flush()
-    expect(heading('codex')).toBeNull()
-    expect(skeletons().length).toBe(0)
+    expect(cards()).toHaveLength(0)
+    expect(loading()).toHaveLength(0)
   })
 
   it('a parked Codex account shows as parked at once, never as loading', async () => {
     modes({ claude: false, withCodex: true }, [cxAccount('p', { lifecycle: 'inactive' })])
     await mount()
-    expect(skeletons().length).toBe(0)
+    expect(loading()).toHaveLength(0)
     expect(container.textContent).toMatch(/Parked/)
     latestCx().done()
   })
@@ -422,8 +780,7 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
     modes({ claude: true, withCodex: true }, [cxAccount('w')])
     list.mockResolvedValue([profile('a')])
     await mount()
-    const refresh = container.querySelector('[data-testid="pf-actions"] button') as HTMLElement
-    await act(async () => { refresh.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await refresh()
     await flush()
     expect(fetchAllStream).toHaveBeenCalledTimes(2)
     expect(usageStream).toHaveBeenCalledTimes(2)
@@ -441,7 +798,7 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
     await act(async () => { useProviderAccountsStore.setState({ snapshot: snapshotOf([cxAccount('w'), cxAccount('n'), cxAccount('q', { lifecycle: 'inactive' })]), loaded: true }) })
     await flush()
     expect(usageOne.mock.calls.map((c) => c[0])).toEqual(['n'])
-    expect(container.textContent).toContain('33%')
+    expect(container.textContent).toContain('67% left')
     expect(usageStream).toHaveBeenCalledTimes(1)
   })
 
@@ -455,7 +812,7 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
     latestCx().emit(cxView('w', 18)); latestCx().done()
     await flush()
     expect(usageOne.mock.calls.map((c) => c[0])).toEqual(['n'])
-    expect(container.textContent).toContain('33%')
+    expect(container.textContent).toContain('67% left')
   })
 
   it('an account signed back in reads again', async () => {
@@ -469,7 +826,7 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
     await flush()
     // A registry change shows what is there; it does not read afresh.
     expect(usageOne).toHaveBeenCalledWith('w', { read: false })
-    expect(container.textContent).toContain('44%')
+    expect(container.textContent).toContain('56% left')
     expect(container.textContent).not.toContain('Sign in again')
   })
 
@@ -494,9 +851,10 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
     expect(fetchAllStream).toHaveBeenCalledTimes(1)
     expect(list).toHaveBeenCalledTimes(1)
     expect(authInfo).toHaveBeenCalledTimes(1)
-    // Quiet: the figures stay while the new stream runs.
-    expect(container.textContent).toContain('20%')
-    expect(container.textContent).toContain('18%')
+    // Quiet: the figures stay, and do not animate, while the new stream runs.
+    expect(container.textContent).toContain('80% left')
+    expect(container.textContent).toContain('82% left')
+    expect(loading()).toHaveLength(0)
     await act(async () => { window.dispatchEvent(new Event('focus')) })
     expect(usageStream).toHaveBeenCalledTimes(2)
     latestCx().done()
@@ -514,55 +872,52 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
     latestCx().done()
     await flush()
     expect(usageOne).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('18%')
-    expect(container.textContent).toContain('6%')
+    expect(container.textContent).toContain('82% left')
+    expect(container.textContent).toContain('94% left')
   })
 
-  // MP4 review F3.
-  it('a Retry row names its account, and its Retry says whose', async () => {
+  // MP4 review F3: what a terminal card offers names its account.
+  it('a card\'s menu says whose it is', async () => {
     modes({ claude: true, withCodex: true }, [cxAccount('w')])
     list.mockResolvedValue([profile('a')])
     await mount()
     latest().reject(new Error('stream died'))
     latestCx().reject(new Error('stream died'))
     await flush()
-    const rows = Array.from(container.querySelectorAll('[data-testid="account-usage-unavailable"]'))
-    expect(rows.map((r) => r.querySelector('[data-testid="account-usage-unavailable-name"]')?.textContent)).toEqual(['a@x.com', 'Name w'])
-    expect(rows.map((r) => r.querySelector('button')?.getAttribute('aria-label'))).toEqual(['Retry a@x.com', 'Retry Name w'])
+    expect(Array.from(all('account-usage-unavailable')).map((u) => u.closest('[data-account-key]')?.querySelector('[data-testid="account-usage-name"]')?.textContent)).toEqual(['a@x.com', 'Name w'])
+    expect(Array.from(all('account-usage-menu')).map((m) => m.getAttribute('aria-label'))).toEqual(['More actions for a@x.com', 'More actions for Name w'])
   })
 
   // MP4 review F4.
-  it('a failed Claude Code list: its heading with no count, the error in its place, Codex still drawn', async () => {
+  it('a failed Claude Code list: the error in its place, Codex still drawn', async () => {
     modes({ claude: true, withCodex: true }, [cxAccount('w')])
     list.mockRejectedValue(new Error('profiles read failed'))
     await mount()
-    expect(heading('claude')?.textContent).toBe('Claude Code')
     expect(container.textContent).toMatch(/Couldn.t load account usage/)
-    expect(heading('codex')?.textContent).toBe('Codex1 account')
+    expect(order()).toEqual(['codex:w'])
     latestCx().done()
   })
 
   // MP4 review F6.
-  it('section headings are headings, and the foot\'s Tokenomics link opens Tokenomics', async () => {
+  it('the foot\'s Tokenomics link opens Tokenomics', async () => {
     modes({ claude: true, withCodex: true }, [cxAccount('w')])
     list.mockResolvedValue([profile('a')])
     const onOpenTokenomics = vi.fn()
     await act(async () => { root.render(<AccountUsagePanel onClose={() => {}} onReauthNavigate={() => {}} onOpenTokenomics={onOpenTokenomics} />) })
     await flush()
-    expect(Array.from(container.querySelectorAll('h2')).map((h) => h.getAttribute('data-testid'))).toEqual(['account-usage-section-claude', 'account-usage-section-codex'])
     const link = Array.from(container.querySelectorAll('[data-testid="account-usage-foot"] button')).find((b) => b.textContent === 'Tokenomics') as HTMLElement
-    await act(async () => { link.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    await click(link)
     expect(onOpenTokenomics).toHaveBeenCalledTimes(1)
     latest().done(); latestCx().done()
   })
 
-  it('a Codex account whose realm cannot be used shows the Retry row', async () => {
+  it('a Codex account whose realm cannot be used says its usage could not be loaded', async () => {
     modes({ claude: false, withCodex: true }, [cxAccount('w')])
     await mount()
     latestCx().emit({ accountId: 'w', providerId: 'codex', status: 'error', buckets: [] })
     latestCx().done()
     await flush()
-    expect(container.querySelectorAll('[data-testid="account-usage-unavailable"]').length).toBe(1)
+    expect(all('account-usage-unavailable')).toHaveLength(1)
   })
 
   it('a window that resets while the page is open turns to "no reading since" (D2)', async () => {
@@ -573,9 +928,9 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
     latestCx().emit({ ...cxView('w', 18), buckets: [{ key: 'codex/300:', label: '5h', group: 'session', percent: 18, resetsAt: soon, severity: 'normal' }] })
     latestCx().done()
     await flush()
-    expect(container.textContent).toContain('18%')
+    expect(container.textContent).toContain('82% left')
     await act(async () => { vi.advanceTimersByTime(61_000) })
-    expect(container.textContent).not.toContain('18%')
+    expect(container.textContent).not.toContain('82% left')
     expect(container.textContent).toMatch(/no reading since/)
   })
 })
@@ -585,12 +940,6 @@ describe('AccountUsagePanel by provider (usage track MP4)', () => {
 // Codex's alike. The age was read once per render, and the page re-rendered
 // only on new data or at the next reset, so it kept "Updated just now".
 describe('AccountUsagePanel: the age line ages while the page stays open (P4.11)', () => {
-  afterEach(() => {
-    vi.useRealTimers()
-    useSettingsStore.setState({ settings: { ...DEFAULT_SETTINGS }, isLoaded: true })
-    useProviderAccountsStore.setState({ snapshot: null, loaded: false })
-  })
-
   it('[host] a Claude card: "Updated just now", then "Updated 2 min ago" two minutes on, with no new data', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
     list.mockResolvedValue([profile('a')])

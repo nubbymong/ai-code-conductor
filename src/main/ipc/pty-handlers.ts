@@ -349,6 +349,11 @@ export const spawnOptionsSchema = z.object({
   // session is held already (remote-helper/route.ts); every other check of the
   // route still applies to it.
   remoteVia: z.literal('helper').optional(),
+  // 2.1.3-beta.20 section 3.1.4 (shared/host-accounts.ts HOST_SIGN_IN_SPAWN_FIELD):
+  // a sign-in tab, the CLI's own sign-in for `profileId` in that account's folder
+  // on the tab's machine, through the session helper only (remote-helper/index.ts
+  // signInPty: never the usual SSH path). Only `true`; it does nothing without `ssh`.
+  remoteAccountSignIn: z.literal(true).optional(),
   // Session kind flag: an Ask Conductor one-shot. Used only to keep a watchdog
   // off that ephemeral surface (#266 MAJOR-5); no spawn coordinate.
   isAsk: z.boolean().optional(),
@@ -850,6 +855,8 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
     rows?: number
     /** 2.1.3-beta.19: the tab's saved mark (spawnOptionsSchema.remoteVia). */
     remoteVia?: 'helper'
+    /** 2.1.3-beta.20 section 3.1.4: a sign-in tab (spawnOptionsSchema.remoteAccountSignIn). */
+    remoteAccountSignIn?: true
     ssh?: RendererSSHOptions
     shellOnly?: boolean
     /** A Terminal only tab or a partner terminal (spawnOptionsSchema.plainTerminal). */

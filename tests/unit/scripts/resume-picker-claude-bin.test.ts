@@ -289,7 +289,7 @@ describe('every line that starts the picker names this session\'s Claude Code it
 
   // Mutation to prove this can fail: drop the statement that names Claude Code from the Windows picker line.
   it('Windows: an assignment in the session\'s own PowerShell, right before the picker starts', () => {
-    expect(line('win32', PIN, PICKER_JS)).toBe(`Set-Location -LiteralPath 'C:\\work'; $env:${CLAUDE_BIN_ENV} = '${PIN}'; & 'C:\\nodejs\\node.exe' '${PICKER_JS}'; exit`)
+    expect(line('win32', PIN, PICKER_JS)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; $env:${CLAUDE_BIN_ENV} = '${PIN}'; & 'C:\\nodejs\\node.exe' '${PICKER_JS}'; exit`)
   })
 
   // Mutation to prove this can fail: drop the export from the line.

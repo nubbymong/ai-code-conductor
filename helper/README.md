@@ -36,7 +36,7 @@ build are in `docs/remote/helper-threat-model.md` 3.10.
 | Local transport | `src/transport/` | One endpoint per holder that only this user can reach: a named pipe on Windows, a Unix socket in a private folder elsewhere |
 | Holder process | `src/serve.rs`, `src/request.rs`, `src/detach.rs` | `hold`: the hello, the `term.*` messages, the away clock, or none with `--until-ended` (from 2.1.3-beta.19); started detached so it outlives the app; on macOS and Linux it marks its socket and folder as used every hour and binds its socket again if a cleaner of /tmp takes it |
 | Records and list | `src/store.rs`, `src/client.rs`, `src/pids.rs` | Each holder's record in the store folder, in one of two shapes (a clock holder's, or an until-ended holder's); `list` finds every session and removes stale records |
-| Field mode | `src/field.rs` | macOS and Linux (from 2.1.3-beta.19). `field`: one string from a JSON file in the user's home folder, the file and the key given by the app's provider package, or nothing; exit 0 either way |
+| Field mode | `src/field.rs` | macOS and Linux (from 2.1.3-beta.19). `field`: one string from a JSON file in the user's home folder (`--key`), or from 2.1.3-beta.20 one JSON object of several of its keys (`--keys`, strings and integers), the file and the keys given by the app's provider package, or nothing; exit 0 either way. Only the keys on its list (`ALLOWED_KEYS`: a sign-in's account, plan, tier and expiry) are read; a key naming `accessToken` or `refreshToken` is refused by name, exit 2 |
 | Start and end mode | `src/start.rs`, `src/winproc.rs` | Windows only. `start`: one program, by a drive-absolute path (never searched for, never a batch file), with no inherited handles, created suspended until its creation time is read; prints its pid and creation time and exits. `end`: ends that program and the processes under it, only while its pid still has that creation time, holding it open from the check to the end; prints `ended` or `left`. The app starts and ends the vision browser this way |
 | Console hosts | `src/consoles.rs` | Windows only. `console-hosts`: at the app's start, ends the console hosts the run before left when it was ended from outside (only that run's, by parent, creation time, user and program file), and names the process that started it for the app to record. `end-console-host` (from 2.1.3-beta.14): while the app runs, ends each console host of its terminals on Windows' own ConPTY that was made in the time it is given, is 6 s old or more, and is the console host of no running process. Each holds a host open from its check to its end |
 | Capture mode | `src/capture.rs` | Windows only (from 2.1.3-beta.14; macOS and Linux exit 4, not supported). `capture --out <folder>`: one 32-bit BMP of each whole display in physical pixels, each file made new, and one JSON line of each display's bounds and scale; exit 3 when it cannot see the screen (an SSH session, a locked screen). For Snap (ADR-030 D3, D4): from 2.1.3-beta.16 the app runs it for the new Snap on Windows, the default (`src/main/snap/`), with a 2 s bound; probe P21 measured it first |
@@ -63,6 +63,7 @@ aicc-helper selftest [--nonce <32 hex>]
 aicc-helper hold --store <folder> --session <sid> [--label <text>] [--away <seconds> | --until-ended] [--ring-bytes <n>] [--detach]
 aicc-helper list --store <folder>
 aicc-helper field --file <path under home> --key <dotted key>      (macOS and Linux)
+aicc-helper field --file <path under home> --keys <key>[,<key>...]  (macOS and Linux, from 2.1.3-beta.20)
 aicc-helper hook [--store <folder>] [--session <sid>]               (each left out: AICC_HELPER_STORE, AICC_HELPER_SESSION)
 aicc-helper status [--store <folder>] [--session <sid>]             (the same)
 aicc-helper mcp --store <folder> --session <sid>
@@ -90,8 +91,14 @@ named from the top, separated by dots) of the JSON file `--file` names, a
 path relative to `HOME` or absolute inside it, and one line end; or nothing.
 It follows a link, then reads only a regular file of the user's own of at most
 5 MiB, and prints only a string of 1 to 1024 bytes with no control
-character. It exits 0 either way, 2 on a command line it does not take, and
-prints nothing on Windows (`src/field.rs`). `hook` is a CLI's command
+character. With `--keys` (from 2.1.3-beta.20; 1 to 8 keys, each once) it
+prints one JSON object of the keys it found, in the order given, each a
+string as above or an integer of 0 to 2^53 - 1 (`{}` when it found none),
+and one line end; nothing when the file is not read. Every key must be on its
+list (`ALLOWED_KEYS`), and a key with a part named `accessToken` or
+`refreshToken` never is. It exits 0 either way, 2 on a command line it does
+not take (a key off its list included: nothing is read), and prints nothing
+on Windows (`src/field.rs`). `hook` is a CLI's command
 hook: it passes the event on its standard input to the session's holder,
 always exits 0 and prints nothing (from 2.1.3-beta.8 a held Claude Code session
 runs it, behind the agent sessions' switch with the HTTP Hooks Gateway on). Its

@@ -15,6 +15,7 @@ import {
   createClaudePackage, createClaudeReviewLaunch, createClaudeReviewOperations, parseClaudeResult,
   discoverClaude, verifyClaudeExecutable, parseClaudeVersion,
   CLAUDE_REVIEW_ARGS, CLAUDE_REVIEW_HOLD_GRACE_MS, CLAUDE_REVIEW_MAX_STDOUT,
+  claudeReviewArgs, CLAUDE_REVIEW_MAX_REPORTED_MODELS,
 } from '../../src/main/providers/claude'
 import type { ClaudeReviewPorts, ClaudeCliRunResult, ClaudeCliRunOptions, ClaudeCliCommand, ClaudeFileStat, ClaudeReviewDeps } from '../../src/main/providers/claude'
 import { packageRegistrationProblem } from '../../src/main/providers/core'
@@ -263,6 +264,72 @@ describe('the pinned 2.1.278 result line (--output-format json)', () => {
     expect(parseClaudeResult(result({ is_error: undefined }))).toMatchObject({ text: null })
     expect(parseClaudeResult('')).toBeNull()
     expect(parseClaudeResult('{"type":"assistant"}\n')).toBeNull()
+  })
+})
+
+// nubbymong/aicc_planning#446 (ADR-031): a review's argv is CLAUDE_REVIEW_ARGS
+// plus two allow-listed values, `--model <id>` and `--effort <level>`. Main
+// has already taken each from its allow-list; the package checks them again,
+// and a value outside them holds nothing and runs nothing, on either route.
+// The result's own model usage names what answered.
+describe('the Claude reviewer: a chosen model and effort (nubbymong/aicc_planning#446)', () => {
+  it('nothing chosen is the constant, word for word; a choice is appended after it, each value its own element', () => {
+    expect(claudeReviewArgs()).toEqual([...CLAUDE_REVIEW_ARGS])
+    expect(claudeReviewArgs({})).toEqual([...CLAUDE_REVIEW_ARGS])
+    expect(claudeReviewArgs({ model: 'opus[1m]', effort: 'ultracode' })).toEqual([...CLAUDE_REVIEW_ARGS, '--model', 'opus[1m]', '--effort', 'ultracode'])
+    expect(claudeReviewArgs({ model: 'claude-opus-4-8' })).toEqual([...CLAUDE_REVIEW_ARGS, '--model', 'claude-opus-4-8'])
+    expect(claudeReviewArgs({ effort: 'high' })).toEqual([...CLAUDE_REVIEW_ARGS, '--effort', 'high'])
+    // The constant itself never moves.
+    expect([...CLAUDE_REVIEW_ARGS]).toEqual(['-p', '--restricted', '--strict-mcp-config', '--tools', 'Read,Grep,Glob', '--output-format', 'json', '--no-session-persistence'])
+  })
+
+  it('runs the chosen values on the direct route and through the absolute cmd.exe, the request on stdin', async () => {
+    const h = reviewDeps()
+    await createClaudeReviewOperations(h.deps).run(input({ model: 'opus[1m]', effort: 'max' }))
+    await createClaudeReviewOperations(h.deps).run(input({ executable: SHIM, model: 'claude-sonnet-4-6', effort: 'low' }))
+    expect(h.calls[0].cmd.file).toBe(EXE)
+    expect(h.calls[0].cmd.args).toEqual([...CLAUDE_REVIEW_ARGS, '--model', 'opus[1m]', '--effort', 'max'])
+    expect(h.calls[0].cmd.verbatim).toBe(false)
+    expect(h.calls[1].cmd.file).toBe('C:\\Windows\\System32\\cmd.exe')
+    expect(h.calls[1].cmd.args.at(-1)).toBe(`""${SHIM}" ${[...CLAUDE_REVIEW_ARGS, '--model', 'claude-sonnet-4-6', '--effort', 'low'].join(' ')}"`)
+    for (const c of h.calls) expect(c.opts.stdin).toBe(input().prompt)
+  })
+
+  it('a value outside the lists holds nothing and runs nothing, on the direct route and through a Windows shim', async () => {
+    const models = ['-p', '--settings=x', '-opus', 'opus --dangerously-skip-permissions', 'opus"', 'opus%PATH%', 'opus&calc', 'opus^x', 'opus|x', 'opus\n--effort', '', 'opus ', 'x'.repeat(65), 7, null]
+    const efforts = ['-x', '--yolo', 'high ', 'high\n', '%high%', 'high&x', '"high"', '', 'x'.repeat(33), 3, null]
+    for (const executable of [EXE, SHIM]) {
+      const h = reviewDeps()
+      const review = createClaudeReviewOperations(h.deps)
+      for (const model of models) {
+        expect(await review.run(input({ executable, model })), `${executable} ${JSON.stringify(model)}`).toEqual({ ok: false, code: 'not-started', message: 'Claude Code could not be started: the model is not one this app passes to Claude Code.' })
+      }
+      for (const effort of efforts) {
+        expect(await review.run(input({ executable, effort })), `${executable} ${JSON.stringify(effort)}`).toEqual({ ok: false, code: 'not-started', message: 'Claude Code could not be started: the effort is not one Claude Code takes.' })
+      }
+      expect(h.run).not.toHaveBeenCalled()
+      expect(h.deps.holdProfile).not.toHaveBeenCalled()
+    }
+  })
+
+  it("reads the models the result's model usage names, plain names only and at most eight; none named is none reported", () => {
+    const usage = (names: string[]) => Object.fromEntries(names.map((n) => [n, { inputTokens: 1, outputTokens: 1 }]))
+    expect(parseClaudeResult(result({ modelUsage: usage(['claude-opus-5-5']) }))).toEqual({ text: '1. A finding.', usage: { inputTokens: 115, cachedInputTokens: 100, outputTokens: 20 }, models: ['claude-opus-5-5'] })
+    expect(parseClaudeResult(result({ modelUsage: usage(['claude-opus-5-5[1m]', 'claude-haiku-5-5', 'bad name', '-x', 'a\nb', '']) }))?.models).toEqual(['claude-opus-5-5[1m]', 'claude-haiku-5-5'])
+    expect(parseClaudeResult(result({ modelUsage: usage(Array.from({ length: 12 }, (_, i) => `m${i}`)) }))?.models).toHaveLength(CLAUDE_REVIEW_MAX_REPORTED_MODELS)
+    expect(CLAUDE_REVIEW_MAX_REPORTED_MODELS).toBe(8)
+    for (const mu of [undefined, null, {}, [], 'claude-opus-5-5', usage(['bad name'])]) expect(parseClaudeResult(result({ modelUsage: mu })), JSON.stringify(mu)).not.toHaveProperty('models')
+    // An error result's models travel too (the footer of a failure names them).
+    expect(parseClaudeResult(result({ is_error: true, result: 'overloaded', modelUsage: usage(['claude-opus-5-5']) }))).toMatchObject({ text: null, models: ['claude-opus-5-5'] })
+  })
+
+  it('a run hands the reported models back with the review and with a failure; none reported, none handed back', async () => {
+    const ok = reviewDeps({ run: runner(() => ({ stdout: result({ modelUsage: { 'claude-opus-5-5': {} } }) })).run })
+    expect(await createClaudeReviewOperations(ok.deps).run(input({ model: 'opus' }))).toEqual({ ok: true, text: '1. A finding.', usage: { inputTokens: 115, cachedInputTokens: 100, outputTokens: 20 }, reportedModels: ['claude-opus-5-5'] })
+    const failed = reviewDeps({ run: runner(() => ({ stdout: result({ is_error: true, result: 'overloaded', modelUsage: { 'claude-opus-5-5': {} } }) })).run })
+    expect(await createClaudeReviewOperations(failed.deps).run(input())).toMatchObject({ ok: false, code: 'failed', reportedModels: ['claude-opus-5-5'] })
+    const none = reviewDeps()
+    expect(await createClaudeReviewOperations(none.deps).run(input())).not.toHaveProperty('reportedModels')
   })
 })
 

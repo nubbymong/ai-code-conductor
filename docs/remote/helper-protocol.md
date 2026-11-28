@@ -59,6 +59,68 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   `oauthAccount.emailAddress`); its one string is the tab's account label
   after the app's display gate, and a read with no answer leaves the tab
   with no label and never fails the start.
+- **Accounts signed in on the machine** (2.1.3-beta.20 section 3, Sign in
+  on this machine). Each account of the app signed in there has a folder of
+  its own, `~/.aicc/accounts/<profile id>/` (0700; beside the device
+  folders, as an account's sign-in is the machine user's, not one
+  install's), holding the marker `.aicc-account` (`aicc-account 1 <profile
+  id> <install id>`, a regular file): no script reads or removes such a
+  folder without this install's marker. A folder whose marker names another
+  install (the app on another computer of the user, or on a shared login,
+  signed in on the same host login) is that computer's: `accounts` names it
+  `AICC-FIELD <nonce> <profile id> elsewhere` and reads nothing of it, and
+  `account` and `signout` refuse it (`account-folder-elsewhere`), but for
+  `account adopt`, the user's own choice on the machine's card for a folder
+  of one of this computer's accounts (its own from an earlier install whose
+  id was lost), which rewrites only its marker. A folder with the marker of
+  the 2.1.3-beta.20 builds before the install id was in it (`aicc-account 1
+  <profile id>`) is read after `AICC-FIELD <nonce> <profile id> old`; one
+  whose profile id the app names (one of its accounts) is this computer's,
+  and `account` rewrites its marker (`adopted old`); any other is left, and
+  Remove names it (`old <id>`). The folder
+  is the CLI's config folder for that account
+  (`CLAUDE_CONFIG_DIR`): its sign-in files (`.credentials.json`,
+  `.claude.json`) are its own, the shared folders (projects, memory, agents,
+  skills, commands, plugins) and `CLAUDE.md` are links into `~/.claude`
+  only, and `settings.json` is the app's sanitised copy of
+  `~/.claude/settings.json`. Three fixed scripts: `account` makes the
+  folder at a sign-in (`make`) or brings its links and settings copy up to
+  date at a launch on it (`refresh`, which makes nothing and answers `gone`
+  for a folder that is not there); `accounts`, through the launcher, reads
+  every sign-in there and the machine's own in one exec, each file by the
+  helper's field mode with `--keys` (below), printing `AICC-FIELD <nonce>
+  <own or profile id> <id or cr>` before each answer; `signout` runs the
+  CLI's own `claude auth logout` with `CLAUDE_CONFIG_DIR` set to one
+  account's folder and then removes that folder only (`folder`), each
+  folder of this install's that a comma list of profile ids names (`list`,
+  for Remove: then it names the folders it left, this install's that the
+  list did not name, `left <id>`, and another computer's, `elsewhere <id>`;
+  with the device folder already gone it signs nothing out and answers
+  `device gone`, and Remove goes on), or the machine's own sign-in with the
+  variable unset and nothing removed (`own`, only after the user confirmed
+  it). The app reads at Check, at the start-up list, at the end of a
+  sign-in tab, at each launch of a tab on an account, and before and after
+  a sign-out; nothing polls. An attach to a session kept for a tab reads
+  too, for the tab's account state only: it never stops the attach.
+- **Field mode's keys** (`helper/src/field.rs`, from 2.1.3-beta.20).
+  `field --file <file> --keys <k1,k2,...>` reads 1 to 8 keys of one JSON
+  file under the home folder and prints one JSON object of the keys it
+  found, in the order given, each a string (1 to 1024 bytes, no control
+  character) or an integer of 0 to 2^53 - 1; `{}` when it found none;
+  nothing when the file is not a regular file of the user's own (missing,
+  another user's, a folder, a FIFO, over 5 MiB, not JSON). `--key` keeps its
+  one-string output. Both read only the keys on the helper's own list,
+  `ALLOWED_KEYS`: `oauthAccount.emailAddress` (the account a sign-in names,
+  in `.claude.json`), `claudeAiOauth.subscriptionType`,
+  `claudeAiOauth.rateLimitTier` and `claudeAiOauth.expiresAt` (its plan,
+  tier and expiry, in `.credentials.json`; the machine's own sign-in is
+  `~/.claude.json` and `~/.claude/.credentials.json`, and an account's own
+  folder holds both files). The Claude package names these keys
+  (`CLAUDE_REMOTE_ACCOUNTS`, `src/main/providers/claude/remote-launch.ts`),
+  and the helper itself never prints a token: it refuses any key with a part
+  named `accessToken` or `refreshToken`, in any case, whatever the list
+  says. A key off the list is a command line the mode does not take: exit 2,
+  nothing read.
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session
   folder, by the name `s`, so a long home never meets the path limit.
@@ -997,6 +1059,21 @@ from the top, separated by dots: 1 to 16 parts, at most 256 bytes, no control
 character; a member named twice on the way gives nothing. The value is a
 string of 1 to 1024 bytes with no control character. It writes nothing. The
 app's provider package names the file and the key.
+
+**Reading several fields (from 2.1.3-beta.20).** `aicc-helper field --file
+<path under home> --keys <dotted key>[,<dotted key>...]` reads the same file
+once and prints one JSON object and one line end, or nothing. It takes 1 to 8
+keys, each once; the object holds each key it found, in the order given, as
+its string (1 to 1024 bytes, no control character) or its integer (digits
+only, 0 to 2^53 - 1, so the app reads it exactly), and is `{}` when the file
+holds none of them. Nothing is printed, with exit 0, when the file is
+missing, is not a regular file of the user's own (another user's, a folder, a
+FIFO), is over 5 MiB or is not JSON. Both `--key` and `--keys` read only the
+keys on the helper's own list, and refuse a key with a part named
+`accessToken` or `refreshToken` (in any case) by name first, so the helper
+itself never prints a token. A key off the list, a key given twice or more
+than 8 keys is a command line it does not take: exit 2, nothing read. The
+keys for Claude Code are listed under "Field mode's keys" in section 1.
 
 **A connection.** The holder first writes its hello line, then a line end:
 `caps` is `["core","local"]` in a holder from before hook events,

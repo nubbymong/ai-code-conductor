@@ -56,6 +56,7 @@ import { deriveOnboarding } from '../onboarding/gate'
 import { useHelloCodexStore } from '../onboarding/hello-codex-open'
 import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSwitchAccount } from '../hooks/useSwitchAccount'
+import { useHelperTabHost } from '../hooks/useHelperTabHost'
 import { switchAccountItems } from '../utils/switchAccountItems'
 import { useProviderAccountsStore } from '../stores/providerAccountsStore'
 import { useTokenomicsStore } from '../stores/tokenomicsStore'
@@ -356,8 +357,11 @@ export default function Sidebar({ currentView, onViewChange, collapsed, onShowAc
   const accountsSnapshot = useProviderAccountsStore((s) => s.snapshot)
   // P4.6 (row 58): a Codex account's chatgpt.com status, for the menu's item.
   const codexWebByAccount = useCodexWebStore((s) => s.byAccount)
-  const menuSwitchItems = switchAccountItems(menuSession, { profiles: accountProfiles, aliases: accountAliases, snapshot: accountsSnapshot })
-  const canSwitchAccount = canSwitchAccountForSession({ provider: menuSession?.provider, isSsh: !!menuSession?.sshConfig, shellOnly: !!menuSession?.shellOnly, profileCount: accountProfiles.length, providerAccountCount: menuSwitchItems.length })
+  // 2.1.3-beta.20 section 5 (frame 3): a tab through the session helper
+  // switches too, its list marking each account's sign-in on its machine.
+  const menuHelper = useHelperTabHost(menuSession)
+  const menuSwitchItems = switchAccountItems(menuSession, { profiles: accountProfiles, aliases: accountAliases, snapshot: accountsSnapshot }, menuHelper.host)
+  const canSwitchAccount = canSwitchAccountForSession({ provider: menuSession?.provider, isSsh: !!menuSession?.sshConfig, viaHelper: menuHelper.viaHelper, shellOnly: !!menuSession?.shellOnly, profileCount: accountProfiles.length, providerAccountCount: menuSwitchItems.length })
   const switchMenuAccount = useSwitchAccount(menuSession)
 
   // Inject attention styles on mount

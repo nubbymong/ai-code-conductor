@@ -2,7 +2,12 @@
 // plan A6, A8; design 8.4, 9.2; owner decision D3). Only a fixed set of
 // operations exists -- the argv is a constant per operation, so no user or
 // provider text ever reaches a command line -- and every run gets the
-// allowlisted environment the caller built with codexCliEnv.
+// allowlisted environment the caller built with codexCliEnv. One operation
+// adds to its constant (ADR-031, nubbymong/aicc_planning#446): a review's
+// argv is the `review` constant plus two allow-listed values, its model and
+// its reasoning effort, each one whole argv element from a fixed list main
+// checked, its form checked again here (codexReviewArgs) and held to
+// PLAIN_ARG.
 //
 // A Windows `.cmd` shim (what `npm install -g` puts on PATH) cannot be spawned
 // without a shell since the CVE-2024-27980 fix, so it goes through cmd.exe
@@ -44,6 +49,7 @@ import { spawn as nodeSpawn, execFile, execFileSync } from 'node:child_process'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import { logInfo } from '../../debug-logger'
 import { timedStart } from '../../main-thread-ops'
+import { isCodexModelId } from '../../../shared/model-registry'
 
 export type CodexCliOperation = 'version' | 'status' | 'logout' | 'login-browser' | 'login-device' | 'login-api-key' | 'review' | 'app-server' | 'models' | 'analysis' | 'insights'
 
@@ -78,6 +84,9 @@ const ARGS: Readonly<Record<CodexCliOperation, readonly string[]>> = {
   // medium reasoning effort (model_reasoning_effort=medium), so its depth
   // stays what it was. The config's agents setting is off too
   // (agents.enabled=false), as in the analysis and Insights runs below.
+  // nubbymong/aicc_planning#446: this is the review with nothing chosen,
+  // word for word; a chosen model and a chosen effort are added by
+  // codexReviewArgs below, and nothing else of it moves.
   'review': [
     'exec', '--json', '--ephemeral', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--disable', 'hooks', '--sandbox', 'read-only',
     '--disable', 'shell_tool', '--disable', 'unified_exec', '--disable', 'apps', '--disable', 'plugins', '--disable', 'browser_use',
@@ -194,6 +203,49 @@ export function codexCommandLine(
 ): CodexCommand | { refused: string } {
   const args = ARGS[operation]
   if (!args) return { refused: 'not a Codex CLI operation this app runs' }
+  return cliCommandLine(executable, args, platform, env, 'Codex')
+}
+
+/** The reasoning efforts a review's argv is built with
+ *  (nubbymong/aicc_planning#446): the Codex CLI's own values less 'none',
+ *  which means "no override" to every launch -- the set a cloud agent passes
+ *  (CODEX_AGENT_EFFORTS) too. */
+export const CODEX_REVIEW_EFFORTS: readonly string[] = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'])
+/** The effort a review runs at when none is chosen (2.1.3-beta.8). */
+export const CODEX_REVIEW_DEFAULT_EFFORT = 'medium'
+
+/** A review's argv (ADR-031): the `review` constant with two allow-listed
+ *  values. `model` adds `-m <id>` just before the effort override, and
+ *  `effort` is that override's level (medium when absent); every other
+ *  element is the constant's, in its order. Main has already taken each
+ *  value from its allow-list (codex-review-mcp-tool.ts); this checks their
+ *  form again as codexAgentArgs does (a model id that can never read as a
+ *  flag, a level of the CLI's own), so a value of any other form starts
+ *  nothing. Which models may run is main's list, not this check. PLAIN_ARG
+ *  then holds every element (cliCommandLine). */
+export function codexReviewArgs(choice: { model?: unknown; effort?: unknown } = {}): string[] | { refused: string } {
+  const { model, effort } = choice
+  if (model !== undefined && !isCodexModelId(model)) return { refused: 'the model is not one this app passes to Codex' }
+  if (effort !== undefined && (typeof effort !== 'string' || !CODEX_REVIEW_EFFORTS.includes(effort))) return { refused: 'the reasoning effort is not one Codex takes' }
+  const base = ARGS.review
+  const at = base.indexOf(`model_reasoning_effort=${CODEX_REVIEW_DEFAULT_EFFORT}`)
+  return [
+    ...base.slice(0, at - 1),
+    ...(model !== undefined ? ['-m', model as string] : []),
+    '-c', `model_reasoning_effort=${(effort as string | undefined) ?? CODEX_REVIEW_DEFAULT_EFFORT}`,
+    ...base.slice(at + 1),
+  ]
+}
+
+/** How to run one review against one resolved executable, or why not. */
+export function codexReviewCommandLine(
+  executable: string,
+  choice: { model?: unknown; effort?: unknown },
+  platform: NodeJS.Platform,
+  env: { ComSpec?: string; SystemRoot?: string },
+): CodexCommand | { refused: string } {
+  const args = codexReviewArgs(choice)
+  if (!Array.isArray(args)) return args
   return cliCommandLine(executable, args, platform, env, 'Codex')
 }
 
@@ -465,8 +517,12 @@ export function parsePosixProcessTable(text: string): CodexProcessEntry[] {
 }
 
 /** A constant query with no double quote in it: passed as plain -Command
- *  text (an encoded command is what endpoint protection flags). */
-export const WINDOWS_PROCESS_QUERY = "Get-CimInstance Win32_Process | ForEach-Object { $c = 0; if ($_.CreationDate) { $c = $_.CreationDate.ToFileTimeUtc() }; '{0},{1},{2},{3}' -f $_.ProcessId, $_.ParentProcessId, $c, $_.Name }"
+ *  text (an encoded command is what endpoint protection flags). Each cmdlet
+ *  is named with its module (CimCmdlets, Microsoft.PowerShell.Core), so
+ *  Windows PowerShell 5.1 loads that module by name and never looks through
+ *  every module on its module path for it, which with no module analysis
+ *  cache yet (a new user profile) can take many seconds. */
+export const WINDOWS_PROCESS_QUERY = "CimCmdlets\\Get-CimInstance Win32_Process | Microsoft.PowerShell.Core\\ForEach-Object { $c = 0; if ($_.CreationDate) { $c = $_.CreationDate.ToFileTimeUtc() }; '{0},{1},{2},{3}' -f $_.ProcessId, $_.ParentProcessId, $c, $_.Name }"
 /** How long reading the process table may take at kill time. */
 export const CODEX_PROCESS_TABLE_TIMEOUT_MS = 8000
 /** How long the EARLY read (see CodexKillTree.prime) may take: it runs in the

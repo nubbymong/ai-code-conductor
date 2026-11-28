@@ -8,6 +8,9 @@ import { useProviderAccountsStore } from '../stores/providerAccountsStore'
 import { useLaunchAckStore } from '../stores/launchAckStore'
 import { sessionProviderAccount } from '../utils/accountChip'
 import { noteSwitchOrigin, switchOrigin, forgetSwitchOrigin } from '../utils/switchOrigin'
+import { useThroughHelper } from './useThroughHelper'
+import { isHelperTab } from '../utils/sessionLaunch'
+import { switchHelperTabAccount } from '../utils/helperSwitch'
 
 /**
  * Guard for the mid-session account switch. A switch is only meaningful when
@@ -57,17 +60,28 @@ export function useSwitchAccount(
   session: Session | null | undefined,
 ): (sessionId: string, newProfileId: string | undefined) => void {
   const { restart } = useRestartSession(session, false)
+  // 2.1.3-beta.20 section 5: whether main says this SSH tab runs through the
+  // session helper now (a tab the helper keeps says so by its saved mark too).
+  const throughHelper = useThroughHelper(session?.id ?? '', session?.sessionType === 'ssh' && !!session?.sshConfig)
 
   return useCallback(
     (sessionId, newProfileId) => {
       if (!session || session.id !== sessionId) return
-      // Defense-in-depth (BUG-13): an SSH session runs under the remote host's
-      // login, so it never switches a local account. Shell-only panes are
-      // refused too: the add-account /login shell is pinned to its new
-      // profile, and a switch would redirect the /login elsewhere.
-      if (session.sshConfig || session.shellOnly) return
+      // Shell-only panes are refused: the add-account /login shell is pinned
+      // to its new profile, and a switch would redirect the /login elsewhere.
+      if (session.shellOnly) return
+      // Defense-in-depth (BUG-13): today's SSH path runs under the remote
+      // host's login, so it never switches a local account. A Claude tab
+      // through the session helper does (2.1.3-beta.20 section 5): each
+      // account signs in on that machine in a folder of its own.
+      if (session.sshConfig && !isHelperTab(session, throughHelper)) return
       if ((session.provider ?? 'claude') !== 'claude') {
-        switchProviderAccount(session, newProfileId, restart)
+        // Only Claude Code tabs run through the session helper in this release.
+        if (!session.sshConfig) switchProviderAccount(session, newProfileId, restart)
+        return
+      }
+      if (session.sshConfig) {
+        switchHelperTabAccount(session, newProfileId, restart)
         return
       }
       // 1. No-op when the chosen account is already the active one.
@@ -103,7 +117,7 @@ export function useSwitchAccount(
       //    the remount reads the new account; resume is inherited from Restart.
       restart({ profileId: newProfileId })
     },
-    [session, restart],
+    [session, restart, throughHelper],
   )
 }
 

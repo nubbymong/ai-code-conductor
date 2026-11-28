@@ -78,6 +78,17 @@
  * credential and calls no network. Prompt buttons and broadcast type into it by the
  * usual rule for a Claude Code tab.
  *
+ * Its account (2.1.3-beta.20 section 3, Sign in on this machine): a tab whose
+ * config names an account (`account`) reads the machine's sign-ins first, in
+ * one exec (./host-accounts.ts readMachineAccounts), and starts on the
+ * account's own folder there when it is signed in in it, on the machine's
+ * own sign-in when that is the account, and otherwise starts nothing: no
+ * holder, no CLI, and its note, and the renderer's notice, say why
+ * (HostLaunchRefusal). On its own folder, the folder's links and settings
+ * copy are brought up to date before the hold (`account refresh`). A sign-in
+ * tab makes the account's folder instead (`account make`) and reads nothing:
+ * its launch is the CLI's own sign-in in that folder.
+ *
  * This file imports nothing of Electron.
  */
 import { createHash } from 'crypto'
@@ -87,14 +98,16 @@ import { HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } 
 import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import type { ProviderId } from '../../shared/providers/ids'
-import type { ProviderRemoteLaunch, RemoteHelperCommands, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
+import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
+import type { HostAccountNotice, HostLaunchRefusal } from '../../shared/host-accounts'
+import { accountBinding, machineAccounts, prepareAccountFolder, readMachineAccounts, type HostProfile } from './host-accounts'
 import { holderLabel, type HolderKind } from './scripts'
 import { untilEnded } from './kept'
 import { afterHashLine, exitText, localSshEnd, newNonce, notStartedLogLine, openScriptStream, readHashLine, readScriptResult, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
 import { sessionFilesInput } from './session-files'
 import { readHostForStart } from './host-reads'
 import { RemoteSignals, type RemoteSignalDeps } from './signals'
-import { refusalText, type RemoteMachineRecord } from './machines'
+import { machineName, refusalText, type RemoteMachineRecord } from './machines'
 
 /** The helper's session id for a remote tab: always the same for the same app
  *  id, never one a local terminal or agent session gets (`rm` and 30 hex). */
@@ -230,6 +243,26 @@ async function afterEnding(sid: string): Promise<void> {
 
 /** An error that no new try will mend: no reconnect after it (section 11). */
 class FinalError extends Error {}
+
+/**
+ * 2.1.3-beta.20 section 3: a tab's account on its machine. `plan` (the
+ * session options') is the launch on the account's own folder there; `own`
+ * is the same launch on the machine's own sign-in, taken when the read finds
+ * the account signed in as that. A sign-in tab (`signIn`) has no `own`: its
+ * launch is the CLI's own sign-in in the account's folder, which its start
+ * makes.
+ */
+export interface RemoteTabAccount {
+  profileId: string
+  via: RemoteAccounts
+  signIn: boolean
+  own?: { plan: RemoteLaunchPlan; spec: LaunchSpec }
+  /** The tab started nothing for its account: where the renderer is told. */
+  notice?: (n: HostAccountNotice) => void
+  /** Final review round 2 (F2-1): the app's account aliases (host-accounts.ts
+   *  accountAliasesOf), so its refusal names the account as the renderer does. */
+  aliases?: Readonly<Record<string, string>>
+}
 /** The bridge found no holder for the session (exit 3): it is gone. */
 class GoneError extends FinalError {}
 
@@ -261,6 +294,9 @@ export interface RemoteSessionOptions {
   /** The holder's kind (2.1.3-beta.19 section 1.2): `away` (a plain SSH
    *  tab's; the default) or `until-ended` (an SSH Persistent tab's). */
   kind?: HolderKind
+  /** 2.1.3-beta.20 section 3: the tab's account on the machine. Absent: the
+   *  machine's own sign-in, read nowhere (a config with no account). */
+  account?: RemoteTabAccount
 }
 
 /** HelperPty's driver for a remote tab: every step is an exec over ssh. */
@@ -272,6 +308,9 @@ export class RemoteDriver implements HelperPtyDriver {
   /** `direct` starts no program: it only says why (a NoticePty). */
   readonly startsNothing = true as const
   private why = ''
+  /** Phase 5 round 4 (R4-2): a `why` that names its own next steps, so its
+   *  note adds none (set with it, by failWith). */
+  private whySteps: string | undefined
   private readonly connected = new Set<string>()
   private readonly target: SshTarget
   private readonly sleep: (ms: number) => Promise<void>
@@ -295,8 +334,19 @@ export class RemoteDriver implements HelperPtyDriver {
   keptLost = false
   /** The tab's attach again found no holder for its session (the bridge's exit 3): it is over on the machine. */
   keptGone = false
+  /** 2.1.3-beta.20 section 3.1.7: the launch this start runs: the session
+   *  options' (on the account's own folder, for a tab on an account), or the
+   *  account's launch on the machine's own sign-in once its read found that. */
+  private current: { plan: RemoteLaunchPlan | undefined; spec: LaunchSpec }
+  /** Where this start's account read put it: its own folder, or the machine's own sign-in. */
+  private boundTo: 'folder' | 'own' | undefined
+  /** The tab started nothing for its account: why, for its note. */
+  private accountRefused: HostLaunchRefusal | undefined
+  /** The launch this start runs (section 3.1.7): its spec is what the CLI starts with. */
+  get spec(): LaunchSpec { return this.current.spec }
 
   constructor(private readonly o: RemoteSessionOptions) {
+    this.current = { plan: o.plan, spec: o.spec }
     this.target = { host: o.machine.host, port: o.machine.port, user: o.machine.user }
     this.sleep = o.sleep ?? ((ms) => new Promise((r) => setTimeout(r, ms)))
     const plan = o.plan
@@ -324,8 +374,9 @@ export class RemoteDriver implements HelperPtyDriver {
     return [nonce, m.did, this.o.installId, m.helper.folder, m.helper.sha256, ...rest]
   }
 
-  private failWith(why: string): never {
+  private failWith(why: string, ownSteps = false): never {
     this.why = why
+    this.whySteps = ownSteps ? why : undefined
     throw new Error(why)
   }
 
@@ -340,9 +391,33 @@ export class RemoteDriver implements HelperPtyDriver {
    */
   async prepare(sid: string, label: string, abandoned: () => boolean): Promise<HeldStart> {
     await afterEnding(sid)
-    const plan = this.o.plan
-    const launch = plan ? await this.launchWithReads(plan, sid) : undefined
+    if (this.o.account) {
+      const refused = await this.bindAccount(this.o.account)
+      if (refused) {
+        // 2.1.3-beta.20 fix round (NIT-8): an attach starts no CLI. A session
+        // kept for this tab runs on with the sign-in it started with, so its
+        // account's read only names its state (the read went to the
+        // renderer) and never stops the attach; a launch it does stop.
+        const kept = this.untilEnded && !abandoned() ? await this.keptFor(sid) : null
+        if (!kept) this.refuseForAccount(this.o.account, refused)
+        this.o.log(`[remote-helper] ${sid}: a session kept for this tab runs on ${this.o.machine.host}; attaching to it, nothing is launched (its account reads ${refused.state} there)`)
+        const first = this.current.plan?.first
+        if (first) {
+          this.signals?.launched(first)
+          this.filesSent = first.files.length > 0
+        }
+        this.adopted = true
+        this.untilEnded = true
+        return { record: kept, attach: true }
+      }
+    }
     if (abandoned()) throw new NothingStartedError('the tab was closed while it started')
+    const plan = this.current.plan
+    const read = plan ? await this.launchWithReads(plan, sid) : undefined
+    const launch = read?.launch
+    if (abandoned()) throw new NothingStartedError('the tab was closed while it started')
+    // Its own folder's links and settings copy, before any holder starts.
+    if (read && this.o.account && !this.o.account.signIn && this.boundTo === 'folder') await this.refreshAccountFolder(this.o.account, read.files)
     const held = await this.startHolder(sid, label, abandoned)
     if (held.attach) {
       this.adopted = true
@@ -381,7 +456,7 @@ export class RemoteDriver implements HelperPtyDriver {
    * not be reached, the exec refused, or the launch's program, arguments or
    * variables are not the ones its spec was built from.
    */
-  private async launchWithReads(plan: RemoteLaunchPlan, sid: string): Promise<RemoteLaunch> {
+  private async launchWithReads(plan: RemoteLaunchPlan, sid: string): Promise<{ launch: RemoteLaunch; files: RemoteHostFile[] }> {
     let files: Awaited<ReturnType<typeof readHostForStart>>['files']
     try {
       files = (await readHostForStart({ runner: this.o.runner, machine: this.o.machine, installId: this.o.installId, log: this.o.log, ...(this.signals ? { signals: this.signals } : {}) }, plan, sid)).files
@@ -396,7 +471,100 @@ export class RemoteDriver implements HelperPtyDriver {
     }
     const same = launch.program === plan.first.program && JSON.stringify(launch.args) === JSON.stringify(plan.first.args) && JSON.stringify(launch.env) === JSON.stringify(plan.first.env)
     if (!same) this.failWith('its provider\'s launch changed its program, arguments or variables with what was read on the host')
-    return launch
+    return { launch, files }
+  }
+
+  /**
+   * 2.1.3-beta.20 section 3.1.7: which sign-in this start runs on. A sign-in
+   * tab makes the account's folder (`account make`; its settings copy left
+   * as it is) and reads nothing. Any other tab on an account reads the
+   * machine's sign-ins (one exec) and starts on the account's own folder when
+   * it is signed in there, on the machine's own sign-in when that is the
+   * account (its launch is `own`), and otherwise answers why it may not
+   * launch (prepare then starts nothing, unless a session kept for this tab
+   * runs there to attach to). A folder signed in as another account is
+   * never used.
+   */
+  private async bindAccount(a: RemoteTabAccount): Promise<HostLaunchRefusal | null> {
+    const m = this.o.machine
+    const ctx = { runner: this.o.runner, installId: this.o.installId, log: this.o.log }
+    if (a.signIn) {
+      // Final review round 4 (F4-1): a sign-in tab for an account this
+      // computer no longer holds makes no folder and signs nothing in there:
+      // the app could never start a tab on it.
+      let heldNow: readonly HostProfile[] | null
+      try { heldNow = await a.via.profiles() } catch { heldNow = null }
+      if (heldNow && !heldNow.some((p) => p.id === a.profileId)) this.failWith('its account is no longer on this computer, so nothing was made or signed in there. Start a tab on an account signed in there', true)
+      const made = await prepareAccountFolder(ctx, m, a.via, a.profileId, 'make', 'keep')
+      // Round 2 (R1): a folder there with another install's mark is never made over by a sign-in.
+      // Phase 5 round 3 (R3-1): what it says follows the one Adopt rule, from
+      // the machine's last read (no exec): Adopt only while every such folder
+      // there is for this computer's accounts.
+      if (!made.ok && made.refused === 'account-folder-elsewhere') {
+        let last: ReturnType<typeof machineAccounts> | null = null
+        try { last = machineAccounts(m.did, await a.via.profiles()) } catch { last = null }
+        const named = !!last && last.readAt !== null && (last.elsewhere ?? []).includes(a.profileId)
+        // Round 4 (R4-2), round 5 (R5-1): each of these notes names its own
+        // steps only, so none gets the generic "Press Check ... Sign in on
+        // this machine again" after it. After Adopt the next step is Sign in
+        // again, with no Check: the Adopt dialog reads the machine again.
+        if (named && last?.mayBeEarlierInstall === true) this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. It may be this computer's own from an earlier install of the app: if so, choose Adopt on the machine's card on the Machines page, then choose Sign in on this machine again`, true)
+        // A sign-in from here cannot help, so this one names no Sign in on this machine.
+        if (named) this.failWith(`the account's folder on ${m.host} is used by the app on another computer, and nothing of it was changed. Sign it in there from that computer, or start a tab on an account signed in there`, true)
+        this.failWith(`the account's folder on ${m.host} carries another install's mark, and nothing of it was changed. Press Check on the Machines page: if the machine's card then says it may be this computer's own from an earlier install, choose Adopt on the machine's card, then Sign in on this machine again; if it is the app's on another computer, sign it in there from that computer`, true)
+      }
+      if (!made.ok) this.failWith(`the account's folder could not be made on ${m.host}: ${made.why}`)
+      this.boundTo = 'folder'
+      return null
+    }
+    const accounts = await readMachineAccounts(ctx, m, a.via)
+    let profiles: readonly HostProfile[] | null
+    try { profiles = await a.via.profiles() } catch { profiles = null }
+    const bound = accountBinding(accounts, a.profileId, m, machineName(m), profiles, a.aliases)
+    if ('refused' in bound) return bound.refused
+    if (bound.via === 'own') {
+      if (!a.own) this.failWith('its account is the machine\'s own sign-in there, and no launch on that was made')
+      this.current = { plan: a.own.plan, spec: a.own.spec }
+    }
+    this.boundTo = bound.via
+    return null
+  }
+
+  /** The tab starts nothing for its account: its note, and the renderer's notice, say why. */
+  private refuseForAccount(a: RemoteTabAccount, refused: HostLaunchRefusal): never {
+    this.accountRefused = refused
+    this.o.log(`[remote-helper] ${this.o.appPtyId}: nothing started, because its account is ${refused.state} on ${this.o.machine.host}`)
+    try { a.notice?.({ kind: 'launch-refused', sessionId: this.o.appPtyId, refusal: refused }) } catch { /* the app's own */ }
+    this.why = refused.text
+    throw new FinalError(refused.text)
+  }
+
+  /** The holder list mode shows for `sid` that runs until it is ended and has
+   *  launched its program: a session kept for this tab, to attach to. */
+  private async keptFor(sid: string): Promise<HolderRecord | null> {
+    try {
+      const found = await this.leftover(sid)
+      return found && untilEnded(found) && found.child !== 'waiting' ? found : null
+    } catch {
+      return null
+    }
+  }
+
+  /** The account's own folder brought up to date before a launch on it
+   *  (`account refresh`): its links, and its settings copy made from the
+   *  host user's own settings this start read. A folder that went since the
+   *  read, or one that does not take the refresh, fails the start. */
+  private async refreshAccountFolder(a: RemoteTabAccount, files: readonly RemoteHostFile[]): Promise<void> {
+    const m = this.o.machine
+    let content: string | null
+    try {
+      content = a.via.settingsCopy(files).content
+    } catch (err) {
+      this.o.log(`[remote-helper] ${this.o.appPtyId}: the account's settings copy could not be made (${(err as Error).message}); it has none`)
+      content = null
+    }
+    const done = await prepareAccountFolder({ runner: this.o.runner, installId: this.o.installId, log: this.o.log }, m, a.via, a.profileId, 'refresh', content)
+    if (!done.ok) this.failWith(done.gone ? `its account's folder on ${m.host} is not there any more; sign it in there again from the Machines page` : done.why)
   }
 
   /** The session's own files into its folder on the host (the `files` exec).
@@ -672,12 +840,22 @@ export class RemoteDriver implements HelperPtyDriver {
 
   direct(): IPty {
     const m = this.o.machine
+    // 2.1.3-beta.20 section 3.1.7: a tab that started nothing for its account says only why, and its steps.
+    if (this.accountRefused) return new NoticePty(this.accountRefused.text, this.o.spec.cols, this.o.spec.rows)
     // A tab whose session the helper keeps never takes the usual path
     // (2.1.3-beta.19): its note names only the steps that reach it again.
-    const next = this.untilEnded
-      ? 'Press Check on the Machines page, then Restart; a session it keeps there is listed on that page, with End.'
-      : 'Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.'
-    return new NoticePty(`This tab could not start through the session helper on ${m.host}: ${this.why || 'it did not answer'}. ${next}`, this.o.spec.cols, this.o.spec.rows)
+    // A sign-in tab neither (2.1.3-beta.20 fix round, NIT-11): the usual
+    // path signs nothing in. Phase 5 rounds 4 and 5 (R4-2, R5-1): a why that
+    // names its own steps (every note on a folder with another install's
+    // mark) gets no others.
+    const next = this.why !== '' && this.why === this.whySteps
+      ? ''
+      : this.o.account?.signIn
+        ? 'Press Check on the Machines page, then choose Sign in on this machine again.'
+        : this.untilEnded
+          ? 'Press Check on the Machines page, then Restart; a session it keeps there is listed on that page, with End.'
+          : 'Press Check on the Machines page, or turn the remote sessions switch off in Settings for the usual SSH path.'
+    return new NoticePty(`This tab could not start through the session helper on ${m.host}: ${this.why || 'it did not answer'}.${next ? ` ${next}` : ''}`, this.o.spec.cols, this.o.spec.rows)
   }
 
   ending(sid: string, done: Promise<void>): void {
@@ -732,6 +910,8 @@ export class RemoteHelperPty implements IPty {
   readonly pid = 0
   readonly sid: string
   readonly machineDid: string
+  /** 2.1.3-beta.20 section 3: the tab's account (its profile id), when its config names one. */
+  readonly profileId: string | undefined
   private inner: HelperPty | undefined
   private readonly driver: RemoteDriver
   private readonly data = new Emitter<string>()
@@ -753,8 +933,12 @@ export class RemoteHelperPty implements IPty {
     this.machineDid = o.machine.did
     this.driver = new RemoteDriver(o)
     this.driver.onFirstAttach = () => this.running.fire()
-    const problem = checkLaunch(o.spec, 'unix')
-    if (problem) throw new Error(`the launch cannot go through the session helper: ${problem.why}`)
+    // Both launches a tab on an account may run are checked before anything starts.
+    for (const spec of [o.spec, ...(o.account?.own ? [o.account.own.spec] : [])]) {
+      const problem = checkLaunch(spec, 'unix')
+      if (problem) throw new Error(`the launch cannot go through the session helper: ${problem.why}`)
+    }
+    this.profileId = o.account?.profileId
     this.endedP = new Promise<void>((r) => { this.resolveEnded = r })
     const prepared = this.driver.prepare(this.sid, o.appPtyId, () => this.early.killed && !this.driver.endAsked)
     this.preparing = prepared.then((held) => held, (err: unknown) => (err instanceof Error ? err : new Error(String(err))))
@@ -783,7 +967,8 @@ export class RemoteHelperPty implements IPty {
 
   private make(adopt: HolderRecord | undefined): void {
     // Its provider (the launch plan's) decides a queued lone Enter's wait (2.1.3-beta.19 section 6.2).
-    const inner = new HelperPty({ sid: this.sid, label: this.o.appPtyId, spec: this.o.spec, driver: this.driver, redraw: 'nudge', ...(adopt ? { adopt } : {}), ...(this.o.plan ? { provider: this.o.plan.provider } : {}) })
+    // The launch its start chose (2.1.3-beta.20 section 3.1.7: on its account's folder, or on the machine's own sign-in).
+    const inner = new HelperPty({ sid: this.sid, label: this.o.appPtyId, spec: this.driver.spec, driver: this.driver, redraw: 'nudge', ...(adopt ? { adopt } : {}), ...(this.o.plan ? { provider: this.o.plan.provider } : {}) })
     this.inner = inner
     inner.onData((d) => this.data.fire(d))
     inner.onExit((e) => {

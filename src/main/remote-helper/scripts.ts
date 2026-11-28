@@ -44,7 +44,25 @@
  * gone (`sweep`). From 2.1.3-beta.19 (section 6.3) the list of kept sessions
  * the app takes at start-up and when the Machines page opens (`sessions`)
  * removes them too, so a folder a quit leaves goes at the next start.
- * Nothing else is written outside `~/.aicc`.
+ *
+ * From 2.1.3-beta.20 (section 3, Sign in on this machine) each account
+ * signed in on the machine has a folder of its own,
+ * `~/.aicc/accounts/<profile id>/` (0700, beside the device folders: an
+ * account's sign-in is the machine user's, not one install's), which is the
+ * CLI's config folder for that account: its sign-in files are its own, and
+ * the provider's shared folders and files are links into the CLI's own
+ * folder in the home folder (`~/.claude`), never anywhere else. A marker
+ * (`.aicc-account`, `aicc-account 1 <profile id> <install id>`) says which
+ * install of the app made it; no script reads or removes a folder there
+ * without this install's, and another computer's is left as it is
+ * (2.1.3-beta.20 fix round, MAJOR-1). `account` makes or
+ * refreshes one (its links, and its settings copy from standard input),
+ * `accounts` reads every sign-in there and the machine's own through the
+ * helper's field mode (only the fields on its list), and `signout` runs the
+ * CLI's own sign-out in one, then removes that folder only. Besides
+ * `~/.aicc`, the only writes are the shared folders `account` makes in
+ * `~/.claude` when one is missing (as the CLI would make it), and what the
+ * CLI's own sign-out changes.
  */
 import { APP_PTY_ID_RE, HELPER_FOLDER_RE, NONCE_RE, SHA256_RE, SID_RE } from '../session-helper/protocol'
 
@@ -265,6 +283,67 @@ export const FIELD_VALUE_MAX = 1024
  *  eight files. */
 export const FILES_LAYOUT_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}:(0|[1-9][0-9]{0,8})(,[A-Za-z0-9][A-Za-z0-9._-]{0,63}:(0|[1-9][0-9]{0,8})){0,7}$/
 
+// ── 2.1.3-beta.20 section 3: accounts signed in on the machine ────────────
+
+/** An account's folder name there: its profile id (Q4: never its email), the
+ *  app's own shape (shared/profile-id.ts), at most 128 characters. */
+export const ACCOUNT_PROFILE_RE = /^[a-z0-9][a-z0-9-]{0,127}$/
+/** One plain name in a folder: no `/`, not `.` or `..`, not starting with a
+ *  dot unless the provider's own file is (`.claude.json`). */
+export const PLAIN_NAME_RE = /^(?!\.\.?$)[A-Za-z0-9._-]{1,128}$/
+/** Plain names joined by commas, at most 16 (the folder's links). */
+export const PLAIN_NAMES_RE = /^(?!\.\.?(?:,|$))[A-Za-z0-9._-]{1,128}(?:,(?!\.\.?(?:,|$))[A-Za-z0-9._-]{1,128}){0,15}$/
+/** Field keys joined by commas, at most 8 (the helper's `--keys`). */
+export const FIELD_KEYS_RE = /^[A-Za-z0-9_-]{1,64}(?:\.[A-Za-z0-9_-]{1,64}){0,15}(?:,[A-Za-z0-9_-]{1,64}(?:\.[A-Za-z0-9_-]{1,64}){0,15}){0,7}$/
+/** The variable that names the CLI's config folder. */
+export const CONFIG_VAR_RE = /^[A-Z][A-Z0-9_]{0,63}$/
+/** The CLI's program name, and its words joined by commas (at most 8). */
+export const CLI_WORD_RE = /^[a-z][a-z0-9-]{0,63}$/
+export const CLI_WORDS_RE = /^[a-z][a-z0-9-]{0,63}(?:,[a-z][a-z0-9-]{0,63}){0,7}$/
+/** `signout`'s profile ids: `-` (none), or 1 to 64 account folder names
+ *  joined by commas (Remove names each it signs out). */
+export const ACCOUNT_IDS_RE = /^(-|[a-z0-9][a-z0-9-]{0,127}(?:,[a-z0-9][a-z0-9-]{0,127}){0,63})$/
+/** `account`'s settings copy: `keep` (left as it is: a sign-in), `0` (none:
+ *  removed) or its size in bytes (at most 7 digits; the copy comes from a
+ *  host read of at most HOST_READ_MAX bytes). */
+export const ACCOUNT_SETTINGS_RE = /^(keep|0|[1-9][0-9]{0,6})$/
+/** The marker line an account folder holds: the profile id and the install
+ *  that made it (2.1.3-beta.20 fix round, MAJOR-1: two computers of one user
+ *  may sign in on the same host login; each touches only its own folders). */
+export const accountMarker = (profileId: string, installId: string): string => `aicc-account 1 ${profileId} ${installId}`
+
+/** `am <folder> <profile id>`: the folder is a real folder of the user's,
+ *  mode 0700, holding this install's marker for that profile id (a regular
+ *  file, not a link; `I` is this install's id). `ao <folder> <profile id>`:
+ *  it holds the app's marker for that profile id, by any install: with `am`
+ *  false, the folder is another computer's (or this computer's from an
+ *  earlier install whose id was lost), left as it is unless the user adopts
+ *  it (`account adopt`). `aw <folder> <profile id>`: it holds the marker of
+ *  the 2.1.3-beta.20 builds before the install id was in it (`aicc-account 1
+ *  <profile id>`); a folder so marked whose profile id the app names (one of
+ *  this computer's accounts) is taken as this computer's, and `account`
+ *  rewrites its marker (round 2, R1). */
+const ACCOUNT_MARK = [
+  'am() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && [ "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" = "aicc-account 1 $2 $I" ]; }',
+  'ao() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && case "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" in "aicc-account 1 $2 "*) return 0;; esac; return 1; }',
+  'aw() { pv "$1" && [ -f "$1/.aicc-account" ] && [ ! -L "$1/.aicc-account" ] && [ "$(head -c 200 "$1/.aicc-account" 2>/dev/null)" = "aicc-account 1 $2" ]; }',
+]
+
+/** `mw <profile id> <folder>`: writes this install's marker, by a staging file
+ *  moved over it; `account` only, so the read and the sign-out write no marker. */
+const MARK_WRITE = [
+  'mw() { echo "aicc-account 1 $1 $I" > "$2/.aicc-account.$N" && mv -f -- "$2/.aicc-account.$N" "$2/.aicc-account"; }',
+]
+
+/** Sign out's one delete (section 3.1.8): one account's folder, by the
+ *  accounts folder (`B`, set from the host's own home variable as
+ *  `$HOME/.aicc/accounts`) and the profile id, each required to be set and
+ *  not empty, once the id has its shape and the folder holds the app's
+ *  marker for it. A list of its own, as DELETE_DEVICE_FOLDER is. */
+const DELETE_ACCOUNT_FOLDER = [
+  'rm -rf -- "${B:?}/${P:?}" || no cannot-remove',
+]
+
 const join = (parts: readonly string[]): string => parts.join('; ')
 
 /** 2.1.3-beta.19 section 1.2: the probe's three reads of whether logind ends
@@ -397,6 +476,8 @@ const SPECS = {
       '[ -e "$A" ] || [ -L "$A" ] || { r gone yes; r end ok; exit 0; }',
       ...EXISTING,
       ...DELETE_DEVICE_FOLDER,
+      // 2.1.3-beta.20: the accounts folder too, when Remove's sign-outs left it empty (rmdir only).
+      'rmdir -- "$HOME/.aicc/accounts" 2>/dev/null',
       'rmdir -- "$HOME/.aicc" 2>/dev/null',
       'pv "/tmp/aicc-$u" && rmdir -- "/tmp/aicc-$u" 2>/dev/null',
       '[ -e "$A" ] && no still-there',
@@ -562,6 +643,147 @@ const SPECS = {
       '"$P" list --store "$A/store" </dev/null >/dev/null 2>&1',
       ...SWEEP_EARLIER_HELPERS,
       ...SWEEP_GONE_FOLDERS,
+    ]),
+  },
+  /** 2.1.3-beta.20 section 3.1.6: every sign-in on the machine in one exec,
+   *  through the launcher: the machine's own (`Y`, its identity file, and
+   *  `V`, its credentials file, both under the home folder), then each
+   *  account folder in `~/.aicc/accounts/` that holds the app's marker (`J`
+   *  and `C`, the file names in it). Each file is read by the helper's field
+   *  mode with its keys (`Z`, the identity's; `K`, the credentials'), never
+   *  by the script: after a line `AICC-FIELD <N> <own or profile id> <id or
+   *  cr>`, the helper's one JSON object, or nothing when the file is not
+   *  read. File names and keys are the provider package's; a profile id is
+   *  a folder name of the app's shape, read from the folder. A folder whose
+   *  marker names another install (the app on another computer signed in on
+   *  this host login) is not read: `AICC-FIELD <N> <profile id> elsewhere`.
+   *  One with the marker of the builds before the install id was in it is
+   *  read, after `AICC-FIELD <N> <profile id> old` (the app takes it as this
+   *  computer's when the id is one of its accounts). Writes nothing. */
+  accounts: {
+    values: [FOLDER, HASH, { name: 'own identity file', re: FIELD_FILE_RE }, { name: 'own credentials file', re: FIELD_FILE_RE }, { name: 'identity file name', re: PLAIN_NAME_RE }, { name: 'credentials file name', re: PLAIN_NAME_RE }, { name: 'identity keys', re: FIELD_KEYS_RE }, { name: 'credentials keys', re: FIELD_KEYS_RE }],
+    text: join([
+      'N=$1; D=$2; I=$3; F=$4; H=$5; Y=$6; V=$7; J=$8; C=$9; Z=${10}; K=${11}',
+      ...CHECKS,
+      ...LAUNCH,
+      ...ACCOUNT_MARK,
+      'case "$J" in */*|.|..|"") no bad-file-name;; esac',
+      'case "$C" in */*|.|..|"") no bad-file-name;; esac',
+      'fr() { echo "AICC-FIELD $N $1 $2"; "$P" field --file "$3" --keys "$4" </dev/null 2>/dev/null; }',
+      'fr own id "$Y" "$Z"',
+      'fr own cr "$V" "$K"',
+      'B=$HOME/.aicc/accounts',
+      'if [ -e "$B" ] || [ -L "$B" ]; then pv "$B" || no accounts-folder-not-private; for X in $(ls -A "$B"); do case "$X" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; [ ${#X} -le 128 ] || continue; am "$B/$X" "$X" || { aw "$B/$X" "$X" && echo "AICC-FIELD $N $X old"; } || { ao "$B/$X" "$X" && echo "AICC-FIELD $N $X elsewhere"; continue; }; fr "$X" id ".aicc/accounts/$X/$J" "$Z"; fr "$X" cr ".aicc/accounts/$X/$C" "$K"; done; fi',
+      'r end ok',
+    ]),
+  },
+  /** 2.1.3-beta.20 section 3.1.3: one account's folder, `~/.aicc/accounts/<P>/`
+   *  (0700, with the app's marker), made at its sign-in (`make`) or brought up
+   *  to date at a launch on it (`refresh`, which makes nothing: a folder that
+   *  is not there answers `gone`). Its links: each folder of `L` and each file
+   *  of `E` is a link to the same name in `~/<R>` (the CLI's own folder,
+   *  `~/.claude`), and only there; a missing folder of `L` is made there, as
+   *  the CLI makes it. A link that points elsewhere is replaced; an empty real
+   *  folder in a link's place goes, and anything else in its place is left
+   *  and reported (`own <name>`). Its settings copy `T`: `keep` leaves it,
+   *  `0` removes it, a size reads exactly that many bytes from standard input
+   *  into a staging file moved over it (a link there is replaced, never
+   *  written through). Its sign-in files are the CLI's own, never written.
+   *  The app names only its own accounts' profile ids here, so a folder with
+   *  the marker of the builds before the install id was in it is this
+   *  computer's: its marker is rewritten (`adopted old`). One with another
+   *  install's marker is refused (`account-folder-elsewhere`), but for
+   *  `adopt`, the user's own choice on the machine's card (round 2, R1: this
+   *  computer's folder from an earlier install whose id was lost): then only
+   *  its marker is rewritten (`adopted elsewhere`), and nothing else changes. */
+  account: {
+    values: [{ name: 'profile id', re: ACCOUNT_PROFILE_RE }, { name: 'mode', re: /^(make|refresh|adopt)$/ }, { name: 'home config folder', re: PLAIN_NAME_RE }, { name: 'linked folders', re: PLAIN_NAMES_RE }, { name: 'linked files', re: PLAIN_NAMES_RE }, { name: 'settings file name', re: PLAIN_NAME_RE }, { name: 'settings copy', re: ACCOUNT_SETTINGS_RE }],
+    text: join([
+      'N=$1; D=$2; I=$3; P=$4; M=$5; R=$6; L=$7; E=$8; T=$9; S=${10}',
+      ...CHECKS,
+      ...EXISTING,
+      ...ACCOUNT_MARK,
+      ...MARK_WRITE,
+      'umask 077',
+      'case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") no bad-profile;; esac',
+      'case "$M" in make|refresh|adopt) ;; *) no bad-mode;; esac',
+      'case "$S" in keep) ;; *[!0-9]*|"") no bad-size;; esac',
+      'case "$R" in */*|.|..|"") no bad-home-folder;; esac',
+      'case "$T" in */*|.*|"") no bad-settings-name;; esac',
+      'B=$HOME/.aicc/accounts; Q=$B/$P; G=$HOME/$R',
+      'if [ ! -e "$B" ] && [ ! -L "$B" ]; then [ "$M" = make ] || { r gone yes; r end ok; exit 0; }; mkdir "$B" || no cannot-make-accounts-folder; fi',
+      'pv "$B" || no accounts-folder-not-private',
+      'if [ -e "$Q" ] || [ -L "$Q" ]; then if am "$Q" "$P"; then :; elif aw "$Q" "$P"; then mw "$P" "$Q" || no cannot-write-marker; r adopted old; elif ao "$Q" "$P"; then [ "$M" = adopt ] || no account-folder-elsewhere; mw "$P" "$Q" || no cannot-write-marker; r adopted elsewhere; else no account-folder-not-the-apps; fi; else [ "$M" = make ] || { r gone yes; r end ok; exit 0; }; mkdir "$Q" || no cannot-make-account-folder; mw "$P" "$Q" || no cannot-write-marker; fi',
+      '[ "$M" = adopt ] && { r end ok; exit 0; }',
+      'if [ ! -e "$G" ] && [ ! -L "$G" ]; then mkdir "$G" || no cannot-make-shared-folder; fi',
+      '[ -d "$G" ] || no shared-folder-not-a-folder',
+      'set -- $(ls -ldnL "$G" 2>/dev/null); [ "$3" = "$u" ] || no shared-folder-not-yours',
+      'lk() { t=$G/$1; e=$Q/$1; if [ -L "$e" ]; then [ "$(readlink "$e")" = "$t" ] && return 0; rm -f -- "$e" || no cannot-relink; elif [ -d "$e" ]; then rmdir -- "$e" 2>/dev/null || { r own "$1"; return 0; }; elif [ -e "$e" ]; then r own "$1"; return 0; fi; ln -s "$t" "$e" || no cannot-link; }',
+      'o=$IFS; IFS=,; set -- $L; IFS=$o',
+      'for n in "$@"; do case "$n" in */*|.|..|"") no bad-link-name;; esac; [ -e "$G/$n" ] || [ -L "$G/$n" ] || mkdir "$G/$n" || no cannot-make-shared-folder; lk "$n"; done',
+      'IFS=,; set -- $E; IFS=$o',
+      'for n in "$@"; do case "$n" in */*|.|..|"") no bad-link-name;; esac; lk "$n"; done',
+      'Z=$Q/$T',
+      'if [ -d "$Z" ] && [ ! -L "$Z" ]; then no settings-is-a-folder; fi',
+      'if [ "$S" = keep ]; then :; elif [ "$S" -gt 0 ]; then W=$Q/.$T.$N; head -c "$S" > "$W" 2>/dev/null; k=$(wc -c < "$W"); k=$((k+0)); [ "$k" -eq "$S" ] || { rm -f -- "$W"; no short-upload; }; mv -f -- "$W" "$Z" || { rm -f -- "$W"; no cannot-place; }; else rm -f -- "$Z"; fi',
+      'r end ok',
+    ]),
+  },
+  /** 2.1.3-beta.20 section 3.1.8: Sign out. `folder`: the CLI's own sign-out
+   *  (`X` with the words `W`) runs with its config-folder variable (`E`) set
+   *  to the account's folder `~/.aicc/accounts/<P>/`, then that folder goes,
+   *  and only it (DELETE_ACCOUNT_FOLDER), once it is found a real folder of
+   *  the user's, 0700, holding the app's marker for `P`; it goes whatever the
+   *  sign-out answered, so the sign-in is not left on the machine (`out <P>
+   *  <exit status>` says whether the service was told; `removed <P>` that the
+   *  folder went). A folder that is not there answers `gone`; one made by
+   *  the app on another computer (its marker names another install) is
+   *  refused, `account-folder-elsewhere`. `list` (Remove): the same for each
+   *  profile id `P` names (commas between), each only when its folder holds
+   *  this install's marker (or the marker of the builds before the install id
+   *  was in it: the app names only its own accounts' ids), needing no read
+   *  first; the first that cannot be removed stops it; then each folder left
+   *  there is named: this install's that the list did not name (`left <id>`),
+   *  one with the old marker it did not name (`old <id>`), and another
+   *  computer's (`elsewhere <id>`), all left as they are. With the device folder already
+   *  gone, `list` signs nothing out and answers `device gone`, and Remove goes
+   *  on as before (2.1.3-beta.20 fix round, MAJOR-2). `own` (Q5, after the
+   *  app asked): the CLI's own sign-out of the machine's own sign-in, the
+   *  variable unset, and nothing removed (`logout <exit status>`). The CLI
+   *  runs through the user's login shell when that is of the sh family (its
+   *  PATH, as a session's launch has it), within 60 s where `timeout` is
+   *  there; its output is not read. */
+  signout: {
+    values: [{ name: 'kind', re: /^(folder|own|list)$/ }, { name: 'profile ids', re: ACCOUNT_IDS_RE }, { name: 'config variable', re: CONFIG_VAR_RE }, { name: 'program', re: CLI_WORD_RE }, { name: 'words', re: CLI_WORDS_RE }],
+    text: join([
+      'N=$1; D=$2; I=$3; O=$4; P=$5; E=$6; X=$7; W=$8',
+      ...CHECKS,
+      'if [ "$O" = list ] && [ ! -e "$A" ] && [ ! -L "$A" ]; then r device gone; r end ok; exit 0; fi',
+      ...EXISTING,
+      ...ACCOUNT_MARK,
+      'case "$O" in folder|own|list) ;; *) no bad-kind;; esac',
+      'case "$P" in *[!a-z0-9,-]*|"") no bad-profile;; esac',
+      'case "$E" in [!A-Z]*|*[!A-Z0-9_]*|"") no bad-variable;; esac',
+      'case "$X" in [!a-z]*|*[!a-z0-9-]*|"") no bad-program;; esac',
+      'case "$W" in *[!a-z0-9,-]*|"") no bad-words;; esac',
+      'S=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f7); [ -n "$S" ] || S=${SHELL:-/bin/sh}',
+      'T=; command -v timeout >/dev/null 2>&1 && T="timeout 60"',
+      // `$` alone, so `$0` and `$@` expand in the login shell: the program and its words, plain words all.
+      'v="$"',
+      'lo() { case "${S##*/}" in bash|zsh|sh|dash|ksh|mksh|ash|yash) $T "$S" -ilc "exec ${v}0 ${v}@" "$X" "$@" </dev/null >/dev/null 2>&1;; *) if command -v "$X" >/dev/null 2>&1; then $T "$X" "$@" </dev/null >/dev/null 2>&1; else return 127; fi;; esac; }',
+      'o=$IFS; IFS=,; set -- $W; IFS=$o',
+      'B=$HOME/.aicc/accounts',
+      'if [ "$O" = own ]; then unset "$E"; lo "$@"; r logout $?; r end ok; exit 0; fi',
+      'if [ ! -e "$B" ] && [ ! -L "$B" ]; then [ "$O" = folder ] && r gone yes; r end ok; exit 0; fi',
+      'pv "$B" || no accounts-folder-not-private',
+      'if [ "$O" = folder ]; then case "$P" in [!a-z0-9]*|*[!a-z0-9-]*) no bad-profile;; esac; [ -e "$B/$P" ] || [ -L "$B/$P" ] || { r gone yes; r end ok; exit 0; }; am "$B/$P" "$P" || aw "$B/$P" "$P" || { ao "$B/$P" "$P" && no account-folder-elsewhere; no account-folder-not-the-apps; }; fi',
+      'L=$(printf "%s" "$P" | tr "," " ")',
+      'for P in $L; do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; Q=$B/$P; am "$Q" "$P" || aw "$Q" "$P" || continue; export "$E=$Q"; lo "$@"; r out "$P" $?',
+      ...DELETE_ACCOUNT_FOLDER,
+      '[ -e "$Q" ] && no still-there',
+      'r removed "$P"; done',
+      'if [ "$O" = list ]; then for P in $(ls -A "$B"); do case "$P" in [!a-z0-9]*|*[!a-z0-9-]*|"") continue;; esac; if am "$B/$P" "$P"; then r left "$P"; elif aw "$B/$P" "$P"; then r old "$P"; elif ao "$B/$P" "$P"; then r elsewhere "$P"; fi; done; fi',
+      'r end ok',
     ]),
   },
 } satisfies Record<string, ScriptSpec>

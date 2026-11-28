@@ -39,7 +39,7 @@
 import * as nodePath from 'node:path'
 import * as nodeOs from 'node:os'
 import { UUID_RE, claudeProjectDirName, type ClaudeLaunchFolderOptions } from './logging/transcript-discovery'
-import { CMD_EXE_LINE_LIMIT, PS_LEGACY_ARGUMENT_PASSING, agentsRef, askPromptRef, startsAsExe, windowsCommandLineLimit } from './terminal-launch-line'
+import { CMD_EXE_LINE_LIMIT, PS_LEGACY_ARGUMENT_PASSING, PS_SET_LOCATION, agentsRef, askPromptRef, startsAsExe, windowsCommandLineLimit } from './terminal-launch-line'
 import { escapeForCwdQuote, quoteArgForShell } from '../shared/shell-quote'
 import { findOnWindowsPath, findOnWindowsPathAsync, folderFileTest, pathWalkDeadline, windowsEnvValue, withPathWalkDeadline, type PathWalkInFlight } from './windows-programs'
 import { logInfo } from './debug-logger'
@@ -1090,7 +1090,9 @@ export function buildClaudeLaunchCommand(opts: BuildClaudeLaunchCommandOptions):
   // program and its arguments as the length is counted, `run` unless given.
   // The session folder is named to Set-Location by -LiteralPath, which takes
   // the folder as written, `[ ]` included, in Windows PowerShell 5.1 and
-  // PowerShell 7, as the terminal tab's line does (pty-manager.ts).
+  // PowerShell 7, as the terminal tab's line does (pty-manager.ts). The
+  // cmdlet is named with its module (PS_SET_LOCATION), so the line makes no
+  // look through the module path for it.
   const windowsLine = (run: string, pre = '', measured = run): string => {
     if (agentsFromEnv && opts.agentsValueLength !== undefined) {
       // claudeLaunchProgram's answer, from this build's one look for node.
@@ -1101,7 +1103,7 @@ export function buildClaudeLaunchCommand(opts: BuildClaudeLaunchCommandOptions):
       const length = measured.length - agentsRef().length + opts.agentsValueLength + AGENTS_LAUNCHER_ROOM + again
       if (length > limit) throw new Error(agentsTooLongRefusal(length, limit, program))
     }
-    return `${lead}Set-Location -LiteralPath '${escapedCwd}'; ${pre}${run}; exit`
+    return `${lead}${PS_SET_LOCATION} -LiteralPath '${escapedCwd}'; ${pre}${run}; exit`
   }
   // The picker starts the Claude Code this line would start itself
   // (CLAUDE_BIN_ENV), as an exact resume and a Restart do: the installed one

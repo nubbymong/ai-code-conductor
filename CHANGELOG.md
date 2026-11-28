@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > `src/renderer/changelog.ts`. After editing that file, run `npm run changelog`
 > (CI enforces that this file is in sync via `npm run changelog:check`).
 
+## [2.1.3-beta.20] - 2026-11-27
+
+### Warnings
+- This beta series begins moving the app's background services, and over the next betas your sessions, onto one helper per machine. If you want a quiet build, stay on the stable release.
+- On Windows, choosing Save sessions at an update keeps the terminals the session helper holds running only if the new version opens within two minutes of the old one closing. The installer's pages count toward those two minutes, so finish the installer promptly.
+- On Windows, Snap takes its picture with the app's own capture and overlay by default. If a press cannot take a picture, the earlier Snap opens for that press; to use the earlier Snap every time, choose Settings, Custom Commands, Snap, Snap on Windows: Previous.
+- Signing a Claude Code account in on a Linux machine (a preview, off by default) keeps that sign-in on that machine, in a folder only your user there can read. Nothing is copied from this computer. Sign out on the Machines page ends it, and Remove signs the accounts out first.
+- To go back to 2.1.3-beta.19, download its installer from the GitHub releases page and run it over this version. If you signed accounts in on a Linux machine, Sign out each one on the Machines page first if you want it signed out: 2.1.3-beta.19 does not know about them.
+
+> Every code review now says which model and effort it ran on, and the session that asks for one can choose both. The Account usage page is now one grid that shows every account at once, with sorting, a provider filter and a note on which account has the most room. The app now renews a Claude Code sign-in that is still valid by itself, and asks you to sign in again only when you must. On Windows, with remote sessions through the session helper on (a preview, off by default), you can sign a Claude Code account in on a Linux machine from the Machines page, a Claude Code tab there starts on its config's account, and Switch Account works on it.
+
+### Added
+- A Claude Code session can now ask for a Codex review, and a Codex session for a Claude review, on a model and an effort it chooses. It picks from the models and levels that reviewer offers; any other choice is refused with the list, and nothing runs. Left unset, a review runs as before.
+- Every review now ends with a line that names the model and the effort it ran on, and where each came from: the asking session, the default, or the app's environment. Where nothing confirms a value, the line says it was requested, not confirmed. A Codex review with no model chosen says it ran on the reviewer account's default model, not named. While CLAUDE_CODE_EFFORT_LEVEL is set in the app's environment, a Claude review refuses a chosen effort and says why.
+- The Account usage page is now one grid of cards, as many columns as fit, and every card appears at once with its last reading while its fresh one is on its way. Each bar shows what is left. Sort by 5h left, Weekly left or Name, and with Claude Code and Codex both on, show All or one of them; the page remembers both. Cards fall into Most room, Some room and Not usable now, the line above them names the account with the most room, and a Claude Code account's plan shows beside its name.
+- On Windows, each Linux machine's card on the Machines page (remote sessions preview, off by default) now has How accounts sign in here, which offers Sign in on this machine, and Accounts here, which lists your Claude Code accounts with Sign in on that machine and Sign out. Sign in opens a tab on the machine that runs Claude Code's own sign-in, and the sign-in stays there, in a folder of its own for that account. Check reads who is signed in. If the machine was already signed in as one of your accounts, the app uses that sign-in, and Sign out asks first, naming it as the machine's own.
+- With the remote sessions preview on (off by default), an account's card on the Account usage page now has On machines lines: this computer, then each Linux machine you added, saying signed in, signed in as another account (never used), not signed in, or not read yet, with Sign in on that machine where it helps.
+- A Claude Code tab through the session helper now starts on its saved config's account on that machine, not on whatever the machine happened to be signed in as. If that account is not signed in there, nothing starts and a notice offers three ways on: Sign in on the machine, use another account that is signed in there, or Cancel. A config with no account still starts on the machine's own sign-in.
+- Switch Account now works on a Claude Code tab through the session helper. Its list marks each account's sign-in on that machine; an account that is not signed in there opens the same notice. The conversation carries on, because every account's folder there shares its conversations. A tab the helper keeps until you end it is ended first and started again on the new account. Today's plain SSH tabs and terminal-only tabs still refuse it.
+
+### Changed
+- On the Account usage page, a card now says In use, Refreshing, Out of 5h until a time, Parked, or Sign in again. Each card's menu has Read usage again (it was Retry) and, for a Claude Code account, Sign in again now.
+- The tab you get from Sign in again no longer says Setting up a new account. It tells you to run claude there, since a sign-in that is still valid renews by itself, and to choose /login as the same account only if you are asked.
+- Remove on a Linux machine's card now lists the accounts signed in there, signs them out first, and then removes the helper. If the machine does not answer, it names the accounts left and where to end each, and offers Remove anyway. Sign out removes only that account's folder. Sign out is not offered while a tab runs on that account there; close the tab first.
+- If a machine has an account folder that may be this computer's own from an earlier install of the app, the machine's card, the account's card and the notice say so and offer Adopt. It asks first and changes only the folder's mark: nothing is signed in, signed out or removed. A folder the app on another of your computers made is named as used by the app on another computer and left alone.
+
+### Fixed
+- A Claude Code account that is still signed in no longer asks you to sign in again. The app now renews its sign-in itself, through the same address Claude Code uses, and shows Refreshing meanwhile. The primary account is renewed by asking Claude Code itself (claude auth status), with no window. The card says Sign in again only when the sign-in has expired, has been revoked, is missing, is the same account as another, or is the wrong account, and it names which. The forced sign-in countdown now follows the new sign-in.
+- On Windows, a Claude Code tab opened at start no longer waits 20 seconds or more before Claude Code starts on a computer with many Windows PowerShell modules installed and no list of them yet (Windows PowerShell writes that list only from a session that runs for a while). The app's PowerShell commands now name each command together with its module, so Windows PowerShell no longer searches every module first: a tab's start-up line, the folder checks at start, the look for Claude Code through your PowerShell profile, the app's checks of Codex and the vision browser, and the set-up on a Windows SSH host. A tab opened at start also no longer waits for the check of the folder kept ready for the next new account.
+
 ## [2.1.3-beta.19] - 2026-11-27
 
 ### Warnings
@@ -2268,6 +2298,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tab attention indicators for waiting prompts
 - Context usage tracking via statusline API
 
+[2.1.3-beta.20]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.20
 [2.1.3-beta.19]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.19
 [2.1.3-beta.18]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.18
 [2.1.3-beta.17]: https://github.com/nubbymong/ai-code-conductor/releases/tag/v2.1.3-beta.17

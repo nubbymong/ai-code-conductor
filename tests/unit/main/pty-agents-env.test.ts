@@ -201,7 +201,7 @@ describe('a local Claude launch with agent templates', () => {
     expect(env[AGENTS_ENV]).toBeUndefined()
     expect(line).not.toContain('--agents')
     expect(line).not.toContain('PSNativeCommandArgumentPassing')
-    expect(line.startsWith(WIN ? 'Set-Location ' : 'cd ')).toBe(true)
+    expect(line.startsWith(WIN ? 'Microsoft.PowerShell.Management\\Set-Location ' : 'cd ')).toBe(true)
   })
 
   it('a set Claude Code would not take is refused before anything starts', () => {

@@ -12,7 +12,7 @@ import { isAccountActive, type AccountProfile } from '../../shared/account-types
 import { getAccountIdentity, getDefaultAccountEmail, getWatchedProfileId, isProfileInUseByLiveSession, sessionsOnProfile, detectedNewAccountEmail } from '../claude-account-identity'
 import { profileConsumerCount } from '../profile-consumers'
 import { appWindowSender } from './trusted-sender'
-import { fetchAllAccountsUsage, fetchAllAccountsUsageStreaming, fetchAccountUsage, knownUsageLabels, claudeAccountDataAllowed } from '../usage/account-usage'
+import { fetchAllAccountsUsage, fetchAllAccountsUsageStreaming, fetchAccountUsage, knownUsageLabels, lastKnownUsage, claudeAccountDataAllowed } from '../usage/account-usage'
 import { readAllProfileAuthInfo } from '../account-auth-info'
 import { logError, logWarn } from '../debug-logger'
 import { clearWebSession } from '../account-web/sign-in'
@@ -159,6 +159,19 @@ export function registerAccountProfilesHandlers(getWindow: () => BrowserWindow |
       return knownUsageLabels()
     } catch (err) {
       logError('[account-usage] knownLabels failed:', err instanceof Error ? err.message : String(err))
+      return []
+    }
+  })
+  // nubbymong/aicc_planning#445: each profile's last known figure, marked
+  // stale, for the Account usage page to draw every card at once. Read-only:
+  // takes no input (anything sent is ignored), reads cached figures only (no
+  // network, no credential read; none while Claude Code is off, which
+  // lastKnownUsage asks itself). A failure is no figures.
+  handle(IPC.ACCOUNT_USAGE_LAST_KNOWN, () => {
+    try {
+      return lastKnownUsage()
+    } catch (err) {
+      logError('[account-usage] lastKnown failed:', err instanceof Error ? err.message : String(err))
       return []
     }
   })

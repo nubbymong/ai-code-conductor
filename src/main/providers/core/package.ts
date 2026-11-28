@@ -392,6 +392,18 @@ export interface ReviewRunInput {
    *  project or user instructions, nothing the working folder holds. A
    *  package that cannot run one that way refuses it. Absent: a review. */
   purpose?: 'review' | 'analysis'
+  /** nubbymong/aicc_planning#446: the model the review runs on, one main
+   *  took from its allow-list for the reviewing provider when the review was
+   *  asked for (codex-review-mcp-tool.ts). The package checks it again before
+   *  it is one argv element (Codex `-m <id>`, Claude Code `--model <id>`).
+   *  Absent: the CLI's own default. A review on the session's machine
+   *  carries it to the helper unchanged. */
+  model?: string
+  /** nubbymong/aicc_planning#446: the reasoning effort, from main's
+   *  allow-list as `model` is (Codex `-c model_reasoning_effort=<level>`,
+   *  Claude Code `--effort <level>`). Absent: Codex's medium, Claude Code's
+   *  own default. */
+  effort?: string
 }
 
 export interface ReviewUsage {
@@ -404,10 +416,13 @@ export interface ReviewUsage {
  *  settled (a stop whose kill was still under way, or a run that had exited
  *  while what it left was still being ended) says when that has finished,
  *  whatever its outcome; it never rejects. The caller holding the account's
- *  lease lets go only then. */
+ *  lease lets go only then. `reportedModels` (nubbymong/aicc_planning#446):
+ *  the models the CLI's own result names as having answered (Claude Code:
+ *  its result's model usage), each a plain model name; absent when it names
+ *  none, and then the review's footer says the model is not confirmed. */
 export type ReviewRunResult =
-  | { ok: true; text: string; usage?: ReviewUsage; killSettled?: Promise<void> }
-  | { ok: false; code: 'timed-out' | 'cancelled' | 'failed' | 'no-output' | 'not-started'; message: string; usage?: ReviewUsage; killSettled?: Promise<void> }
+  | { ok: true; text: string; usage?: ReviewUsage; killSettled?: Promise<void>; reportedModels?: readonly string[] }
+  | { ok: false; code: 'timed-out' | 'cancelled' | 'failed' | 'no-output' | 'not-started'; message: string; usage?: ReviewUsage; killSettled?: Promise<void>; reportedModels?: readonly string[] }
 
 export interface ProviderReviewOperations {
   run(input: ReviewRunInput): Promise<ReviewRunResult>

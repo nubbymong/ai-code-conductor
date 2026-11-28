@@ -142,7 +142,7 @@ afterEach(() => {
 describe('Windows, no node.exe in a folder PATH names in full', () => {
   it('a fresh session starts Claude Code directly, by the line built when the resume list is not deployed', () => {
     const line = buildClaudeLaunchCommand(BASE)
-    expect(line).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
+    expect(line).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
     expect(line).toBe(buildClaudeLaunchCommand({ ...BASE, pickerScript: null }))
     expect(line).not.toMatch(/\bnode\b/)
     expect(launchStartsPicker(BASE)).toBe(false)
@@ -179,7 +179,7 @@ describe('Windows, no node.exe in a folder PATH names in full', () => {
   it('with agent templates in the environment, their value is written for Claude Code, which the line starts', () => {
     const opts = { ...BASE, agentsFromEnv: true, agentsValueLength: 40 }
     expect(claudeLaunchProgram(opts)).toBe(EXE)
-    expect(buildClaudeLaunchCommand(opts)).toBe(`${LEAD}Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --agents \${env:CCC_AGENTS} --model opus; exit`)
+    expect(buildClaudeLaunchCommand(opts)).toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --agents \${env:CCC_AGENTS} --model opus; exit`)
   })
 
   it('through npm\'s claude.cmd in a network folder it is refused with the reason, as any direct start there', () => {
@@ -188,7 +188,7 @@ describe('Windows, no node.exe in a folder PATH names in full', () => {
     // With node, the picker starts there as before (node can; the picker refuses its own launch).
     nodeExe(NODE)
     later(REUSE_MS)
-    expect(buildClaudeLaunchCommand(share)).toBe(`Set-Location -LiteralPath '\\\\srv\\share\\proj'; $env:CCC_CLAUDE_BIN = '${CMD}'; ${RUN_NODE} '${PICKER}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(share)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath '\\\\srv\\share\\proj'; $env:CCC_CLAUDE_BIN = '${CMD}'; ${RUN_NODE} '${PICKER}' --model opus; exit`)
   })
 
   it('one launch gets one answer: a miss is kept under the same PATH, so node.exe arriving between its two questions changes nothing', () => {
@@ -199,20 +199,20 @@ describe('Windows, no node.exe in a folder PATH names in full', () => {
     nodeExe(NODE)
     later(5)
     // ...and the line still starts what the value was written for.
-    expect(buildClaudeLaunchCommand(opts)).toBe(`${LEAD}Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --agents \${env:CCC_AGENTS} --model opus; exit`)
+    expect(buildClaudeLaunchCommand(opts)).toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --agents \${env:CCC_AGENTS} --model opus; exit`)
     expect(lookups).toHaveLength(1)
   })
 
   // A fresh Node.js install adds a PATH folder this process does not read
   // until an explicit check (or a restart): that is the changed PATH below.
   it('a node.exe put into a folder PATH already names is used a minute after the miss; a PATH that reads differently (after Check again or a restart) is asked at once', () => {
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
     nodeExe(NODE)
     later(REUSE_MS - 1)
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
     expect(lookups).toHaveLength(1)
     later(1)
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
     expect(lookups).toHaveLength(2)
     // A miss under one PATH is not an answer for another.
     nodeExe(null)
@@ -229,7 +229,7 @@ describe('Windows, node.exe found: nothing changes', () => {
   beforeEach(() => nodeExe(NODE))
 
   it('the line starts the resume list by node, as before, and the log says nothing about it', () => {
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
     expect(launchStartsPicker(BASE)).toBe(true)
     expect(claudeLaunchProgram(BASE)).toBe('node')
     expect(vi.mocked(logInfo)).not.toHaveBeenCalled()
@@ -266,7 +266,7 @@ describe('Windows, node.exe found: nothing changes', () => {
       nodeExe(p)
       ;(mod as any)._resetPickerNodeFoundForTest()
       const line = buildClaudeLaunchCommand(BASE)
-      const head = `Set-Location -LiteralPath 'C:\\work'; ${NAMED}& `
+      const head = `Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}& `
       expect(line.startsWith(head), line).toBe(true)
       const word = psSingleQuoted(line.slice(head.length))
       expect(word.value, line).toBe(p)
@@ -316,13 +316,13 @@ describe('Windows, node.exe found: nothing changes', () => {
         const line = buildClaudeLaunchCommand(opts)
         // npm's launcher has the session's lookup set again first (LAUNCHER_PROGRAM_LOOKUP).
         const lookup = claudeBin === CMD ? LAUNCHER_PROGRAM_LOOKUP : ''
-        expect(line).toBe(`Set-Location -LiteralPath 'C:\\work'; ${lookup}& '${claudeBin}' --model opus; exit`)
+        expect(line).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${lookup}& '${claudeBin}' --model opus; exit`)
         expect(line).not.toContain(p)
         expect(line).not.toMatch(/\bnode(\.exe)?\b/i)
         // With templates in the environment too: written for Claude Code, which the line starts.
         const withAgents = { ...opts, agentsFromEnv: true, agentsValueLength: 40 }
         expect(claudeLaunchProgram(withAgents)).toBe(claudeBin)
-        expect(buildClaudeLaunchCommand(withAgents)).toBe(`${LEAD}Set-Location -LiteralPath 'C:\\work'; ${lookup}& '${claudeBin}' --agents \${env:CCC_AGENTS} --model opus; exit`)
+        expect(buildClaudeLaunchCommand(withAgents)).toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${lookup}& '${claudeBin}' --agents \${env:CCC_AGENTS} --model opus; exit`)
       }
       const said = vi.mocked(logInfo).mock.calls.map((c) => String(c[0]))
       expect(said).toEqual(Array(4).fill(`[spawn-claude] ${(mod as any).CLAUDE_RESUME_LIST_SKIPPED_NODE_PATH}`))
@@ -332,19 +332,19 @@ describe('Windows, node.exe found: nothing changes', () => {
     // A found path without them starts the picker by that path, as before.
     nodeExe('C:\\nvm\\v1\\node.exe')
     ;(mod as any)._resetPickerNodeFoundForTest()
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; ${NAMED}& 'C:\\nvm\\v1\\node.exe' '${PICKER}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}& 'C:\\nvm\\v1\\node.exe' '${PICKER}' --model opus; exit`)
     expect((mod as any).pickerNodeFound()).toBe(true)
     // A backtick alone, PowerShell's wildcard escape, is started as written
     // by Windows PowerShell 5.1 and PowerShell 7 (measured), so it is not refused.
     nodeExe('C:\\nvm\\v`1\\node.exe')
     ;(mod as any)._resetPickerNodeFoundForTest()
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; ${NAMED}& 'C:\\nvm\\v\`1\\node.exe' '${PICKER}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}& 'C:\\nvm\\v\`1\\node.exe' '${PICKER}' --model opus; exit`)
   })
 
   it('with agent templates in the environment: written for node, which the line starts, as before', () => {
     const opts = { ...BASE, agentsFromEnv: true, agentsValueLength: 40 }
     expect(claudeLaunchProgram(opts)).toBe('node')
-    expect(buildClaudeLaunchCommand(opts)).toBe(`${LEAD}Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --agents \${env:CCC_AGENTS} --model opus; exit`)
+    expect(buildClaudeLaunchCommand(opts)).toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --agents \${env:CCC_AGENTS} --model opus; exit`)
   })
 
   it('one launch gets one answer: a find is kept under the same PATH, so node.exe going between its two questions changes nothing; another PATH is asked again', () => {
@@ -354,7 +354,7 @@ describe('Windows, node.exe found: nothing changes', () => {
     // starts what the templates' value was written for.
     nodeExe(null)
     later(5)
-    expect(buildClaudeLaunchCommand(opts)).toBe(`${LEAD}Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --agents \${env:CCC_AGENTS} --model opus; exit`)
+    expect(buildClaudeLaunchCommand(opts)).toBe(`${LEAD}Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --agents \${env:CCC_AGENTS} --model opus; exit`)
     expect(lookups).toHaveLength(1)
     vi.stubEnv('PATH', PATH_B)
     expect(claudeLaunchProgram(opts)).toBe(EXE)
@@ -363,13 +363,13 @@ describe('Windows, node.exe found: nothing changes', () => {
 
   // Mutation to prove this can fail: keep a find for as long as PATH reads the same.
   it('a Node.js removed while the app runs is no longer started a minute after it was found', () => {
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
     nodeExe(null)
     later(REUSE_MS - 1)
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
     expect(lookups).toHaveLength(1)
     later(1)
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
     expect(lookups).toHaveLength(2)
     expect(vi.mocked(logInfo)).toHaveBeenCalledWith(`[spawn-claude] ${SKIPPED}`)
   })
@@ -387,12 +387,12 @@ describe('Windows: the CLI check looks for node.exe off the event loop, and a la
     // in a folder for every look (a share that is down then holds a thread
     // for each).
     expect(asyncLookupTests, 'the look asks through the one-test-a-folder file test').toEqual([folderTest])
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; ${NAMED}${RUN_NODE} '${PICKER}' --model opus; exit`)
     // The next check, 30 s later, finds none: so does the next launch.
     nodeExe(null)
     later(30_000)
     await warm()
-    expect(buildClaudeLaunchCommand(BASE)).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand(BASE)).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
     expect(lookups).toEqual([])
     expect(vi.mocked(logInfo)).toHaveBeenCalledWith(`[spawn-claude] ${SKIPPED}`)
   })
@@ -462,9 +462,9 @@ describe('Windows: the CLI check looks for node.exe off the event loop, and a la
 describe('no question about node when the line would not start the resume list', () => {
   it('an exact resume, a launch that asks for no list, and a list that is not deployed walk no PATH', () => {
     const uuid = '123e4567-e89b-12d3-a456-426614174000'
-    expect(buildClaudeLaunchCommand({ ...BASE, resumeUuid: uuid })).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --resume ${uuid} --model opus; exit`)
-    expect(buildClaudeLaunchCommand({ ...BASE, useResumePicker: false })).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
-    expect(buildClaudeLaunchCommand({ ...BASE, pickerScript: null })).toBe(`Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, resumeUuid: uuid })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --resume ${uuid} --model opus; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, useResumePicker: false })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
+    expect(buildClaudeLaunchCommand({ ...BASE, pickerScript: null })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; & '${EXE}' --model opus; exit`)
     expect(lookups).toEqual([])
     expect(vi.mocked(logInfo)).not.toHaveBeenCalled()
   })
@@ -545,7 +545,7 @@ describe('the picker starts the Claude Code the line would start, a pinned one i
     nodeExe(NODE)
     expect((mod as any).CLAUDE_BIN_ENV).toBe('CCC_CLAUDE_BIN')
     expect(buildClaudeLaunchCommand({ ...BASE, claudeBin: PIN }))
-      .toBe(`Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = 'C:\\res\\it''s\\legacy-versions\\2.0.0\\node_modules\\.bin\\claude.cmd'; ${RUN_NODE} '${PICKER}' --model opus; exit`)
+      .toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = 'C:\\res\\it''s\\legacy-versions\\2.0.0\\node_modules\\.bin\\claude.cmd'; ${RUN_NODE} '${PICKER}' --model opus; exit`)
   })
 
   it('Windows: a line that starts Claude Code itself names nothing for a picker', () => {

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ProviderId, CodexOptions, TerminalOptions, SshRuntime } from '../../shared/types'
 import type { IdentityColorKey } from '../../shared/identity-colors'
+import type { UsageSignInProblem } from '../../shared/usage-types'
 import { sshAuthGiveUpMemory } from './sshAuthGiveUp'
 import { forgetSwitchOrigin } from '../utils/switchOrigin'
 
@@ -189,6 +190,15 @@ export interface Session {
   /** True only for an in-progress add-account login shell; drives the /login
    *  guidance banner. Cleared once the account is detected. */
   needsLogin?: boolean
+  /** Set beside needsLogin by a re-auth of an EXISTING account
+   *  (useReauthAccount), so the banner speaks of signing that account in
+   *  again rather than setting up a new one (signInBanner.ts). Ephemeral,
+   *  like needsLogin: not persisted. */
+  signInAgain?: boolean
+  /** With signInAgain: the reason the Account usage card gave (a duplicate or
+   *  wrong-account profile), so the banner names the account to choose.
+   *  Ephemeral, like needsLogin. */
+  signInProblem?: UsageSignInProblem
   /** #242 tier 5: true once this SSH session's flow state has reached
    *  `claude-running` at least once. Set by TerminalView's flow-state
    *  subscription, read at the NEXT spawn to compute SSHOptions.reconnect
@@ -223,6 +233,17 @@ export interface Session {
    *  and the restore's tmux probe leaves it out. */
   remoteVia?: 'helper'
   remoteDid?: string
+  /** 2.1.3-beta.20 section 5: a sign-in tab (utils/hostSignIn.ts): the CLI's
+   *  own sign-in for `profileId` on the machine its SSH config reaches,
+   *  through the session helper (the spawn's remoteAccountSignIn). Always
+   *  transient and shell-only, so it is never saved, switched or resumed. */
+  remoteAccountSignIn?: true
+  /** 2.1.3-beta.20 section 5: a Switch Account on a helper tab carries the
+   *  conversation into the next start (its spawn's SSH `reconnect`, so the
+   *  CLI continues it on the new account; projects is shared there). One
+   *  start only: TerminalView consumes it at the spawn, as askPrompt. Never
+   *  saved. */
+  carryConversation?: true
   /** SSH tmux enhancement (item 10): the Claude account the REMOTE session is
    *  signed in as (oauthAccount.emailAddress from the remote ~/.claude.json),
    *  read off the nonce'd setup sentinel. DESCRIPTOR ONLY -- never a

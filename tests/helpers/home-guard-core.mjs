@@ -902,7 +902,9 @@ export function createHomeChecker(opts) {
   const cdHit = (line, base) => {
     const words = shellWords(line)
     for (let i = 0; i < words.length; i++) {
-      const m = /^(cd|chdir|pushd|set-location|sl|push-location)([\\/.].*)?$/i.exec(words[i])
+      // Set-Location and Push-Location also named with their module, as the
+      // app's own Windows launch line names Set-Location (PS_SET_LOCATION).
+      const m = /^(cd|chdir|pushd|(?:microsoft\.powershell\.management\\)?(?:set-location|push-location)|sl)([\\/.].*)?$/i.exec(words[i])
       if (!m) continue
       /** @type {string[]} */ const rest = m[2] ? [m[2], ...words.slice(i + 1)] : words.slice(i + 1)
       let j = 0

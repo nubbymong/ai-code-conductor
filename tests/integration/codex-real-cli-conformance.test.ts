@@ -41,14 +41,18 @@
 //      wrong type for a key the CLI defines is refused there; an unknown
 //      top-level key is ignored, not refused, so the keys' spelling is
 //      pinned by the unit tests
-//      (tests/unit/providers/codex/analysis-features.test.ts).
+//      (tests/unit/providers/codex/analysis-features.test.ts). A review's
+//      settings load at every effort level a review may pass too
+//      (CODEX_REVIEW_EFFORTS; nubbymong/aicc_planning#446, ADR-031), each one
+//      once, on each CLI the job installs (the minimum among them).
 //
 // CCC_CODEX_CONFORMANCE_PROVE_RED=1 (a dispatch input) runs every check above
 // against a deliberately wrong expectation, so the job goes red once with
 // each check named (P4.8: each new check shown red, then green). For check 6
 // the input is wrong instead: the review run gets agents.enabled=notabool,
 // which the CLI must refuse, and the analysis run loses its --disable
-// sleep_tool (on by default), which must then read on.
+// sleep_tool (on by default), which must then read on; and the review's
+// effort levels get one no CLI defines, which it must refuse.
 import { describe, it, expect, beforeAll } from 'vitest'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -56,7 +60,7 @@ import path from 'node:path'
 import {
   createCodexPackage, discoverCodex, runCodexCli, cliCommandLine, codexCommandLine, codexShellEnv, codexCliEnv,
   parseCodexModelCatalogue, classifyCodexVersion, codexCompatibilityAllowsUse,
-  CODEX_MIN_SUPPORTED_VERSION, CODEX_PINNED_CLI_VERSION,
+  CODEX_MIN_SUPPORTED_VERSION, CODEX_PINNED_CLI_VERSION, codexReviewArgs, CODEX_REVIEW_EFFORTS,
 } from '../../src/main/providers/codex'
 import type { CodexCliOperation, CodexRunResult, CodexFileStat } from '../../src/main/providers/codex'
 import { withInstalledCodexModels, buildModelPickerRows, buildEffortRows, type ModelRegistry } from '../../src/shared/model-registry'
@@ -269,6 +273,24 @@ describe.skipIf(!LIVE)(`the real Codex CLI, no sign-in (${OS_TAG}, ${KIND || '?'
       }
     }
     note(`background runs' settings: ${problems.length === 0 ? `${BACKGROUND.join(', ')} each load; ${NEWLY_OFF.join(' and ')} read off` : problems.join('; ')}`)
+    expect(problems, PROVE_RED ? `${WRONG}\n${problems.join('\n')}` : problems.join('\n')).toEqual([])
+  }, CASE_MS)
+
+  // nubbymong/aicc_planning#446 (ADR-031): a caller may choose the review's
+  // effort, so each level a review may pass is loaded once, in the review's
+  // own settings, on this CLI (the check above loads only the default, medium).
+  it("a review's settings load at every effort level a review may pass: `codex features list` with them exits 0", async () => {
+    const problems: string[] = []
+    const levels = PROVE_RED ? [...CODEX_REVIEW_EFFORTS, 'ccc-no-such-level'] : [...CODEX_REVIEW_EFFORTS]
+    for (const level of levels) {
+      // A level the package refuses to build (the prove-red one) is put in by hand.
+      const built = codexReviewArgs({ effort: level })
+      const settings = settingsOf(Array.isArray(built) ? built : argvOf('review').map((a) => (a.startsWith('model_reasoning_effort=') ? `model_reasoning_effort=${level}` : a)))
+      if (!settings.includes(`model_reasoning_effort=${level}`)) { problems.push(`${level}: not in the review's settings`); continue }
+      const r = await run([...settings, 'features', 'list'])
+      if (r.exitCode !== 0) problems.push(`${level}: exited ${r.exitCode}: ${r.stderr.trim().slice(0, 400)}`)
+    }
+    note(`review effort levels: ${problems.length === 0 ? `${levels.join(', ')} each load` : problems.join('; ')}`)
     expect(problems, PROVE_RED ? `${WRONG}\n${problems.join('\n')}` : problems.join('\n')).toEqual([])
   }, CASE_MS)
 

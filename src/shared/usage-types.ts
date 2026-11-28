@@ -142,6 +142,55 @@ export function planLabelFor(planType: unknown): string | null {
 // uses it (aicc_planning#378), so the card waits for the session.
 export type AccountUsageStatus = 'ok' | 'needs-login' | 'error' | 'inactive' | 'off' | 'waiting'
 
+/** The `detail` of an `error` reading whose account is signed in and whose
+ *  fresh figure did not load because its sign-in is being renewed: the
+ *  Account usage card's Refreshing (nubbymong/aicc_planning#445). Main sets it
+ *  (usage/account-usage.ts, resolveUsageOutcome) and the page compares with
+ *  it exactly, so neither side can reword it alone. */
+export const USAGE_DETAIL_RENEWING = 'signed in, refreshing'
+
+// The `detail` of a `needs-login` reading (the card's "Sign in again"), one per
+// reason the user must sign in (nubbymong/aicc_planning#444). Main sets them
+// (resolveUsageOutcome) and the card names the reason from them, compared
+// exactly, so neither side can reword one alone.
+/** No sign-in is stored for the account. */
+export const USAGE_DETAIL_NOT_SIGNED_IN = 'not signed in'
+/** The service refused the stored sign-in as expired or revoked (invalid_grant),
+ *  or Claude Code said the primary account is no longer signed in. */
+export const USAGE_DETAIL_EXPIRED = 'session expired'
+/** Signed in to the same account as another active, signed-in profile. */
+export const USAGE_DETAIL_DUPLICATE = 'duplicate account'
+/** Signed in to a different account than the profile's label. */
+export const USAGE_DETAIL_WRONG_ACCOUNT = 'wrong account'
+
+/** Why a profile that holds a sign-in must still sign in again, carried on its
+ *  reading so the card can name it and the sign-in tab can say which account
+ *  to choose:
+ *  - `duplicate`: its home is signed in to `account`, as are the homes of the
+ *    other active, signed-in profiles `profileIds` (each renewal in one spends
+ *    the others' sign-in); cleared by signing this one in as its own account;
+ *  - `wrong-account`: its home is signed in as `signedInAs` but it is labelled
+ *    `labelledAs`; cleared by signing it in as `labelledAs`. */
+export type UsageSignInProblem =
+  | { kind: 'duplicate'; account: string; profileIds: string[] }
+  | { kind: 'wrong-account'; signedInAs: string; labelledAs: string }
+
+/** A UsageSignInProblem of the right shape, or null (a malformed one from
+ *  anywhere is no problem rather than a wrong card). */
+export function usageSignInProblem(v: unknown): UsageSignInProblem | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (o.kind === 'duplicate' && typeof o.account === 'string' && o.account.length > 0
+    && Array.isArray(o.profileIds) && o.profileIds.length > 0 && o.profileIds.every((id) => typeof id === 'string')) {
+    return { kind: 'duplicate', account: o.account, profileIds: [...(o.profileIds as string[])] }
+  }
+  if (o.kind === 'wrong-account' && typeof o.signedInAs === 'string' && o.signedInAs.length > 0
+    && typeof o.labelledAs === 'string' && o.labelledAs.length > 0) {
+    return { kind: 'wrong-account', signedInAs: o.signedInAs, labelledAs: o.labelledAs }
+  }
+  return null
+}
+
 export interface AccountUsage {
   profileId: string
   email: string | null
@@ -154,6 +203,9 @@ export interface AccountUsage {
   fetchedAt: number
   /** short reason for a non-ok status (for the UI hint). */
   detail?: string
+  /** With `needs-login` and USAGE_DETAIL_DUPLICATE or
+   *  USAGE_DETAIL_WRONG_ACCOUNT: the accounts the card names. */
+  signInProblem?: UsageSignInProblem
   /** True when `status: 'ok'` figures are served from cache — a live refresh
    *  couldn't complete but the account is still signed in. With `inSession`,
    *  the figure is older than the page shows as current and was not updated

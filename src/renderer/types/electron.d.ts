@@ -184,6 +184,10 @@ export interface ElectronAPI {
     /** Usage track MP3: the labels Claude Code's accounts have reported, from
      *  cached figures only (no network, no credential read). */
     knownLabels: () => Promise<string[]>
+    /** nubbymong/aicc_planning#445: each profile's newest figure, marked
+     *  stale, for the Account usage page's first drawing. Cached figures only
+     *  (no network, no credential read). Optional: an older preload has none. */
+    lastKnown?: () => Promise<import('../../shared/usage-types').AccountUsage[]>
   }
   window: {
     minimize: () => void
@@ -222,6 +226,8 @@ export interface ElectronAPI {
       rows?: number
       /** 2.1.3-beta.19: the tab's session is kept by the session helper (its saved mark). */
       remoteVia?: 'helper'
+      /** 2.1.3-beta.20 section 3.1.4: a sign-in tab: the CLI's own sign-in for `profileId` on the SSH config's machine, through the session helper. */
+      remoteAccountSignIn?: true
       ssh?: {
         host: string
         port: number
@@ -829,11 +835,22 @@ export interface ElectronAPI {
       prepare: (configId: string) => Promise<import('../../shared/remote-machines').RemoteConsent>
       add: (token: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
       check: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
-      remove: (did: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      /** 2.1.3-beta.20 section 3.1.8: Remove signs out the accounts signed in there first; `forget` (a machine that does not answer) only forgets it. */
+      remove: (did: string, opts?: import('../../shared/remote-machines').RemoteRemoveOptions) => Promise<import('../../shared/remote-machines').RemoteActionResult>
       /** 2.1.3-beta.19 section 1.2: the sessions the helper keeps, End of one on a card, End of a tab's own. */
       sessions: () => Promise<import('../../shared/remote-machines').RemoteSessionsState>
       endSession: (did: string, sid: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
       endTab: (sessionId: string, did?: string) => Promise<import('../../shared/remote-machines').RemoteActionResult>
+      /** 2.1.3-beta.20 section 3 (Sign in on this machine): each machine's accounts as its last read found them (no exec). */
+      accounts: () => Promise<import('../../shared/host-accounts').HostAccountsState>
+      /** Sign out of one account on one machine (Q5: the machine's own sign-in only with confirmMachineOwn). */
+      accountSignOut: (req: import('../../shared/host-accounts').HostSignOutRequest) => Promise<import('../../shared/host-accounts').HostSignOutResult>
+      /** A machine's accounts after each read (Check, start-up, a sign-in tab's end, a launch, a sign-out). */
+      onAccountsChanged: (cb: (m: import('../../shared/host-accounts').HostMachineAccounts) => void) => () => void
+      /** A helper tab's account notice: it started nothing for its account, or a sign-in tab ended. */
+      onAccountNotice: (cb: (n: import('../../shared/host-accounts').HostAccountNotice) => void) => () => void
+      /** Round 2 (R1): Adopt, the user's own choice: folders that read as another install's, for this computer's accounts, made this computer's again. */
+      accountsAdopt: (req: import('../../shared/host-accounts').HostAdoptRequest) => Promise<import('../../shared/host-accounts').HostAdoptResult>
     }
   }
   cli: {

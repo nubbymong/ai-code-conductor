@@ -488,7 +488,10 @@ describe('the PR 3 user-facing sweep (P3.16)', () => {
     expect(readme).not.toMatch(/the supported Codex versions offer/)
     expect(stepText('logs')).toMatch(/a local Codex session's conversation \(from its Codex account's sessions folder\)/)
     expect(stepText('logs')).not.toMatch(/tool calls, and thinking/)
-    expect(stepText('multi-account')).toMatch(/every account of each assistant that is on, in a section per assistant when both are/)
+    // 2.1.3-beta.20 (aicc_planning#445, #444): one grid of every account, not a section per assistant, and a still-valid sign-in renews itself.
+    expect(stepText('multi-account')).toMatch(/shows every account at once as one grid of cards, each bar saying what is left/)
+    expect(stepText('multi-account')).not.toMatch(/in a section per assistant when both are/)
+    expect(stepText('multi-account')).toMatch(/still signed in \*\*renews itself\*\*/)
     expect(stepText('multi-account')).not.toMatch(/shows every Claude and Codex account/)
     expect(stepText('multi-account')).toMatch(/Settings, Accounts \(click an account's chip/)
     expect(stepText('multi-account')).not.toMatch(/->/)
@@ -1662,14 +1665,25 @@ describe('surfaces for the Codex review fix and the last 2.1.1-beta.3 text', () 
   it('the Feature Guide says what each reviewer is sent and that the Codex reviewer runs no commands', () => {
     const cr = body('code-review')
     expect(cr).toContain('The app sends the reviewer the change itself: the git diff of the uncommitted changes to tracked files, or of a range you name. For files you name, the Codex reviewer is sent their content, and the Claude reviewer reads them in the project. A change larger than 512 KB is refused, never cut.')
-    expect(cr).toContain("The Codex reviewer runs no commands and cannot read or change files: it reviews what it is sent, plus the project's AGENTS.md if there is one, which Codex loads by itself. It runs on the reviewer account's default Codex model. The Claude reviewer can also read other files in the project.")
+    expect(cr).toContain("The Codex reviewer runs no commands and cannot read or change files: it reviews what it is sent, plus the project's AGENTS.md if there is one, which Codex loads by itself. The Claude reviewer can also read other files in the project.")
     expect(cr).not.toMatch(/Codex reviewer (reads|runs git)/)
   })
 
   // 2.1.3-beta.8: a Codex review passes no model, so the card names none.
-  it("the Feature Guide says a Codex review runs on the reviewer account's default Codex model, and names no model", () => {
+  // nubbymong/aicc_planning#446: the asking session can choose the model and
+  // the effort; unset, the defaults below; every review names what it ran on.
+  it("the Feature Guide says what a review runs on: the asking session's choice from the reviewer's lists, else the defaults, and that every review names it; it names no model", () => {
     const cr = body('code-review')
-    expect(cr).toContain("It runs on the reviewer account's default Codex model.")
+    expect(cr).toContain('The session that asks for a review can choose the model and the effort it runs on, from the models and levels that reviewer offers')
+    expect(cr).toContain('Any other choice is refused with the list of what it can choose, and nothing runs.')
+    // Review round 1 (M1): a Codex review left unset names no model, as before.
+    expect(cr).toContain("Left unset, a Codex review runs on the reviewer account's default Codex model, as before, at medium effort.")
+    expect(cr).not.toMatch(/first model your installed Codex lists/)
+    expect(cr).toContain("A Claude review left unset runs on Claude Code's own default model and effort for the reviewer account, or on the ones ANTHROPIC_MODEL and CLAUDE_CODE_EFFORT_LEVEL set in the app's environment; while CLAUDE_CODE_EFFORT_LEVEL is set, a chosen effort is refused, because Claude Code would not use it.")
+    expect(cr).toContain("Every review ends with a line that names the model and the effort it ran on, and where each came from: the asking session's choice, the default, or the app's environment.")
+    // Review round 1 (m1, n3): what nothing confirms is said as requested.
+    expect(cr).toContain("Where nothing confirms a value, the line says it was requested, not confirmed: a Claude review's effort (Claude Code does not report it), a Claude review's model when Claude Code reports none, and a Codex review's effort when no model was chosen.")
+    expect(cr).toContain("A Codex review with no model chosen says its model is the account's default, not named. When Claude Code reports more than one model, the line lists them all.")
     expect(cr).not.toMatch(/gpt/i)
   })
 
@@ -2716,6 +2730,76 @@ describe('the 2.1.3-beta.15 sweep', () => {
     ]) expect(all).toContain(said)
     expect(entry.changes).toHaveLength(5)
     for (const text of notes()) {
+      expect(text, text.slice(0, 40)).not.toMatch(/—/)
+      expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
+    }
+  })
+})
+
+// 2.1.3-beta.20 final review, round 1.
+describe('the 2.1.3-beta.20 final review', () => {
+  const root = path.resolve(__dirname, '..', '..', '..')
+  const flat = (...p: string[]) => fs.readFileSync(path.join(root, ...p), 'utf8').replace(/\s+/g, ' ')
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+
+  // F-1: Adopt's result says the next step by where Adopt was chosen
+  // (adoptNextText): a Restart after a Switch Account notice would start the
+  // tab on its old account, so the Feature Guide says the same three steps.
+  it('after Adopt, the next step follows where it was chosen, as its result says (F-1)', () => {
+    const machines = body('machines')
+    expect(machines).toContain('After Adopt, the next step depends on where you chose it. From a refused start, Restart the tab. From a Switch Account notice, switch the tab to that account again, because a Restart starts it on its old account. From a card, restart a tab on that account.')
+    expect(machines).not.toContain('After Adopt, Restart the tab.')
+  })
+
+  // F-2: a sign-in is renewed by the Usage page, and by a helper tab's status
+  // line (at most once a minute), for an account nothing on THIS computer uses.
+  it('renewal names both of its triggers, for an account nothing on this computer is using (F-2)', () => {
+    const guide = flat('docs', 'USER_GUIDE.md')
+    expect(guide).toContain('The one exception is renewal: for a Claude Code account that nothing on this computer is using, the Usage page renews a sign-in that is still valid, at the address Claude Code itself uses (PRIVACY.md lists it). So does a Claude Code tab through the session helper (preview) when it reads that account\'s limits for its status line, at most once a minute.')
+    const known = body('known-issues')
+    expect(known).toContain('The one exception is renewal: for a Claude Code account that nothing on this computer is using, the Usage page renews a sign-in that is still valid, at the address Claude Code itself uses (see Multiple Claude accounts). So does a Claude Code tab through the session helper (preview) when it reads that account\'s limits for its status line, at most once a minute.')
+    for (const said of [guide, known]) expect(said).not.toContain('for a Claude Code account that nothing is using')
+    const privacy = flat('PRIVACY.md')
+    expect(privacy).toContain('| `platform.claude.com` | Renews a Claude Code sign-in that is still valid, at the address Claude Code itself uses, so the Usage page, and in the remote sessions preview the status line of a Claude Code tab through the session helper, can read the account\'s allowance without a terminal.')
+    expect(privacy).not.toContain('so the Usage page can read the account\'s allowance')
+  })
+})
+
+// 2.1.3-beta.20 Snap e2e round 4 (R-3): a picture Snapped or pasted into a
+// Codex session on a very busy Windows computer can reach Codex as text. The
+// Snap e2e's C2 measured it under graded load (about three CPUs of other work
+// at the paste); the owner ships beta.20 with this entry, and the clipboard
+// paste that does not depend on key timing is planned.
+describe('the 2.1.3-beta.20 Snap into Codex known issue (R-3)', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const entry = () => body('known-issues').split('\n\n').find((p) => p.startsWith('On Windows, when the computer is very busy, a picture you Snap into a Codex session'))
+
+  it('says what happens, when, and why, in plain words', () => {
+    const k = entry()
+    expect(k, 'the entry is in Known issues and workarounds').toBeDefined()
+    expect(k).toContain('or paste there with Alt+V from elsewhere in the app, can reach Codex as text naming the picture\'s file instead of as the picture itself ([Image #1]).')
+    expect(k).toContain('Codex on Windows tells a paste from typing only by how quickly the characters arrive (read in Codex 0.157.1)')
+    expect(k).toContain('The app then takes the path back and types its line naming the file instead, so Codex gets the file\'s name, not the picture.')
+  })
+
+  it('gives both workarounds, naming the key that reaches Codex, and says the fix is planned', () => {
+    const k = entry()!
+    expect(k).toContain('Workaround: delete that line if it is still at Codex\'s prompt, and Snap again once the computer is less busy.')
+    // Alt+V with the session's terminal focused goes to Codex itself (xterm
+    // sends it on; the app's paste chord leaves Alt out, terminalInput.ts
+    // isPasteChord), and Codex binds Alt+V to its own clipboard image paste.
+    // Ctrl+V is the app's text paste in a terminal (ADR-008), so it is not
+    // the key to name.
+    expect(k).toContain('click into the Codex session so it has the keyboard, and press Alt+V: Codex then takes the picture from the clipboard itself, which does not depend on timing.')
+    expect(k).not.toMatch(/Ctrl\+V/)
+    expect(k).toContain('A fix that pastes through the clipboard is planned.')
+    expect(k).not.toMatch(/beta\.21|2\.1\.3-beta/)
+  })
+
+  it('the Snap section points at it, and neither uses an em dash or says Codex tab', () => {
+    const snap = body('draw')
+    expect(snap).toContain('(on a very busy Windows computer it can reach Codex as text naming the file instead; see Known issues and workarounds)')
+    for (const text of [entry()!, snap]) {
       expect(text, text.slice(0, 40)).not.toMatch(/—/)
       expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
     }

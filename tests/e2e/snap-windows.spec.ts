@@ -117,8 +117,73 @@
  * overlay on screen 218 to 378 ms after the press, Enter to the file 32 to
  * 71 ms, the file to its path typed 13 to 63 ms (OVERLAY_MS bounds each), and
  * the stand-in started on the tab's terminal 11.2 s after the tab's Snap
- * button showed (PowerShell's cold start, then the launch line), within
- * TAB_MS: under three times that reading, not ten, and not raised.
+ * button showed, within TAB_MS: under three times that reading, not ten, and
+ * not raised. That time was Windows PowerShell's cold start, reaching the tab
+ * by two routes (diagnosis runs 46026344825, 46028075097 and 46040073797:
+ * main's log, and times written by each Windows PowerShell itself with no
+ * command). The first time Windows PowerShell 5.1 runs a cmdlet named bare,
+ * it looks through every module on its module path for it, and with no
+ * module analysis cache yet, as on the runner, that look took 21.6 to 27.4 s
+ * in 46040073797 (the start's calls took 8.4 s on a faster runner,
+ * 46026344825). The start's owner-only calls named New-Object bare, and the
+ * tab's launch line named Set-Location bare. Route one, the app's: the tab,
+ * started on no account, was held for the start's profile steps, which waited
+ * for the owner-only check of the home kept ready for the next new account.
+ * Route two, the tab's own: its Windows PowerShell began the launch line
+ * about 1.1 s after it was written, and the line's Set-Location then waited
+ * for that PowerShell's own look (each Windows PowerShell looks on its own:
+ * one started 2 s after another ended 2.3 to 2.6 s after it). In
+ * 46028075097 and 46040073797 the start's calls ran to their 30 s limit and
+ * were asked again, and the stand-in never started within TAB_MS (as in run
+ * 46023467484). Since then the ready home is checked after the steps when
+ * they make no account (account-profiles.ts startOwnerOnlyCredentialFolders),
+ * and the launch line and the owner-only script name each cmdlet with its
+ * module (terminal-launch-line.ts PS_SET_LOCATION, owner-only-folders.ts),
+ * which makes no look: in 46040073797 the tab's folder change took 36 to
+ * 43 ms, the start's calls 2.6 s inside Windows PowerShell (3.3 s as main
+ * saw them), and the stand-in started 1.7 to 3.0 s after the Snap button
+ * showed, where the bare names left it unstarted after 30 s. Each app here
+ * runs with a fresh, empty module analysis cache (PSModuleAnalysisCachePath,
+ * coldPowerShellEnv), so every run reads that cold start, whatever an earlier
+ * app on the runner left in the runner's own cache. Not raised, and not
+ * answered by the fix: the first app of a job is slower than the apps after
+ * it. It meets its own cold-disk start and, in most jobs, a burst of
+ * disk reads by a runner process outside the app as well (provjobd.exe,
+ * about one CPU and 3,000 to 13,000 read operations a second for 8 to 9 s,
+ * from 2 to 6 s after the first app's launch, C: 0 to 12% idle). Under the
+ * diagnosis's harder condition (thousands of generated modules as well), in
+ * 46049854244 the first app's owner-only calls sat at 3 to 9% CPU for about
+ * 11 s after their first cmdlet and took 13.6 s as main saw them, past the
+ * 5 s the tab waits for the scripts folders, so the tab took the direct
+ * claude.cmd line; its PowerShell began that line 7.4 s after it was
+ * written, its folder change took 4.4 s, and the stand-in started 17.6 s
+ * after the Snap button showed. Run 46046004682 (no times) did the same up
+ * to the line, then showed nothing after it within TAB_MS. Without the
+ * generated modules, in 46059519266, the first app's owner-only JSON step
+ * took 0.6 to 0.8 s before provjobd's burst began, and its folder change
+ * 2.1 s as the burst began, against 20 to 60 ms and 36 to 50 ms in the seven
+ * apps after it, which all passed D1 in 2.3 to 2.9 s, with or without
+ * 24,000 files written just before them. A forced disk burst and a forced
+ * cache purge were separated in one job in 46092372556 (diagnosis, 16 apps,
+ * alternating): a forced burst (one process at about one CPU, several
+ * thousand I/O operations a second for 9 s from 2 s after the launch, mostly
+ * writes, where provjobd's are reads) left D1 as it was on a warm file cache
+ * (the stand-in 2.0 to 2.6 s after the Snap button, against 1.9 to 2.3 s
+ * with no load), and so did the burst with two busy processes (1.7 to
+ * 3.4 s); the standby file cache purged before the launch made it 2.9 to
+ * 3.2 s. Both together gave the first app's outcome (the direct line, the
+ * stand-in 8.2 to 8.7 s after the Snap button showed, against the first
+ * app's 8.4 s), though not its timeline: the owner-only calls took 12.1 to
+ * 12.4 s, about 11 s of it before Windows PowerShell ran their first line,
+ * where the first app spent 4 to 5 s before it and 3.2 to 3.7 s to its first
+ * cmdlet. In 46094389002 provjobd ran no burst, and the first app was as
+ * slow (8.0 s), C: 0 to 4% idle through its own start; a cold cache, the
+ * burst and two busy processes together gave 7.9 to 8.2 s in 3 apps. A
+ * fourth, whose burst ended before its app had launched, reads as a cold
+ * cache, two busy processes and a system svchost load, and took 6.4 s. The
+ * slowest D1 read with the fix in and no generated modules is a first app
+ * with no diag lines, the merge candidate 46094264723: the stand-in about
+ * 11.8 s after the Snap button, 18 s inside TAB_MS.
  * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
  * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
  * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms
@@ -244,6 +309,16 @@ function installStandInClaude(dir: string): string {
   return dir
 }
 const standInDir = (dataDir: string) => path.join(dataDir, 'stand-in-claude')
+/** A fresh, empty module analysis cache for one app and every Windows
+ *  PowerShell it starts (Windows PowerShell 5.1 reads and writes the file
+ *  PSModuleAnalysisCachePath names): each app meets Windows PowerShell's cold
+ *  start, as on a new user profile, whatever an earlier app on the runner
+ *  left in the runner's own cache (see TIMEOUTS above). */
+function coldPowerShellEnv(dataDir: string): Record<string, string> {
+  const dir = path.join(dataDir, 'ps-module-analysis-cache')
+  fs.mkdirSync(dir, { recursive: true })
+  return { PSModuleAnalysisCachePath: path.join(dir, 'ModuleAnalysisCache') }
+}
 const typedText = (): string => {
   try { return fs.readFileSync(path.join(standInDir(ctx!.dataDir), 'typed.txt'), 'utf8') } catch { return '' }
 }
@@ -779,6 +854,7 @@ test.describe('Snap on Windows', () => {
       env: (dataDir) => ({
         PATH: pathWith(installStandInClaude(standInDir(dataDir))),
         CCC_E2E_SNAP_HELPER: HELPER,
+        ...coldPowerShellEnv(dataDir),
       }),
     })
     readings.launchMs = Math.round(performance.now() - started)
@@ -1264,6 +1340,7 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
         CODEX_HOME: (() => { const d = path.join(dataDir, 'codex-home'); fs.mkdirSync(d, { recursive: true }); return d })(),
         CCC_E2E_SNAP_HELPER: HELPER,
         ...DEAD_PROXY,
+        ...coldPowerShellEnv(dataDir),
       }),
     })
     readings.codexLaunchMs = Math.round(performance.now() - started)

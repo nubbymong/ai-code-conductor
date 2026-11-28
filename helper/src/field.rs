@@ -1,15 +1,27 @@
 //! The field mode (`aicc-helper field`, from 2.1.3-beta.19): one string from
 //! a JSON file in the user's home folder, for the label of a helper tab (the
-//! account its CLI runs as, aicc_planning#434). Which file and which key are
-//! the provider package's (src/main/providers/), given on the command line:
-//! nothing here names one.
+//! account its CLI runs as, aicc_planning#434); from 2.1.3-beta.20 (section
+//! 3.1.2, Sign in on this machine), several keys of one file at once, as one
+//! JSON object of strings and integers: the account a sign-in names, its plan
+//! and its expiry. Which file and which keys are the provider package's
+//! (src/main/providers/), given on the command line, and every key must be on
+//! this file's list (`ALLOWED_KEYS`): the field mode reads the few fields that
+//! name a sign-in, never its secrets. A key with a part named `accessToken` or
+//! `refreshToken` (`SECRET_PARTS`, in any case) is refused by name first,
+//! whatever the list says.
 //!
 //! ```text
 //! aicc-helper field --file <path under home> --key <dotted key>
+//! aicc-helper field --file <path under home> --keys <dotted key>[,<dotted key>...]
 //! ```
 //!
-//! It prints the string at that key and one line end, or nothing at all, and
-//! exits 0 either way (2 on a command line it does not take, `main.rs`):
+//! With `--key` it prints the string at that key and one line end, or nothing
+//! at all. With `--keys` (1 to `MAX_KEYS` keys, each once) it prints one JSON
+//! object and one line end: each key found, in the order given, with its
+//! string, or its integer (digits only, at most `MAX_INTEGER`, 2^53 - 1, so
+//! the app reads it exactly); `{}` when the file holds none of them; nothing
+//! at all when the file is not read. It exits 0 either way, and 2 on a command
+//! line it does not take, a key off the list included (`main.rs`):
 //!
 //! - The path is relative to the home folder (`HOME`: an absolute path that
 //!   is not `/`), or absolute inside it; every part a plain name (no empty
@@ -28,8 +40,8 @@
 //!   (`oauthAccount.emailAddress`): 1 to `MAX_KEY_PARTS` parts, none empty,
 //!   `MAX_KEY_BYTES` at most, no control character. A member named twice on
 //!   the way gives nothing.
-//! - The value must be a string of 1 to `MAX_VALUE_BYTES` (1 KiB) of UTF-8
-//!   with no control character.
+//! - A string value must be 1 to `MAX_VALUE_BYTES` (1 KiB) of UTF-8 with no
+//!   control character.
 //!
 //! Nothing is written, run or sent, and the file is read once. On Windows the
 //! mode prints nothing: the machines it serves are macOS and Linux.
@@ -47,10 +59,61 @@ pub const MAX_VALUE_BYTES: usize = 1024;
 pub const MAX_KEY_PARTS: usize = 16;
 /// The longest key, in bytes.
 pub const MAX_KEY_BYTES: usize = 256;
+/// The most keys one `--keys` read takes.
+pub const MAX_KEYS: usize = 8;
+/// The largest integer printed: 2^53 - 1, the largest the app's JSON reader
+/// holds exactly.
+pub const MAX_INTEGER: u64 = 9_007_199_254_740_991;
+
+/// The keys the field mode reads (2.1.3-beta.20 section 3.1.2): for Claude
+/// Code, the account a sign-in names (`.claude.json`) and its plan, tier and
+/// expiry (`.credentials.json`). None of them is a secret; a key added here
+/// must not be one either (a test holds every one of them clear of
+/// `SECRET_PARTS`).
+pub const ALLOWED_KEYS: &[&str] = &[
+    "oauthAccount.emailAddress",
+    "claudeAiOauth.subscriptionType",
+    "claudeAiOauth.rateLimitTier",
+    "claudeAiOauth.expiresAt",
+];
+
+/// The names of a sign-in's secrets: a key with any part so named (in any
+/// case) is never read, whatever `ALLOWED_KEYS` says.
+pub const SECRET_PARTS: &[&str] = &["accessToken", "refreshToken"];
+
+/// True when the field mode reads `key`: it is on `ALLOWED_KEYS` and no part
+/// of it names a secret.
+pub fn key_allowed(key: &str) -> bool {
+    if key.split('.').any(|part| SECRET_PARTS.iter().any(|s| part.eq_ignore_ascii_case(s))) {
+        return false;
+    }
+    ALLOWED_KEYS.contains(&key)
+}
+
+/// Why `--keys` cannot be read as given, or None when it can: 1 to
+/// `MAX_KEYS` keys, each once, each one the field mode reads.
+pub fn keys_problem(keys: &[&str]) -> Option<&'static str> {
+    if keys.is_empty() || keys.iter().any(|k| k.is_empty()) {
+        return Some("field --keys needs one or more keys, separated by commas");
+    }
+    if keys.len() > MAX_KEYS {
+        return Some("field --keys takes at most 8 keys");
+    }
+    if keys.iter().enumerate().any(|(i, k)| keys[..i].contains(k)) {
+        return Some("field --keys names a key twice");
+    }
+    if !keys.iter().all(|k| key_allowed(k)) {
+        return Some("field reads only the keys on its list");
+    }
+    None
+}
 
 /// The field mode on `--file` and `--key`: what it prints, without the line
-/// end, or None for nothing.
+/// end, or None for nothing (a key it does not read included).
 pub fn run(file: &str, key: &str) -> Option<String> {
+    if !key_allowed(key) {
+        return None;
+    }
     #[cfg(unix)]
     {
         let home = std::env::var("HOME").ok()?;
@@ -60,6 +123,26 @@ pub fn run(file: &str, key: &str) -> Option<String> {
     #[cfg(not(unix))]
     {
         let _ = (file, key);
+        None
+    }
+}
+
+/// The field mode on `--file` and `--keys`: the JSON object it prints,
+/// without the line end, or None for nothing (keys it does not take
+/// included).
+pub fn run_keys(file: &str, keys: &[&str]) -> Option<String> {
+    if keys_problem(keys).is_some() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        let home = std::env::var("HOME").ok()?;
+        let path = path_under(&home, file)?;
+        read_fields(&path, keys, crate::store::euid()).map(|v| v.to_json())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (file, keys);
         None
     }
 }
@@ -85,10 +168,9 @@ fn plain_parts(s: &str) -> bool {
     !s.is_empty() && s.split('/').all(|p| !p.is_empty() && p != "." && p != ".." && !p.contains('\0'))
 }
 
-/// The string at `key` in `doc`, as the field mode prints it: None for a key
-/// that breaks its rules, a member missing or named twice on the way, or a
-/// value that is not a string of 1 to 1 KiB with no control character.
-pub fn value_at(doc: &Value, key: &str) -> Option<String> {
+/// The member at `key` in `doc`: None for a key that breaks its rules, or a
+/// member missing or named twice on the way.
+fn member_at<'a>(doc: &'a Value, key: &str) -> Option<&'a Value> {
     if key.is_empty() || key.len() > MAX_KEY_BYTES || key.chars().any(char::is_control) {
         return None;
     }
@@ -109,10 +191,39 @@ pub fn value_at(doc: &Value, key: &str) -> Option<String> {
         }
         at = v;
     }
-    match at {
-        Value::Str(s) if !s.is_empty() && s.len() <= MAX_VALUE_BYTES && !s.chars().any(char::is_control) => Some(s.clone()),
+    Some(at)
+}
+
+/// A string the field mode prints: 1 to 1 KiB of UTF-8 with no control character.
+fn printable(s: &str) -> bool {
+    !s.is_empty() && s.len() <= MAX_VALUE_BYTES && !s.chars().any(char::is_control)
+}
+
+/// The string at `key` in `doc`, as the field mode prints it: None for a key
+/// that breaks its rules, a member missing or named twice on the way, or a
+/// value that is not a string of 1 to 1 KiB with no control character.
+pub fn value_at(doc: &Value, key: &str) -> Option<String> {
+    match member_at(doc, key)? {
+        Value::Str(s) if printable(s) => Some(s.clone()),
         _ => None,
     }
+}
+
+/// The value at `key` in `doc` as `--keys` prints it: a string as `value_at`
+/// takes it, or an integer of 0 to `MAX_INTEGER` written with digits only (no
+/// sign, point or exponent); None for anything else.
+pub fn field_at(doc: &Value, key: &str) -> Option<Value> {
+    match member_at(doc, key)? {
+        Value::Str(s) if printable(s) => Some(Value::Str(s.clone())),
+        n @ Value::Num(_) => n.as_u64().filter(|v| *v <= MAX_INTEGER).map(Value::uint),
+        _ => None,
+    }
+}
+
+/// The object `--keys` prints for `doc`: each of `keys` found there, in the
+/// order given, with its value (`field_at`); an empty object when none is.
+pub fn object_of(doc: &Value, keys: &[&str]) -> Value {
+    Value::Obj(keys.iter().filter_map(|k| field_at(doc, k).map(|v| (k.to_string(), v))).collect())
 }
 
 /// The string at `key` in the JSON file at `path`, links followed, from a
@@ -121,6 +232,21 @@ pub fn value_at(doc: &Value, key: &str) -> Option<String> {
 /// another to stand in for another user's file.
 #[cfg(unix)]
 pub fn read_field(path: &Path, key: &str, me: u32) -> Option<String> {
+    value_at(&read_doc(path, me)?, key)
+}
+
+/// The object `--keys` prints for the JSON file at `path` (`object_of`), read
+/// as `read_field` reads it; None, so nothing printed, when the file is not
+/// read: not there, not a regular file of the user `me`, over the bound, or
+/// not JSON.
+#[cfg(unix)]
+pub fn read_fields(path: &Path, keys: &[&str], me: u32) -> Option<Value> {
+    Some(object_of(&read_doc(path, me)?, keys))
+}
+
+/// The JSON document at `path`, read as the module comment says.
+#[cfg(unix)]
+fn read_doc(path: &Path, me: u32) -> Option<Value> {
     use std::io::Read;
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     // By its name first, a link followed: anything but a regular file is
@@ -142,7 +268,7 @@ pub fn read_field(path: &Path, key: &str, me: u32) -> Option<String> {
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return None;
     }
-    value_at(&crate::json::parse(&bytes).ok()?, key)
+    crate::json::parse(&bytes).ok()
 }
 
 #[cfg(test)]
@@ -225,6 +351,77 @@ mod tests {
         assert_eq!(value_at(&doc("{\"k\":\"v\"}"), &"k".repeat(MAX_KEY_BYTES + 1)), None, "a key over 256 bytes");
     }
 
+    #[test]
+    fn the_list_reads_the_sign_in_fields_and_no_secret() {
+        assert_eq!(MAX_KEYS, 8);
+        assert_eq!(MAX_INTEGER, (1u64 << 53) - 1);
+        assert_eq!(SECRET_PARTS, &["accessToken", "refreshToken"]);
+        for key in ALLOWED_KEYS {
+            assert!(key_allowed(key), "{key} is on the list and not read");
+            for part in key.split('.') {
+                for secret in SECRET_PARTS {
+                    assert!(!part.eq_ignore_ascii_case(secret), "{key} names the secret {secret}");
+                }
+            }
+        }
+        for key in [
+            "claudeAiOauth.accessToken",
+            "claudeAiOauth.refreshToken",
+            "claudeAiOauth.ACCESSTOKEN",
+            "claudeAiOauth.refreshtoken",
+            "accessToken",
+            "refreshToken.expiresAt",
+            "oauthAccount.accessToken",
+            "oauthAccount.accountUuid",
+            "numStartups",
+            "claudeAiOauth.scopes",
+            "oauthAccount",
+            "",
+        ] {
+            assert!(!key_allowed(key), "{key:?} was read");
+        }
+    }
+
+    #[test]
+    fn keys_are_one_to_eight_each_once_each_on_the_list() {
+        let email = "oauthAccount.emailAddress";
+        let plan = "claudeAiOauth.subscriptionType";
+        assert_eq!(keys_problem(&[email]), None);
+        assert_eq!(keys_problem(&[plan, "claudeAiOauth.rateLimitTier", "claudeAiOauth.expiresAt"]), None);
+        assert!(keys_problem(&[]).is_some(), "no key");
+        assert!(keys_problem(&[email, ""]).is_some(), "an empty key");
+        assert!(keys_problem(&[email, email]).is_some(), "a key twice");
+        assert!(keys_problem(&[plan, "claudeAiOauth.accessToken"]).is_some(), "a secret beside a key on the list");
+        assert!(keys_problem(&[plan, "claudeAiOauth.refreshToken"]).is_some(), "a secret beside a key on the list");
+        assert!(keys_problem(&["oauthAccount.accountUuid"]).is_some(), "a key off the list");
+        assert!(keys_problem(&[email; 9]).is_some(), "nine keys");
+        // The runs refuse what the command line would: nothing is read.
+        assert_eq!(run(".claude.json", "claudeAiOauth.accessToken"), None);
+        assert_eq!(run_keys(".claude.json", &["claudeAiOauth.refreshToken"]), None);
+    }
+
+    #[test]
+    fn several_keys_give_one_object_of_strings_and_integers_in_the_order_asked() {
+        let doc = json::parse(
+            br#"{"claudeAiOauth":{"accessToken":"secret-a","refreshToken":"secret-r","expiresAt":1764000000000,"scopes":["user:inference"],"subscriptionType":"max","rateLimitTier":"default_claude_max_20x"}}"#,
+        )
+        .expect("JSON");
+        let keys = ["claudeAiOauth.expiresAt", "claudeAiOauth.subscriptionType", "claudeAiOauth.rateLimitTier", "oauthAccount.emailAddress"];
+        let out = object_of(&doc, &keys).to_json();
+        assert_eq!(out, r#"{"claudeAiOauth.expiresAt":1764000000000,"claudeAiOauth.subscriptionType":"max","claudeAiOauth.rateLimitTier":"default_claude_max_20x"}"#);
+        assert!(!out.contains("secret"), "{out}");
+        assert_eq!(object_of(&json::parse(b"{}").expect("JSON"), &keys).to_json(), "{}");
+        // An integer is 0 to 2^53 - 1, digits only; a string is value_at's.
+        let n = |text: &str| field_at(&json::parse(format!("{{\"k\":{text}}}").as_bytes()).expect("JSON"), "k");
+        assert_eq!(n("0"), Some(Value::uint(0)));
+        assert_eq!(n("9007199254740991"), Some(Value::uint(MAX_INTEGER)));
+        for text in ["9007199254740992", "-1", "1.5", "1e3", "true", "null", "{}", "[1]", "\"\""] {
+            assert_eq!(n(text), None, "{text}");
+        }
+        assert_eq!(n("\"a\\\"b\""), Some(Value::str("a\"b")));
+        assert_eq!(object_of(&json::parse(br#"{"k":"a\"b"}"#).expect("JSON"), &["k"]).to_json(), r#"{"k":"a\"b"}"#);
+    }
+
     /// A folder of this test, its mode set outright: the lib tests share
     /// one process and its umask.
     #[cfg(unix)]
@@ -288,6 +485,25 @@ mod tests {
         assert_eq!(read_field(&big, key, me), Some("a@b.c".to_string()), "a file of exactly 5 MiB");
         std::fs::write(&big, format!("{head}{}\"}}", "x".repeat(pad + 1))).expect("write");
         assert_eq!(read_field(&big, key, me), None, "a file over 5 MiB");
+        std::fs::remove_dir_all(&dir).expect("clean up");
+    }
+
+    /// `--keys` reads its file as `--key` does: a missing file, another
+    /// user's, or anything but a regular file gives nothing (not `{}`).
+    #[cfg(unix)]
+    #[test]
+    fn several_keys_read_only_a_regular_file_of_the_users_own() {
+        let dir = folder("keys");
+        let me = crate::store::euid();
+        let keys = ["claudeAiOauth.subscriptionType", "claudeAiOauth.expiresAt"];
+        let file = dir.join("credentials.json");
+        std::fs::write(&file, br#"{"claudeAiOauth":{"accessToken":"secret","subscriptionType":"pro","expiresAt":42}}"#).expect("write");
+        assert_eq!(read_fields(&file, &keys, me).map(|v| v.to_json()), Some(r#"{"claudeAiOauth.subscriptionType":"pro","claudeAiOauth.expiresAt":42}"#.to_string()));
+        assert_eq!(read_fields(&file, &keys, me.wrapping_add(1)), None, "another user's file was read");
+        assert_eq!(read_fields(&dir.join("missing.json"), &keys, me), None, "a file that is not there");
+        assert_eq!(read_fields(&dir, &keys, me), None, "a folder");
+        std::fs::write(&file, b"{}").expect("write");
+        assert_eq!(read_fields(&file, &keys, me).map(|v| v.to_json()), Some("{}".to_string()), "a file holding none of the keys");
         std::fs::remove_dir_all(&dir).expect("clean up");
     }
 }

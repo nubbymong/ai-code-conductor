@@ -5,13 +5,16 @@ import { useAccountProfilesStore } from '../stores/accountProfilesStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { resolveAccountName } from '../../shared/account-chip-color'
 import type { AccountProfile } from '../../shared/account-types'
+import type { UsageSignInProblem } from '../../shared/usage-types'
 
 // Re-auth of an EXISTING account (its stored token expired). Same mechanism as
 // useAddAccount — open a shell-only login session pinned to the profile and
 // poll until /login rewrites the account's credentials — but targets the
 // existing profileId instead of creating a new one. A full fresh login writes a
 // complete credential set into that account's isolated home, so it sidesteps
-// the rotating-refresh-token hazard of a silent refresh entirely.
+// the rotating-refresh-token hazard of a silent refresh entirely. Starting
+// claude in the tab also renews a sign-in that is still valid, which rewrites
+// the credentials too and so completes the poll (nubbymong/aicc_planning#444).
 const POLL_MS = 4000
 const MAX_ATTEMPTS = 300 // ~20 min backstop; the session-gone check is the real bound
 
@@ -84,10 +87,12 @@ export function reauthTabLabel(
 
 /** Open a login shell for an EXISTING account so the user can re-authenticate
  *  it, then run `onDone` (e.g. re-fetch usage) once the login lands. Returns the
- *  new login session id; the caller should switch to the sessions view. */
-export function useReauthAccount(): (profile: Pick<AccountProfile, 'id' | 'name'>, onDone?: () => void) => string {
+ *  new login session id; the caller should switch to the sessions view.
+ *  `problem`: why the Account usage card asked (a duplicate or wrong-account
+ *  profile), for the tab's banner (signInBanner.ts). */
+export function useReauthAccount(): (profile: Pick<AccountProfile, 'id' | 'name'>, onDone?: () => void, problem?: UsageSignInProblem) => string {
   const addSession = useSessionStore((s) => s.addSession)
-  return useCallback((profile, onDone) => {
+  return useCallback((profile, onDone, problem) => {
     const sessionId = generateId()
     // Resolved here rather than trusted from the caller: the label has to be
     // right no matter which entry point opened the login (the Insights banner,
@@ -107,6 +112,9 @@ export function useReauthAccount(): (profile: Pick<AccountProfile, 'id' | 'name'
       provider: 'claude',
       profileId: profile.id,
       needsLogin: true,
+      // The banner speaks of this account, not a new one (signInBanner.ts).
+      signInAgain: true,
+      ...(problem ? { signInProblem: problem } : {}),
     })
     pollForReauth(profile.id, sessionId, onDone ?? (() => {}))
     return sessionId

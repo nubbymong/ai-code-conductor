@@ -77,6 +77,22 @@ export function shortBucketLabel(label: string): string {
 }
 
 /**
+ * Whether a bucket is a PER-MODEL weekly (Fable, and whatever follows it) as
+ * opposed to a time window (5h, Weekly-all).
+ *
+ * Group alone cannot decide this: `usage-buckets.ts` gives a per-model weekly
+ * `group: 'weekly'`, the same as weekly-all. What it does do is encode the model
+ * into the key as `<kind>:<model display name>`, leaving that segment empty for
+ * the time windows -- so the key is the producer's own answer to the question.
+ * The footer's legacy synthesis (MultiAccountStatusline.tsx) uses bare keys
+ * with no colon at all, which lands on "not a model bucket", which is right.
+ */
+export function isModelBucket(b: Pick<UsageBucket, 'key'>): boolean {
+  const i = b.key.indexOf(':')
+  return i >= 0 && b.key.slice(i + 1).trim() !== ''
+}
+
+/**
  * D2 (approved as drawn): a window whose reset time has passed has no current
  * figure, so the page reads "no reading since" and the footer and strip show a
  * static no-reading meter. True from the reset instant on; false when the

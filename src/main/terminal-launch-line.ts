@@ -153,6 +153,19 @@ export function agentsRef(): string {
  *  the templates over unchanged there too. */
 export const PS_LEGACY_ARGUMENT_PASSING = "$PSNativeCommandArgumentPassing = 'Legacy'"
 
+/** The command a Windows Claude Code launch line, and a terminal tab's line
+ *  (pty-manager.ts), change folder with: the same Set-Location cmdlet, named
+ *  with its module, so Windows PowerShell loads that one module by name.
+ *  Named bare, Windows PowerShell 5.1 first looks through every module on its
+ *  module path for it, and with no module analysis cache yet (a new user
+ *  profile; the GitHub Windows runner, whose module path holds the Azure,
+ *  AWS, Microsoft Graph and SQL Server modules) that look took over 20 s in
+ *  Snap e2e run 46040073797, so Claude Code did not start within the check's
+ *  30 s. Named with its module, the folder change took 36 to 43 ms there.
+ *  On purpose, a function or alias named Set-Location in the user's profile
+ *  is not used on these lines. */
+export const PS_SET_LOCATION = 'Microsoft.PowerShell.Management\\Set-Location'
+
 /** Whether Windows starts `program` itself, as an `.exe` file (a trailing dot
  *  or space aside, which Windows drops), rather than through cmd.exe or by a
  *  name PowerShell looks up. A launch line that starts Claude Code by

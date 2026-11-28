@@ -337,6 +337,15 @@ export interface AppSettings {
   hooksPort: number
   theme: ThemeMode
   tokenomicsAccountFilter?: string  // 'all' | '__mixed__' | '__unknown__' | <email>
+  /** 2.1.3-beta.20 (nubbymong/aicc_planning#445): the Account usage page's
+   *  sort, '5h' | 'weekly' | 'name', kept per user like the other page
+   *  choices here. Absent = 5h left. Read through resolveUsageSort
+   *  (utils/accountUsageGrid.ts), never directly. */
+  accountUsageSort?: string
+  /** The Account usage page's provider filter: 'all' or a provider id.
+   *  Absent = All. Read through resolveUsageProviderFilter, which reads a
+   *  provider that is off now as All and leaves this value as it is. */
+  accountUsageProvider?: string
   fontMigratedV2?: boolean  // one-time guard: existing installs moved off the old Cascadia Code/14 default
   gpuDefaultOnMigrated?: boolean  // one-time guard (#374): existing installs that had GPU rendering off (incl. the value auto-persisted while it was opt-in) moved to the new default-on
   identityColorMigratedV2?: boolean      // one-time guard: saved-config colours migrated to identity keys

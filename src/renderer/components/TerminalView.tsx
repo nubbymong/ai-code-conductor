@@ -29,8 +29,10 @@ import { forgetSessionBrowserProfile } from '../stores/sshCloseStore'
 import { hasSpawned, markSpawned, clearSpawned, killSessionPty, isCurrentSpawn } from '../ptyTracker'
 import { spentCommand } from '../utils/commandTerminal'
 import { markKeptByHelper } from '../utils/keptByHelper'
+import { noteStartCarried } from '../stores/hostAccountsStore'
 import { listenForSpawnEnd, reportSpawnEnd } from '../utils/spawnEndNotice'
 import { carryNote, terminalNoteLine } from '../utils/launchNote'
+import { signInBannerText } from '../utils/signInBanner'
 import { sessionProviderAccount } from '../utils/accountChip'
 import { switchOrigin, forgetSwitchOrigin } from '../utils/switchOrigin'
 import SshFlowOverlay from './SshFlowOverlay'
@@ -1290,14 +1292,26 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
             // subscription above), not anything the caller configured.
             // Merging it into a copy of `ssh` keeps that prop's shape a
             // pure reflection of the session's SAVED config.
-            const sshWithReconnect = ssh ? { ...ssh, reconnect: !!session?.sshReachedClaudeRunning } : ssh
+            // 2.1.3-beta.20 section 5: a Switch Account on a helper tab
+            // carries its conversation into this start, once (consumed
+            // here, as askPrompt), so the CLI continues it on the new account.
+            const carry = !!ssh && session?.carryConversation === true
+            if (carry) updateSession(sessionId, { carryConversation: undefined })
+            // Round 1 (MINOR-3): what this start carried is noted, so a start
+            // main refuses for its account carries it again on the notice's
+            // ways on (stores/hostAccountsStore).
+            if (ssh) noteStartCarried(sessionId, carry)
+            const sshWithReconnect = ssh ? { ...ssh, reconnect: !!session?.sshReachedClaudeRunning || carry } : ssh
+            // 2.1.3-beta.20 section 5: a sign-in tab (utils/hostSignIn.ts):
+            // main runs the CLI's own sign-in for its account on that machine.
+            const remoteAccountSignIn = ssh && session?.remoteAccountSignIn === true ? true as const : undefined
             // 2.1.3-beta.6: a Terminal only tab or a partner terminal (no
             // session record of its own), which the session helper may carry.
             // The app's own sign-in and install or update tabs are not.
             const plainTerminal = shellOnly === true && !ssh && !session?.needsLogin && !session?.transient
             exitHold.begin()
             window.electronAPI.pty
-              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, remoteVia: ssh && session?.remoteVia === 'helper' ? 'helper' : undefined, shellOnly, plainTerminal, elevated, terminalOptions, configId, configLabel, useResumePicker, legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
+              .spawn(sessionId, { cwd, cols, rows, ssh: sshWithReconnect, remoteVia: ssh && session?.remoteVia === 'helper' ? 'helper' : undefined, shellOnly, plainTerminal, ...(remoteAccountSignIn ? { remoteAccountSignIn } : {}), elevated, terminalOptions, configId, configLabel, useResumePicker, legacyVersion, effortLevel, permissionMode, extraArgs, disableAutoMemory, enableCodexReview, loggingEnabled, model, provider, codexOptions, profileId: resolvedProfileId, resume, askPrompt, isAsk: session?.kind === 'ask', ...account })
               .then((result) => {
                 const nothingStarted = !!result && typeof result === 'object' && result.started === false
                 // WP2: main refused the launch because its provider is off
@@ -2146,8 +2160,8 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
       data-terminal-active={isActive ? '' : undefined}
     >
       {needsLogin && (
-        <div className="bg-blue/10 border-b border-blue/30 text-lavender text-xs px-3 py-1.5 shrink-0">
-          Setting up a new account. Run claude, type /login, and choose the account. We&apos;ll detect it automatically.
+        <div className="bg-blue/10 border-b border-blue/30 text-lavender text-xs px-3 py-1.5 shrink-0" data-testid="sign-in-banner">
+          {signInBannerText(session?.signInAgain === true, session?.signInProblem)}
         </div>
       )}
       {switchNote && (
