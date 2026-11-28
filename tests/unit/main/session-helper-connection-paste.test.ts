@@ -17,9 +17,14 @@
 //  - a picture is paced by the pings as typed input is (section 15): a ping
 //    after every 16 raw frames or 1 MiB, typed input and the picture's chunks
 //    counted together, and nothing more until its pong;
+//  - typed input goes first after each pong, so a picture can wait for its
+//    turn: one whose turn comes 25 s or more after its last chunk (or its
+//    file.put) sends no more, and the holder's timeout answers it with the
+//    connection up; a holder's answer that comes while it waits ends its wait
+//    at the next pong;
 //  - the limits and the name rule are the shared vectors'
 //    (helper/fixtures/local.json `paste`), which the helper's tests read too.
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createHash } from 'crypto'
 import { readFileSync } from 'fs'
 import { resolve } from 'path'
@@ -27,10 +32,14 @@ import {
   FrameReader, PASTE_CAP, PASTE_CHANNEL, PASTE_CHUNK_WAIT_MS, PASTE_NAME_RE, PASTE_PICTURE_MAX, PASTE_REPLY_MS, PASTE_SESSION_MAX, RAW_MAX,
   encodeJsonFrame, helloAck, readFileStored, type HolderRecord,
 } from '../../../src/main/session-helper/protocol'
-import { HolderConnection, INPUT_FRAMES_PER_PING } from '../../../src/main/session-helper/connection'
+import { HolderConnection, INPUT_FRAMES_PER_PING, PASTE_CHUNK_SEND_MS } from '../../../src/main/session-helper/connection'
 import { duplexPair } from './session-helper-fake-holder'
 
 type Json = Record<string, unknown>
+
+// Some tests below move the clock (Date only, vi.setSystemTime); the waits
+// here run on real time (setTimeout and performance.now, never faked).
+afterEach(() => { vi.useRealTimers() })
 
 const SID = 'rm0123456789abcdef0123456789abc'
 const NONCE = '0123456789abcdef0123456789abcdef'
@@ -42,9 +51,9 @@ const OFFERS = ['core', 'local', 'hooks', 'mcp', 'away', 'screen', 'title', 'sta
 
 const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms))
 async function until(cond: () => boolean, what: string, ms = 3000): Promise<void> {
-  const end = Date.now() + ms
+  const end = performance.now() + ms
   while (!cond()) {
-    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`)
+    if (performance.now() > end) throw new Error(`timed out waiting for ${what}`)
     await tick(5)
   }
 }
@@ -60,12 +69,13 @@ type FromApp = { kind: 0; channel: number; json: Json } | { kind: 1; channel: nu
  *  with `refuse.next` set it refuses the next file.put at once, before the
  *  pong to the ping after it, as a holder refuses before it takes a byte.
  *  With `pongs.hold` set to n it keeps back the pong to its n-th ping
- *  (counted from 1) until `release()`. */
+ *  (counted from 1) until `release()`. With `pongs.manual` set it keeps
+ *  back every pong, in `pongs.queued`, until `answer()`. */
 async function connected(caps: string[], paste: boolean, status = false) {
   const [app, holder] = duplexPair()
   const frames: FromApp[] = []
   const refuse: { next: { code: string; text: string } | null } = { next: null }
-  const pongs: { seen: number; hold: number; held: unknown } = { seen: 0, hold: 0, held: undefined }
+  const pongs: { seen: number; hold: number; held: unknown; manual: boolean; queued: unknown[] } = { seen: 0, hold: 0, held: undefined, manual: false, queued: [] }
   const reader = new FrameReader('app_to_helper')
   holder.on('data', (chunk: Buffer) => {
     for (const f of reader.push(chunk)) {
@@ -78,7 +88,8 @@ async function connected(caps: string[], paste: boolean, status = false) {
       }
       if (m.t === 'ping') {
         pongs.seen += 1
-        if (pongs.seen === pongs.hold) pongs.held = m.id
+        if (pongs.manual) pongs.queued.push(m.id)
+        else if (pongs.seen === pongs.hold) pongs.held = m.id
         else holder.write(encodeJsonFrame({ t: 'pong', re: m.id }))
       }
     }
@@ -94,7 +105,31 @@ async function connected(caps: string[], paste: boolean, status = false) {
   /** What the app sent after its hello.ack, in order: a control message by its type, a raw frame as `raw<channel>`. */
   const kinds = () => frames.slice(1).map((f) => (f.kind === 0 ? String(f.json.t) : `raw${f.channel}`))
   const release = () => { holder.write(encodeJsonFrame({ t: 'pong', re: pongs.held })) }
-  return { conn, frames, json, raw, puts, refuse, pongs, kinds, release, send: (m: unknown, channel = 0) => { holder.write(encodeJsonFrame(m, channel)) } }
+  /** The pong to the oldest ping kept back (`pongs.manual`). */
+  const answer = () => {
+    if (pongs.queued.length === 0) throw new Error('no ping to answer')
+    holder.write(encodeJsonFrame({ t: 'pong', re: pongs.queued.shift() }))
+  }
+  return { conn, frames, json, raw, puts, refuse, pongs, kinds, release, answer, send: (m: unknown, channel = 0) => { holder.write(encodeJsonFrame(m, channel)) } }
+}
+type Connected = Awaited<ReturnType<typeof connected>>
+
+/** Sixteen frames of typed input, sent at once or (with a ping out) waiting
+ *  for its pong: then they go first, and the 16th sends the next ping. */
+function typeAWindow(c: Connected): void {
+  for (let i = 0; i < INPUT_FRAMES_PER_PING; i++) c.conn.sendInput(Buffer.from('a'))
+}
+
+/** `rounds` pongs (`pongs.manual`), each with a window of typed input
+ *  waiting for it: each pong's typed input fills the window and sends the
+ *  next ping, so a picture gets no turn. Returns with that ping kept back. */
+async function starve(c: Connected, rounds: number): Promise<void> {
+  for (let r = 0; r < rounds; r++) {
+    await until(() => c.pongs.queued.length === 1, 'a ping to answer')
+    typeAWindow(c)
+    c.answer()
+    await until(() => c.pongs.queued.length === 1, 'the ping after the typed input')
+  }
 }
 
 /** A picture's bytes: `n` of them, not all alike. */
@@ -295,6 +330,119 @@ describe('putFile: one picture into the session\'s folder on the holder\'s machi
     await expect(put).resolves.toEqual({ sha256: sha(bytes) })
     expect(Buffer.concat(c.raw(1)).equals(typed)).toBe(true)
     expect(Buffer.concat(c.raw(PASTE_CHANNEL)).equals(bytes)).toBe(true)
+  })
+
+  describe('typed input goes first after each pong, so a picture can wait for its turn', () => {
+    // As a holder answers a picture whose chunk wait ran out (serve.rs).
+    const timedOut = (c: Connected) => ({ t: 'error', re: c.puts()[0].id, code: 'timeout', text: 'no chunk of the picture came in time: the upload ended and nothing was kept' })
+    const typedAfter = async (c: Connected) => {
+      c.conn.sendInput(Buffer.from('after'))
+      await until(() => c.raw(1).some((b) => b.toString() === 'after'), 'the typed input after the picture')
+    }
+
+    /** A picture of 3 chunks whose first goes 10 s after its file.put, with
+     *  15 typed frames before it, so that chunk sends the next ping; then
+     *  `rounds` pongs each with a window of typed input waiting. */
+    async function oneChunkThenStarved(c: Connected, rounds: number) {
+      c.pongs.manual = true
+      const bytes = picture(RAW_MAX * 3)
+      const put = c.conn.putFile('paste-1.png', bytes)
+      await until(() => c.pongs.queued.length === 1, 'the ping after file.put')
+      vi.setSystemTime(Date.now() + 10_000)
+      for (let i = 0; i < INPUT_FRAMES_PER_PING - 1; i++) c.conn.sendInput(Buffer.from('a'))
+      c.answer()
+      await until(() => c.raw(PASTE_CHANNEL).length === 1 && c.pongs.queued.length === 1, 'the first chunk and the ping after it')
+      expect(c.kinds()).toEqual(['file.put', 'ping', ...times(15, 'raw1'), 'raw2', 'ping'])
+      await starve(c, rounds)
+      expect(c.raw(PASTE_CHANNEL)).toHaveLength(1)
+      return { bytes, put }
+    }
+
+    it('its turn 26 s after its last chunk: no more chunks go, the holder\'s timeout answers it, and the connection stays up', async () => {
+      expect(PASTE_CHUNK_SEND_MS).toBe(PASTE_CHUNK_WAIT_MS - 5_000)
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const c = await connected(OFFERS, true)
+      const { put } = await oneChunkThenStarved(c, 3)
+      // The holder's chunk wait (30 s) runs out within 5 s: a chunk written
+      // now could reach it with no upload open, which closes the connection.
+      vi.setSystemTime(Date.now() + 26_000)
+      c.answer()
+      await tick(50)
+      expect(c.raw(PASTE_CHANNEL)).toHaveLength(1)
+      c.send(timedOut(c))
+      await expect(put).rejects.toMatchObject({ code: 'timeout' })
+      expect(c.conn.isClosed).toBe(false)
+      expect(c.raw(1)).toHaveLength(15 + 3 * INPUT_FRAMES_PER_PING)
+      await typedAfter(c)
+    })
+
+    it('its turn 20 s after its last chunk, 30 s after its file.put: the rest goes, and file.stored resolves', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const c = await connected(OFFERS, true)
+      const { bytes, put } = await oneChunkThenStarved(c, 3)
+      vi.setSystemTime(Date.now() + 20_000)
+      c.answer()
+      await until(() => c.raw(PASTE_CHANNEL).length === 3, 'the rest of the picture')
+      expect(Buffer.concat(c.raw(PASTE_CHANNEL)).equals(bytes)).toBe(true)
+      c.send({ t: 'file.stored', re: c.puts()[0].id, sha256: sha(bytes) })
+      await expect(put).resolves.toEqual({ sha256: sha(bytes) })
+    })
+
+    it('its first turn 26 s after its file.put (a ping already out, and typed input at each pong): no chunk goes, and the holder\'s timeout answers it', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const c = await connected(OFFERS, true)
+      c.pongs.manual = true
+      // Typed before the picture: a window of it, and its ping is out.
+      typeAWindow(c)
+      await until(() => c.pongs.queued.length === 1, 'the ping after the typed input')
+      const put = c.conn.putFile('paste-1.png', picture(10))
+      await until(() => c.puts().length === 1, 'file.put')
+      await starve(c, 3)
+      vi.setSystemTime(Date.now() + 26_000)
+      // Nothing typed waits: the picture's own ping goes, and at its pong the
+      // picture's turn has come, too late. The holder's wait ran from its
+      // read of file.put, before that ping was even sent.
+      c.answer()
+      await until(() => c.pongs.queued.length === 1, 'the ping after file.put')
+      c.answer()
+      await tick(50)
+      expect(c.raw(PASTE_CHANNEL)).toEqual([])
+      c.send(timedOut(c))
+      await expect(put).rejects.toMatchObject({ code: 'timeout' })
+      expect(c.conn.isClosed).toBe(false)
+      await typedAfter(c)
+    })
+
+    for (const where of ['before its first chunk', 'between two of its chunks'] as const) {
+      it(`the holder's answer that comes while it waits ends its wait at the next pong, typed input still filling every round: ${where}`, async () => {
+        const c = await connected(OFFERS, true)
+        c.pongs.manual = true
+        if (where === 'before its first chunk') {
+          typeAWindow(c)
+          await until(() => c.pongs.queued.length === 1, 'the ping after the typed input')
+        }
+        let settled = false
+        const put = c.conn.putFile('paste-1.png', picture(RAW_MAX * 2))
+        put.then(() => { settled = true }, () => { settled = true })
+        await until(() => c.puts().length === 1 && c.pongs.queued.length === 1, 'file.put, and a ping out')
+        if (where === 'between two of its chunks') {
+          for (let i = 0; i < INPUT_FRAMES_PER_PING - 1; i++) c.conn.sendInput(Buffer.from('a'))
+          c.answer()
+          await until(() => c.raw(PASTE_CHANNEL).length === 1 && c.pongs.queued.length === 1, 'the first chunk and the ping after it')
+        }
+        await starve(c, 2)
+        c.send(timedOut(c))
+        await tick(20)
+        // Its answer is in; the picture still waits for a pong.
+        expect(settled).toBe(false)
+        typeAWindow(c)
+        c.answer()
+        await until(() => settled, 'the picture to be answered')
+        await expect(put).rejects.toMatchObject({ code: 'timeout' })
+        expect(c.raw(PASTE_CHANNEL)).toHaveLength(where === 'before its first chunk' ? 0 : 1)
+        expect(c.conn.isClosed).toBe(false)
+      })
+    }
   })
 
   it('a connection that closes while the picture waits for its reply rejects it', async () => {

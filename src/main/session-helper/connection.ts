@@ -162,6 +162,14 @@ export const INPUT_BYTES_PER_PING = 1024 * 1024
  *  nothing). */
 export const RESEND_WAIT_MIN_MS = 25
 export const RESEND_WAIT_MAX_MS = 400
+/** A picture's next chunk goes only within this time of its last one written
+ *  (or of its `file.put`): 5 s inside the holder's chunk wait, which runs from
+ *  no earlier than that. Typed input goes first after each pong, so a picture
+ *  can wait rounds for its turn; one whose turn comes later sends no more,
+ *  since the holder may have ended the upload by the time a chunk came, and
+ *  bytes with no upload open close the connection. The holder's `timeout`
+ *  answers it instead. */
+export const PASTE_CHUNK_SEND_MS = PASTE_CHUNK_WAIT_MS - 5_000
 
 type Json = Record<string, unknown>
 
@@ -523,9 +531,13 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
    * (`unknown-type`), a name off PASTE_NAME_RE or no byte (`bad-field`), over
    * 20 MiB (`too-large`), and a second picture while one is being sent
    * (`busy`). The holder's refusal rejects with its code. Typed input goes on
-   * meanwhile. The holder ends an upload with 30 s and no chunk itself; the
-   * app's own wait is that and the reply timeout, from the last chunk written
-   * or the last pong, whichever came later.
+   * meanwhile, and first after each pong. The holder ends an upload with 30 s
+   * and no chunk itself; the app's own wait is that and the reply timeout,
+   * from the last chunk written or the last pong, whichever came later. A
+   * picture whose turn does not come within 25 s of its last chunk (or of its
+   * `file.put`; PASTE_CHUNK_SEND_MS) sends no more, and the holder's
+   * `timeout` is its answer, the connection up; once the holder has answered,
+   * the picture waits for no more turns.
    */
   async putFile(name: string, bytes: Buffer): Promise<{ sha256: string }> {
     if (this.closed) throw new HolderError('io', 'the connection is closed')
@@ -544,15 +556,19 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
       })
       // Read below; a refusal that comes while the bytes go is not left unhandled meanwhile.
       replied.catch(() => { /* read below */ })
+      const unanswered = (): boolean => this.waiting.has(id)
+      // The holder's chunk wait runs from its read of file.put, and then of
+      // each chunk: never earlier than the write of it here.
+      let lastWrite = Date.now()
       try {
         this.stream.write(encodeJsonFrame({ t: 'file.put', id, name, size: bytes.length, sha256 }))
       } catch (err) {
         this.dropWaiting(id)
         throw new HolderError('io', (err as Error).message)
       }
-      await this.pongAfterNow()
+      await this.pongAfterNow(unanswered)
       // Refused (or the connection went): no byte is sent, and the refusal is the answer.
-      if (!this.waiting.has(id)) return this.stored(await replied, sha256)
+      if (!unanswered()) return this.stored(await replied, sha256)
       this.rearm(id, 'file.put', wait)
       for (let at = 0; at < bytes.length; at += RAW_MAX) {
         // Paced as typed input is (section 15): no chunk while a ping waits
@@ -561,12 +577,14 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         // more than that is ever ahead of a ping, whose pong would otherwise
         // come late on a slow link and close the connection.
         if (this.ping) {
-          while (!this.closed && this.ping) await this.nextPong()
-          if (this.closed || !this.waiting.has(id)) break
+          while (!this.closed && this.ping && unanswered()) await this.nextPong()
+          if (this.closed || !unanswered()) break
           // The holder has read every chunk before that ping: the wait runs from now.
           this.rearm(id, 'file.put', wait)
         }
-        if (this.closed || !this.waiting.has(id)) break
+        if (this.closed || !unanswered()) break
+        // Its turn came too late (PASTE_CHUNK_SEND_MS): the holder's timeout answers it.
+        if (Date.now() - lastWrite >= PASTE_CHUNK_SEND_MS) break
         const chunk = bytes.subarray(at, at + RAW_MAX)
         let more: boolean
         try {
@@ -575,6 +593,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
           this.close()
           break
         }
+        lastWrite = Date.now()
         this.counted(chunk.length)
         if (!more) await this.drained()
         this.rearm(id, 'file.put', wait)
@@ -631,10 +650,12 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
    *  answers a connection's messages in order, so its answer to anything
    *  written before comes first. The keep-alive's ping is the one sent (its
    *  pong accounts for typed input as any other), after one already on its
-   *  way has been answered. Returns at once once the connection is closed. */
-  private async pongAfterNow(): Promise<void> {
-    while (!this.closed && this.ping) await this.nextPong()
-    if (this.closed) return
+   *  way has been answered. Returns at once once the connection is closed,
+   *  and, before its own ping, once `still()` is false (the request it waits
+   *  for was answered meanwhile). */
+  private async pongAfterNow(still: () => boolean): Promise<void> {
+    while (!this.closed && this.ping && still()) await this.nextPong()
+    if (this.closed || !still()) return
     this.sendPing()
     if (this.ping) await this.nextPong()
   }
