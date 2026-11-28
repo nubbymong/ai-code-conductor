@@ -842,7 +842,9 @@ mod tests {
         let target = scratch("target");
         fs::create_dir(&target).unwrap();
         // Its mode set outright: the lib tests share one umask, which a bind
-        // beside this test sets to 0177 for a moment (`bind_private`).
+        // beside this test sets to 0177 around each bind (`bind_private`),
+        // and two binds that overlap can leave it there for the rest of the
+        // run.
         fs::set_permissions(&target, fs::Permissions::from_mode(0o700)).unwrap();
         let link = scratch("link");
         std::os::unix::fs::symlink(&target, &link).unwrap();

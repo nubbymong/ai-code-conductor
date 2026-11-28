@@ -74,21 +74,58 @@ fn refuse<T>(code: &'static str, re: Option<u64>, text: &str) -> Result<T, Refus
     Err(Refusal { code, re, text: text.to_string() })
 }
 
+/// A picture's type, by its name's ending: `.png` or `.jpg`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Png,
+    Jpeg,
+}
+
+impl Kind {
+    /// The type as a list prints it and a read names it.
+    pub fn mime(self) -> &'static str {
+        match self {
+            Kind::Png => "image/png",
+            Kind::Jpeg => "image/jpeg",
+        }
+    }
+
+    /// The type a read names, when it is one the stand-in serves.
+    pub fn of_mime(t: &str) -> Option<Kind> {
+        match t {
+            "image/png" => Some(Kind::Png),
+            "image/jpeg" => Some(Kind::Jpeg),
+            _ => None,
+        }
+    }
+
+    /// The bytes a picture of this type begins with.
+    pub fn signature(self) -> &'static [u8] {
+        match self {
+            Kind::Png => b"\x89PNG\r\n\x1a\n",
+            Kind::Jpeg => b"\xff\xd8\xff",
+        }
+    }
+}
+
 /// The number in a picture's name and its type, for `paste-<n>.png`
-/// (`image/png`) or `paste-<n>.jpg` (`image/jpeg`), `<n>` 1 to 9 decimal
-/// digits with no leading zero. None for any other name.
-pub fn picture_name(name: &str) -> Option<(u32, &'static str)> {
+/// (`Kind::Png`) or `paste-<n>.jpg` (`Kind::Jpeg`), `<n>` 1 to 9 decimal
+/// digits with no leading zero. None for any other name. The one rule for
+/// both sides of `paste/`: `file.put` takes only such a name (`parse_put`),
+/// and the clipboard stand-in serves only such a name (`clip::newest`).
+pub fn picture_name(name: &str) -> Option<(u32, Kind)> {
     let rest = name.strip_prefix("paste-")?;
     let (digits, kind) = if let Some(d) = rest.strip_suffix(".png") {
-        (d, "image/png")
+        (d, Kind::Png)
     } else if let Some(d) = rest.strip_suffix(".jpg") {
-        (d, "image/jpeg")
+        (d, Kind::Jpeg)
     } else {
         return None;
     };
     if digits.is_empty() || digits.len() > MAX_NUMBER_DIGITS || digits.starts_with('0') || !digits.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
+    // At most 9 digits: 999,999,999 at most, which a u32 holds.
     digits.parse::<u32>().ok().map(|n| (n, kind))
 }
 
@@ -613,15 +650,57 @@ mod tests {
         assert_eq!(folder_of(Path::new("/"), "s"), None);
     }
 
+    // The one name rule for file.put and the clipboard stand-in (clip.rs's
+    // own test of it merged here): each name either side took or refused
+    // before, taken or refused the same.
     #[test]
     fn a_picture_name_is_paste_a_number_and_png_or_jpg() {
-        assert_eq!(picture_name("paste-1.png"), Some((1, "image/png")));
-        assert_eq!(picture_name("paste-999999999.jpg"), Some((999_999_999, "image/jpeg")));
-        assert_eq!(picture_name("paste-42.png"), Some((42, "image/png")));
-        for bad in ["paste-0.png", "paste-01.png", "paste-1234567890.png", "paste-1.gif", "paste-1.PNG", "paste-.png", "../paste-1.png", "paste-1.png/", "x/paste-1.png", ".part-1", "paste-1.jpeg", "paste-1", "paste-1.png ", "paste--1.png", "paste-1.png.png", "Paste-1.png", "paste-+1.png", ""] {
+        assert_eq!(picture_name("paste-1.png"), Some((1, Kind::Png)));
+        assert_eq!(picture_name("paste-42.jpg"), Some((42, Kind::Jpeg)));
+        assert_eq!(picture_name("paste-42.png"), Some((42, Kind::Png)));
+        assert_eq!(picture_name("paste-999999999.jpg"), Some((999_999_999, Kind::Jpeg)));
+        assert_eq!(picture_name("paste-999999999.png"), Some((999_999_999, Kind::Png)));
+        for bad in [
+            "paste-0.png",
+            "paste-01.png",
+            "paste-04.png",
+            "paste-.png",
+            "paste-1000000000.png",
+            "paste-1234567890.png",
+            "paste-1.gif",
+            "paste-1.PNG",
+            "paste-1.jpeg",
+            "paste-1",
+            "paste-1.png ",
+            "paste-1.png/",
+            "paste-1.png.png",
+            "paste-1.png.txt",
+            "paste-1.png.part",
+            "paste--1.png",
+            "paste-+1.png",
+            "paste-1a.png",
+            "../paste-1.png",
+            "x/paste-1.png",
+            "xpaste-1.png",
+            "Paste-1.png",
+            ".part-1",
+            "",
+        ] {
             assert_eq!(picture_name(bad), None, "{bad:?}");
         }
         assert!(is_part_name(".part-12") && !is_part_name(".part-") && !is_part_name(".part-1x") && !is_part_name("paste-1.png"));
+    }
+
+    #[test]
+    fn a_kind_names_its_type_and_its_first_bytes() {
+        for kind in [Kind::Png, Kind::Jpeg] {
+            assert_eq!(Kind::of_mime(kind.mime()), Some(kind));
+        }
+        assert_eq!((Kind::Png.mime(), Kind::Jpeg.mime()), ("image/png", "image/jpeg"));
+        assert_eq!(Kind::of_mime("image/gif"), None);
+        assert_eq!(Kind::of_mime("IMAGE/PNG"), None);
+        assert_eq!(Kind::Png.signature(), b"\x89PNG\r\n\x1a\n");
+        assert_eq!(Kind::Jpeg.signature(), b"\xff\xd8\xff");
     }
 
     fn put_text(name: &str, size: &str, sha: &str) -> String {
@@ -794,10 +873,11 @@ mod tests {
     /// Each folder on the way to `at` that is missing, `at` included, made
     /// one level at a time and set to 0700 before the next is made in it,
     /// never left to the umask. The lib tests share one process and its umask,
-    /// and a socket bind beside them sets it to 0177 for a moment
-    /// (transport/unix.rs, `bind_private`): a level `create_dir_all` made in
-    /// that moment was 0600, with no search bit, so the next level could not
-    /// be made inside it.
+    /// and a socket bind beside them sets it to 0177 around each bind, and two
+    /// binds that overlap can leave it there for the rest of the run
+    /// (transport/unix.rs, `bind_private`): a level `create_dir_all` made
+    /// while it was 0177 was 0600, with no search bit, so the next level could
+    /// not be made inside it.
     #[cfg(unix)]
     fn folders_0700(at: &Path) {
         use std::os::unix::fs::PermissionsExt;
