@@ -20,7 +20,9 @@
 // PATH it builds (LOGIN_SHELL_PATH_COMMAND, as the launch asks it, then a
 // search of it here); the sh-family launcher `-l -c` for `command -v` of the
 // program, as the CLI check asks it for claude (claude-cli-probe.ts
-// runProbe); and, after a plain "not found" from that, the same launcher
+// runProbe), with any alias or function of its name cleared first (they
+// hide the program from `command -v`, not from Claude Code, which runs it
+// by PATH); and, after a plain "not found" from that, the same launcher
 // once more as it runs in the session, `-l -i -c`. The app's own PATH and
 // the system folders are searched first, in this process, so a program
 // there needs no process at all.
@@ -87,29 +89,40 @@ export function claudeLinuxClipboardTool(env: Env): ClaudeLinuxClipboardTool {
  *  short is told from a plain "not found". */
 const TOOL_ANSWER_END = '__CCC_CLIPBOARD_TOOL_END__'
 
-/** What the sh-family launcher runs to say where `tool` is: `command -v`,
- *  then the marker. Fixed text: `tool` is one of CLAUDE_LINUX_CLIPBOARD_TOOLS,
- *  never a user's word. */
+/** What the sh-family launcher runs to say where `tool` is: any alias and
+ *  any function of that name cleared (`unalias`, `unset -f`; with none, each
+ *  prints only to the error output, sent nowhere, and the list goes on),
+ *  then `command -v`, then the marker. Fixed text: `tool` is one of
+ *  CLAUDE_LINUX_CLIPBOARD_TOOLS, never a user's word. */
 export function loginShellToolCommand(tool: ClaudeLinuxClipboardTool): string {
   if (!CLAUDE_LINUX_CLIPBOARD_TOOLS.includes(tool)) throw new Error('loginShellToolCommand: not a clipboard program')
-  return `command -v ${tool}; printf '%s\\n' ${TOOL_ANSWER_END}`
+  return `unalias ${tool} 2>/dev/null; unset -f ${tool} 2>/dev/null; command -v ${tool}; printf '%s\\n' ${TOOL_ANSWER_END}`
 }
 
 /** The login shell's output read: `found` when a line before the last
  *  marker is an absolute path whose last part is `tool` (a profile may print
- *  lines of its own first); `miss` when the marker is there without such a
- *  line (`command -v` printed nothing, or named an alias or a function,
- *  which Claude Code cannot run by name); `none` without the marker. */
+ *  lines of its own first). An alias or a function by that name (`alias
+ *  xclip='xclip -selection clipboard'` in .bashrc or .zshrc) does not stand
+ *  in for the program, it hides it from `command -v`: Claude Code starts the
+ *  program by name through PATH, which no alias or function touches. So the
+ *  question clears them first (loginShellToolCommand); a line that still
+ *  names `tool` without being an absolute path (a definition the shell kept,
+ *  such as a readonly function) is `none`, no answer to go by, so the key
+ *  goes. `miss` when the marker is there with neither (`command -v` printed
+ *  nothing; any other line is the profile's own); `none` without the
+ *  marker. */
 export function readLoginShellToolAnswer(tool: ClaudeLinuxClipboardTool, out: string | null): LoginShellToolAnswer {
   if (typeof out !== 'string') return 'none'
   const end = out.lastIndexOf(TOOL_ANSWER_END)
   if (end < 0) return 'none'
+  let named = false
   for (const raw of out.slice(0, end).split('\n')) {
     const line = raw.replace(/\r$/, '')
     // eslint-disable-next-line no-control-regex
     if (line.startsWith('/') && line.endsWith(`/${tool}`) && !/[\0-\x1f\x7f]/.test(line)) return 'found'
+    if (!line.startsWith('/') && line.split(/[^A-Za-z0-9_-]+/).includes(tool)) named = true
   }
-  return 'miss'
+  return named ? 'none' : 'miss'
 }
 
 /** How a question is put to a login shell (a seam for the tests): the

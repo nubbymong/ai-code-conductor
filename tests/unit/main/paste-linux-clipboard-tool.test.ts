@@ -20,6 +20,14 @@
 //    only on the login shell's PATH: not missing. A plain "not found" from
 //    both: missing. No answer from either (a timeout, a cut answer, a shell
 //    that cannot start): not missing, so the key goes, as before the check.
+//  - An alias or a function by the program's name (review round 3, R3-F1:
+//    `alias xclip='xclip -selection clipboard'` is common in dotfiles) hides
+//    the program from `command -v` but not from Claude Code, which runs it
+//    by PATH: each question clears both first (`unalias`, `unset -f`), so
+//    the program's path is read. A line that still names the program
+//    without being its path (a definition that could not be cleared) is no
+//    answer, so the key goes; a line a profile printed that does not name it
+//    is not.
 //  - The check as a press asks it: an answer that is not missing is kept for
 //    the run; a missing one is asked again (the hint says to install, then
 //    press Alt+V); callers asking together share one check.
@@ -44,12 +52,16 @@
 // there; and the paste module did not await the check. Red on 77ace5dd: only
 // a non-interactive `-l -c` was asked, so xclip on the PATH .bashrc or
 // .zshrc builds read as missing; and the question to a shell outside the sh
-// family had no kill after its SIGTERM. Mutants this must catch: the check
+// family had no kill after its SIGTERM. Red on 4fc2ca6a: an alias or a
+// function named xclip made `command -v` print it, read as a plain "not
+// found", so xclip from Homebrew on Linux with that alias in .bashrc got no
+// key and the hint to install it (R3-F1). Mutants this must catch: the check
 // skipped (the key sent anyway); the login shell's answer ignored; no answer
 // read as missing; xclip taken under Wayland; the interactive question
 // skipped, or asked without its own session, or its no answer read as
 // missing; the group killed after the shell ended; the outside shell asked
-// without the grace.
+// without the grace; the alias and function not cleared before `command -v`;
+// a line naming the program but not its path read as a miss.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 
@@ -140,12 +152,25 @@ describe('the login shell\'s answer, read', () => {
     expect(tools.readLoginShellToolAnswer('wl-paste', `/nix/var/nix/profiles/per-user/me/bin/wl-paste\n${END}\n`)).toBe('found')
   })
 
-  it('a plain "not found": the marker and no such line (nothing, another program, an alias or a function by name)', () => {
+  it('a plain "not found": the marker and no such line (nothing, another program\'s path, or only what a profile printed)', () => {
     expect(tools.readLoginShellToolAnswer('xclip', `${END}\n`)).toBe('miss')
     expect(tools.readLoginShellToolAnswer('xclip', `/usr/bin/xclipboard\n${END}\n`)).toBe('miss')
-    expect(tools.readLoginShellToolAnswer('xclip', `xclip\n${END}\n`)).toBe('miss')
-    expect(tools.readLoginShellToolAnswer('xclip', `alias xclip='true'\n${END}\n`)).toBe('miss')
     expect(tools.readLoginShellToolAnswer('xclip', `/usr/bin/wl-paste\n${END}\n`)).toBe('miss')
+    // Ubuntu's /etc/bash.bashrc prints this on stdout in an interactive shell
+    // for a user in the sudo group who has not used sudo yet: a line of the
+    // profile's own, which says nothing of the program.
+    expect(tools.readLoginShellToolAnswer('xclip', `To run a command as administrator (user "root"), use "sudo <command>".\nSee "man sudo_root" for details.\n\n${END}\n`)).toBe('miss')
+    expect(tools.readLoginShellToolAnswer('wl-paste', `welcome back\r\n${END}\r\n`)).toBe('miss')
+  })
+
+  it('a line before the marker that names the program but is not its path (an alias or a function the question could not clear): no answer, so the key goes (R3-F1)', () => {
+    expect(tools.readLoginShellToolAnswer('xclip', `alias xclip='xclip -selection clipboard'\n${END}\n`)).toBe('none')
+    expect(tools.readLoginShellToolAnswer('xclip', `xclip\n${END}\n`)).toBe('none')
+    expect(tools.readLoginShellToolAnswer('xclip', `welcome back\r\nxclip\r\n${END}\r\n`)).toBe('none')
+    expect(tools.readLoginShellToolAnswer('wl-paste', `alias wl-paste='wl-paste --no-newline'\n${END}\n`)).toBe('none')
+    expect(tools.readLoginShellToolAnswer('wl-paste', `wl-paste\n${END}\n`)).toBe('none')
+    // Its path, when there too, is still found.
+    expect(tools.readLoginShellToolAnswer('xclip', `xclip\n/usr/bin/xclip\n${END}\n`)).toBe('found')
   })
 
   it('no answer: no output, or the marker missing (cut short by a timeout or a profile that exits)', () => {
@@ -154,10 +179,58 @@ describe('the login shell\'s answer, read', () => {
     expect(tools.readLoginShellToolAnswer('xclip', '/usr/bin/xclip\n')).toBe('none')
   })
 
-  it('the command is fixed text for one of the two programs, never another word', () => {
-    expect(tools.loginShellToolCommand('xclip')).toBe(`command -v xclip; printf '%s\\n' ${END}`)
-    expect(tools.loginShellToolCommand('wl-paste')).toBe(`command -v wl-paste; printf '%s\\n' ${END}`)
+  it('the command is fixed text for one of the two programs, never another word: any alias and function of that name cleared, then `command -v` (R3-F1)', () => {
+    expect(tools.loginShellToolCommand('xclip')).toBe(`unalias xclip 2>/dev/null; unset -f xclip 2>/dev/null; command -v xclip; printf '%s\\n' ${END}`)
+    expect(tools.loginShellToolCommand('wl-paste')).toBe(`unalias wl-paste 2>/dev/null; unset -f wl-paste 2>/dev/null; command -v wl-paste; printf '%s\\n' ${END}`)
     expect(() => tools.loginShellToolCommand('xclip; true' as never)).toThrow()
+  })
+})
+
+describe('an alias or a function by the program\'s name hides it, not stands in for it (R3-F1)', () => {
+  /** The launcher as a user's .bashrc or .zshrc makes it: xclip on the PATH
+   *  Homebrew's shellenv line builds, and a definition of that name. Until
+   *  the definition is cleared (`unalias xclip` for the alias, `unset -f
+   *  xclip` for the function, ahead of `command -v`), `command -v` prints the
+   *  definition; once cleared, the program's path. */
+  const hidden = (answer: string, cleared: (command: string) => boolean) => {
+    const asked: Array<{ command: string; interactive: boolean }> = []
+    return {
+      asked,
+      s: {
+        runnable: () => false,
+        runnableAsync: async () => false,
+        ask: async (_shell: string, command: string, _env: unknown, interactive?: boolean) => {
+          asked.push({ command, interactive: interactive === true })
+          return cleared(command) ? LINUXBREW : `${answer}\n${END}\n`
+        },
+      },
+    }
+  }
+  const cases: Array<[string, string, (command: string) => boolean]> = [
+    ['an alias', `alias xclip='xclip -selection clipboard'`, (c) => c.startsWith('unalias xclip')],
+    ['a function', 'xclip', (c) => /unset -f xclip 2>\/dev\/null; command -v xclip;/.test(c)],
+  ]
+
+  for (const [what, answer, cleared] of cases) {
+    it(`${what} named xclip in .bashrc or .zshrc over xclip from Homebrew on Linux: found, so not missing and the key goes`, async () => {
+      for (const shell of ['/bin/bash', '/usr/bin/zsh', '/bin/sh']) {
+        const env = x11('/usr/bin:/bin', { SHELL: shell })
+        const t = hidden(answer, cleared)
+        expect(await tools.claudeClipboardToolMissing('linux', env, t.s), `${shell}: not missing`).toBe(false)
+        const u = hidden(answer, cleared)
+        expect(await tools.loginShellToolAnswer('xclip', env, 'linux', u.s), `${shell}: the program found, not only no answer`).toBe('found')
+        expect(u.asked, `${shell}: found by \`-l -c\`, nothing more asked`).toEqual([{ command: XCLIP, interactive: false }])
+      }
+    })
+  }
+
+  it('a definition the question could not clear (a readonly function): no answer, so not missing; nothing more asked', async () => {
+    for (const answer of [`alias xclip='xclip -selection clipboard'`, 'xclip']) {
+      const t = hidden(answer, () => false)
+      expect(await tools.claudeClipboardToolMissing('linux', x11('/usr/bin:/bin'), t.s), answer).toBe(false)
+      expect(await tools.loginShellToolAnswer('xclip', x11('/usr/bin:/bin'), 'linux', hidden(answer, () => false).s), answer).toBe('none')
+      expect(t.asked.map((a) => a.interactive), answer).toEqual([false])
+    }
   })
 })
 
