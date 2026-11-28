@@ -18,13 +18,14 @@
  * section 2); this file names no flag or variable of a CLI.
  *
  * The clipboard stand-in (2.1.3-beta.21; ADR-032; docs/remote/helper-protocol.md
- * section 15): a launch that asks for it (its `clipStandIn`) has the
- * session's `files` exec write the stand-in's two scripts, `xclip` and
- * `wl-paste`, into the session's `bin/` folder there, and that folder goes
- * first on the CLI's PATH: inside the `-c` wrapper, after the rc files, for a
- * login shell of the sh family (CLIP_STAND_IN_WRAPPER), else in front of the
- * host account's PATH. The CLI's own image paste then reads the picture the
- * app sent the session; nothing of this computer is named there.
+ * section 15): a launch on a Linux host that asks for it (its `clipStandIn`;
+ * clipStandInFolder) has the session's `files` exec write the stand-in's two
+ * scripts, `xclip` and `wl-paste`, into the session's `bin/` folder there,
+ * and that folder goes first on the CLI's PATH: inside the `-c` wrapper,
+ * after the rc files, for a login shell of the sh family
+ * (CLIP_STAND_IN_WRAPPER), else in front of the host account's PATH. The
+ * CLI's own image paste then reads the picture the app sent the session;
+ * nothing of this computer is named there.
  *
  * Its own files (2.1.3-beta.18 section 3.2): before the hold, one exec reads
  * the host files the provider names (its hostReads: for Claude Code, the
@@ -170,13 +171,15 @@ const STAND_IN_UNSAFE_RE = /[:'\\\u0000-\u001f\u007f]/
 
 /**
  * The clipboard stand-in's folder for a launch, `<session folder>/bin`, when
- * the launch asks for the stand-in and the folder can go on PATH and into the
- * stand-in's scripts; null otherwise: then no bin/ is written and PATH is the
- * host account's. `sessionFolder`: the session's own folder on the host
- * (RemoteHelperCommands' `folder`).
+ * the launch asks for the stand-in, machine `m` is a Linux host (where Claude
+ * Code reads a picture through `xclip` or `wl-paste`, ADR-032's table; on
+ * macOS it reads the pasteboard, which the stand-in does not serve) and the
+ * folder can go on PATH and into the stand-in's scripts; null otherwise: then
+ * no bin/ is written and PATH is the host account's. `sessionFolder`: the
+ * session's own folder on the host (RemoteHelperCommands' `folder`).
  */
-export function clipStandInFolder(cli: Pick<RemoteLaunch, 'clipStandIn'>, sessionFolder: string | undefined): string | null {
-  if (cli.clipStandIn !== true || typeof sessionFolder !== 'string') return null
+export function clipStandInFolder(m: Pick<RemoteMachineRecord, 'os'>, cli: Pick<RemoteLaunch, 'clipStandIn'>, sessionFolder: string | undefined): string | null {
+  if (cli.clipStandIn !== true || m.os !== 'Linux' || typeof sessionFolder !== 'string') return null
   const folder = sessionFolder.replace(/\/+$/, '')
   if (!folder.startsWith('/') || STAND_IN_UNSAFE_RE.test(folder)) return null
   return `${folder}/bin`
@@ -219,13 +222,14 @@ export interface RemoteLaunchPlan {
  *
  * 2.1.3-beta.21: a launch that asks for the clipboard stand-in
  * (`cli.clipStandIn`, with `sessionFolder` the session's own folder on the
- * host) gets that folder's bin/ first on PATH: inside the `-c` wrapper, after
- * the rc files (CLIP_STAND_IN_WRAPPER, the folder its first argument after
- * the program), for a login shell of the sh family; for one outside it, which
- * runs no rc file here, in front of the host account's PATH.
+ * host), on a Linux host (clipStandInFolder), gets that folder's bin/ first
+ * on PATH: inside the `-c` wrapper, after the rc files (CLIP_STAND_IN_WRAPPER,
+ * the folder its first argument after the program), for a login shell of the
+ * sh family; for one outside it, which runs no rc file here, in front of the
+ * host account's PATH.
  */
 export function remoteLaunchSpec(m: RemoteMachineRecord, cli: Pick<RemoteLaunch, 'program' | 'args' | 'env' | 'clipStandIn'>, terminalEnv: Readonly<Record<string, string>>, remotePath: string | undefined, cols: number, rows: number, sessionFolder?: string): LaunchSpec {
-  const bin = clipStandInFolder(cli, sessionFolder)
+  const bin = clipStandInFolder(m, cli, sessionFolder)
   const argv = !m.shellIsSh
     ? [cli.program, ...cli.args]
     : bin
@@ -374,10 +378,17 @@ export class RemoteDriver implements HelperPtyDriver {
   private readonly signals: RemoteSignals | undefined
   /** Set once the session's files were sent to the host: its end removes the folder. */
   private filesSent = false
-  /** 2.1.3-beta.21: this start wrote the clipboard stand-in's two scripts
-   *  into the session's bin/ folder, so the CLI's image paste there reads the
-   *  picture the app sends (ADR-032). False: it was not asked for, could not
-   *  be written, or the start attached to a kept session and wrote nothing. */
+  /** 2.1.3-beta.21 (ADR-032): true exactly when this driver's `files` exec
+   *  (one per driver, at its launch) answered `clip ok`, so the CLI it
+   *  launched has the session's bin/ first on PATH and its image paste reads
+   *  the picture the app sends. False when the launch did not ask, the host
+   *  is not Linux, or the scripts were not written. It stays as it is while
+   *  the tab re-attaches over its link (bin/ stays with the session's
+   *  folder). A start that attaches to a kept session runs no `files` exec,
+   *  so a driver that launched nothing (a kept tab after the app restarts)
+   *  has false, although that session's CLI may have the stand-in: the host
+   *  is not asked yet. The app route that reads this (plan block 5.1, its
+   *  App bullet) decides readiness on attach too. */
   clipStandInReady = false
   /** The start prepare() made, for HelperPty's hold to take (once). */
   private prepared: { record: HolderRecord } | { error: Error } | undefined
@@ -639,7 +650,7 @@ export class RemoteDriver implements HelperPtyDriver {
   private async writeFiles(sid: string, record: HolderRecord, launch: RemoteLaunch): Promise<void> {
     const host = this.o.machine.host
     let why: string | null = null
-    const standIn = clipStandInFolder(launch, this.current.plan?.helper.folder) !== null
+    const standIn = clipStandInFolder(this.o.machine, launch, this.current.plan?.helper.folder) !== null
     try {
       const { layout, stdin } = sessionFilesInput(launch.files)
       const nonce = newNonce()

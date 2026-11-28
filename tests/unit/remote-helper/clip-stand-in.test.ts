@@ -8,12 +8,14 @@
  *   both shapes: inside the `-c` wrapper text, after the rc files, for a login
  *   shell of the sh family (the folder an argument, never in the text), and in
  *   front of the host account's PATH for one outside it, where no rc file
- *   runs. A launch that does not ask, or a folder that cannot go on PATH or
- *   into the scripts, changes nothing;
+ *   runs. A launch that does not ask, a host that is not Linux, or a folder
+ *   that cannot go on PATH or into the scripts, changes nothing;
  * - the Claude package's session launch asks; its sign-in launch does not;
  * - the `files` exec carries the helper's folder and `clip` (or `none`), and
  *   its script writes the two scripts 0700 into bin/; a stand-in it could not
- *   write fails nothing, and the log says why.
+ *   write fails nothing, and the log says why;
+ * - a launch that changes whether it asks once the host is read fails the
+ *   start before anything is held or written.
  *
  * Mutants (5.3): the bin folder after the user's PATH, in either shape; a
  * script written 0600. The real sh runs of the same script and wrapper are
@@ -90,16 +92,25 @@ describe('remoteLaunchSpec: the stand-in\'s bin/ first on PATH, in both shapes',
   it('a folder that cannot go on PATH or into the scripts gets no stand-in: a colon, a single quote, a backslash, a control character, or not absolute', () => {
     for (const home of ['/home/a:b', "/home/o'brien", '/home/back\\slash', '/home/new\nline', '/home/tab\there', '/home/del\u007f']) {
       const folder = `${home}/.aicc/${MACHINE.did}/sessions/${SID}`
-      expect(clipStandInFolder({ clipStandIn: true }, folder), JSON.stringify(home)).toBeNull()
+      expect(clipStandInFolder(MACHINE, { clipStandIn: true }, folder), JSON.stringify(home)).toBeNull()
       const m = { ...MACHINE, home }
       expect(remoteLaunchSpec(m, { ...CLI, clipStandIn: true }, TERMINAL, '~', 100, 30, folder).argv[3]).toBe(PLAIN_WRAPPER)
       expect(remoteLaunchSpec({ ...FISH, home }, { ...CLI, clipStandIn: true }, TERMINAL, '~', 100, 30, folder).env.PATH).toBe(MACHINE.path)
     }
-    expect(clipStandInFolder({ clipStandIn: true }, 'home/nick/x')).toBeNull()
-    expect(clipStandInFolder({ clipStandIn: true }, '')).toBeNull()
+    expect(clipStandInFolder(MACHINE, { clipStandIn: true }, 'home/nick/x')).toBeNull()
+    expect(clipStandInFolder(MACHINE, { clipStandIn: true }, '')).toBeNull()
     // A space or another plain character is fine, and a trailing slash goes.
-    expect(clipStandInFolder({ clipStandIn: true }, '/home/my name/s/')).toBe('/home/my name/s/bin')
-    expect(clipStandInFolder({ clipStandIn: true }, '/home/jé/s')).toBe('/home/jé/s/bin')
+    expect(clipStandInFolder(MACHINE, { clipStandIn: true }, '/home/my name/s/')).toBe('/home/my name/s/bin')
+    expect(clipStandInFolder(MACHINE, { clipStandIn: true }, '/home/jé/s')).toBe('/home/jé/s/bin')
+  })
+
+  it('a host that is not Linux gets no stand-in, in either shape: the plain wrapper and the host account\'s PATH (Claude Code there reads the pasteboard, not xclip)', () => {
+    for (const system of ['Darwin', 'FreeBSD', 'linux', '']) {
+      expect(clipStandInFolder({ os: system }, { clipStandIn: true }, FOLDER), system).toBeNull()
+      expect(remoteLaunchSpec({ ...MACHINE, os: system }, { ...CLI, clipStandIn: true }, TERMINAL, '~', 100, 30, FOLDER).argv, system).toEqual(['/bin/bash', '-il', '-c', PLAIN_WRAPPER, CLI.program, '--model', 'opus'])
+      expect(remoteLaunchSpec({ ...FISH, os: system }, { ...CLI, clipStandIn: true }, TERMINAL, '~', 100, 30, FOLDER).env.PATH, system).toBe(MACHINE.path)
+    }
+    expect(clipStandInFolder({ os: 'Linux' }, { clipStandIn: true }, FOLDER)).toBe(BIN)
   })
 })
 
@@ -178,12 +189,13 @@ function plugIn(machine: RemoteMachineRecord): void {
   })
 }
 
-function answering(holder: FakeHolder, files: (c: ExecCall) => FakeAnswer): void {
+/** The host for `holder`: `files` answers the files exec, `reads` the reads exec's lines (none read by default). */
+function answering(holder: FakeHolder, files: (c: ExecCall) => FakeAnswer, reads: Record<string, string> = {}): void {
   const record = (): HolderRecord => ({ ...holder.record(), endpoint: `/tmp/aicc-1000/${holder.sid}-0123456789abcdef.sock` })
   ssh.host = {
     answer: (c) => {
       const n = c.values[0]
-      if (c.script === 'reads') return { stdout: result(n, {}) }
+      if (c.script === 'reads') return { stdout: result(n, reads) }
       if (c.script === 'field') return { stdout: `AICC-HASH ${n} ok ${SHA}\n` }
       if (c.script === 'hold') return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify(record())}\n` }
       if (c.script === 'files') return files(c)
@@ -203,7 +215,11 @@ async function until(what: string, ok: () => boolean, ms = 5000): Promise<void> 
 }
 
 function claude(asks = true): SessionProvider {
-  const remoteLaunch = asks ? claudeRemoteLaunch : { ...claudeRemoteLaunch, launch: (...a: Parameters<typeof claudeRemoteLaunch.launch>) => ({ ...claudeRemoteLaunch.launch(...a), clipStandIn: false }) }
+  return provider(asks ? claudeRemoteLaunch : { ...claudeRemoteLaunch, launch: (...a: Parameters<typeof claudeRemoteLaunch.launch>) => ({ ...claudeRemoteLaunch.launch(...a), clipStandIn: false }) })
+}
+
+/** The default provider with `remoteLaunch` as its remote launch. */
+function provider(remoteLaunch: typeof claudeRemoteLaunch): SessionProvider {
   return {
     id: DEFAULT_PROVIDER_ID, displayName: 'The default provider', resolveBinary: () => null, buildSpawnCommand: () => ({ cmd: '', args: [], env: {} }),
     detectUiRunning: () => false, exitKeys: [], ingestSessionTelemetry: () => ({ stop() {} }), listHistorySessions: async () => [],
@@ -276,6 +292,39 @@ describe('a helper tab\'s start: the files exec carries the stand-in, and the CL
     expect((holder.launch as { argv: string[] }).argv.slice(0, 5)).toEqual(['/bin/bash', '-il', '-c', PLAIN_WRAPPER, MACHINE.claudePath])
     expect(pty.clipStandInReady).toBe(false)
     expect(logs.filter((l) => l.includes('clipboard stand-in'))).toEqual([])
+    pty.kill()
+  })
+
+  it('a host that is not Linux: the files exec gets none, the plain wrapper, and no stand-in even when the host answers clip ok', async () => {
+    const mac: RemoteMachineRecord = { ...MACHINE, os: 'Darwin' }
+    const { pty, holder, call } = await start('clip-mac', mac, (c) => ({ stdout: result(c.values[0], { clip: 'ok' }) }))
+    expect(call.values.slice(5)).toEqual([MACHINE.helper.folder, 'none'])
+    expect((holder.launch as { argv: string[] }).argv.slice(0, 5)).toEqual(['/bin/bash', '-il', '-c', PLAIN_WRAPPER, MACHINE.claudePath])
+    expect((holder.launch as { env: Record<string, string> }).env.PATH).toBe(MACHINE.path)
+    expect(pty.clipStandInReady).toBe(false)
+    expect(logs.filter((l) => l.includes('clipboard stand-in'))).toEqual([])
+    pty.kill()
+  })
+
+  it('a launch that changes whether it asks once the host is read: the start fails, saying so, and no files exec or holder runs', async () => {
+    // Asks while nothing is read (the plan's first launch, which the spec's
+    // PATH was built from), and not once a read has content.
+    const flips = { ...claudeRemoteLaunch, launch: (...a: Parameters<typeof claudeRemoteLaunch.launch>) => ({ ...claudeRemoteLaunch.launch(...a), clipStandIn: a[3].every((r) => r.content === null) }) }
+    registerProvider(provider(flips))
+    plugIn(MACHINE)
+    const id = 'clip-flip'
+    const holder = new FakeHolder(remoteSessionId(id), id, store)
+    answering(holder, (c) => ({ stdout: result(c.values[0], { clip: 'ok' }) }), { f0: 'ok 7b7d' })
+    const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30) as unknown as RemoteHelperPty
+    let shown = ''
+    pty.onData((d) => { shown += d })
+    await until('the note', () => shown.includes('could not start through the session helper'))
+    expect(ssh.calls.map((c) => c.script)).toContain('reads')
+    expect(shown).toContain('its provider\'s launch changed whether it reads pictures through the clipboard stand-in with what was read on the host')
+    expect(ssh.calls.map((c) => c.script)).not.toContain('files')
+    expect(ssh.calls.map((c) => c.script)).not.toContain('hold')
+    expect(holder.launch).toBeNull()
+    expect(pty.clipStandInReady).toBe(false)
     pty.kill()
   })
 })
