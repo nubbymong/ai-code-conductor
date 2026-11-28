@@ -33,16 +33,31 @@ function rendererPlatform(): string | undefined {
   return typeof window !== 'undefined' ? (window as { electronPlatform?: string }).electronPlatform : undefined
 }
 
+/** Check whether a KeyboardEvent matches a shortcut string (by e.key). */
+export function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
+  return matchShortcut(e, shortcut, false)
+}
+
 /**
- * Check whether a KeyboardEvent matches a shortcut string.
+ * Check whether a KeyboardEvent matches the image paste shortcut (settings'
+ * pasteImage, Alt+V by default).
  *
- * On macOS a shortcut with Alt matches its letter or digit by the physical
- * key (e.code) as well (ADR-032; plan 2.1.3-beta.21 phase 3, 3.1): Option
- * with a letter types a character there, so Option+V's e.key is '√' (US
- * layout) and an e.key match never saw the image paste key. Every other OS
- * matches by e.key, as before. `platform` defaults to the renderer's own.
+ * On macOS, when the shortcut has Alt, its letter or digit also matches by
+ * the physical key (e.code) (ADR-032; plan 2.1.3-beta.21 phase 3, 3.1):
+ * Option with a letter types a character there, so Option+V's e.key is '√'
+ * (US layout) and an e.key match never saw the image paste key. Every other
+ * OS matches by e.key, as before. Only this shortcut: the other shortcuts
+ * with Alt (glyph capture, repaint, any a user sets) keep matchesShortcut's
+ * e.key, so on a Mac they still do not fire from Option, as in beta.20
+ * (review round 1, N1). `platform` defaults to the renderer's own.
  */
-export function matchesShortcut(e: KeyboardEvent, shortcut: string, platform: string | undefined = rendererPlatform()): boolean {
+export function matchesImagePasteShortcut(e: KeyboardEvent, shortcut: string, platform: string | undefined = rendererPlatform()): boolean {
+  return matchShortcut(e, shortcut, platform === 'darwin')
+}
+
+/** The match itself: by e.key, and with `altByPhysicalKey` a shortcut with
+ *  Alt also by its letter's or digit's physical key. */
+function matchShortcut(e: KeyboardEvent, shortcut: string, altByPhysicalKey: boolean): boolean {
   if (!shortcut) return false
   const parts = shortcut.split('+')
   const key = parts[parts.length - 1]
@@ -60,7 +75,7 @@ export function matchesShortcut(e: KeyboardEvent, shortcut: string, platform: st
   else if (eventKey.length === 1) eventKey = eventKey.toUpperCase()
 
   if (eventKey === key) return true
-  if (platform === 'darwin' && needsAlt) {
+  if (altByPhysicalKey && needsAlt) {
     const code = physicalCodeOf(key)
     return code !== null && e.code === code
   }
