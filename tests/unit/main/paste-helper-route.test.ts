@@ -258,9 +258,10 @@ describe('not available yet, never a path', () => {
       expect(await snap(), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
       expect(written, p).toHaveLength(1)
       // Review 2, R2-1: the platform check comes after the tab and the
-      // clipboard reads, so Ctrl+V or Alt+V with nothing on the clipboard is
-      // the renderer's quiet nothing-to-paste, Alt+V with a copied file over
-      // the cap is too large, and a tab not open is gone.
+      // clipboard reads, so Ctrl+V with nothing on the clipboard is the
+      // renderer's quiet nothing-to-paste, Alt+V with nothing there is no
+      // picture (its own hint), Alt+V with a copied file over the cap is too
+      // large, and a tab not open is gone.
       onClipboard = null
       copied = { error: 'no-image' }
       expect(await press('text', true), p).toEqual({ outcome: 'not-pasted', reason: 'no-picture', note: PASTE_NOTES['no-picture'] })
