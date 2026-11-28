@@ -73,12 +73,11 @@ function record(extra) {
   }
 }
 
+// No process.exit after a write: a write to a pipe may still be pending, so
+// the exit code is set and the script ends by itself.
 if (args.length === 1 && args[0] === '--version') {
   process.stdout.write(`codex-cli ${VERSION}\n`);
-  process.exit(0);
-}
-
-if (args.length === 3 && args[0] === 'debug' && args[1] === 'models' && args[2] === '--bundled') {
+} else if (args.length === 3 && args[0] === 'debug' && args[1] === 'models' && args[2] === '--bundled') {
   process.stdout.write(`${JSON.stringify({
     models: [
       { slug: 'gpt-pv-1', display_name: 'PV One', visibility: 'list', priority: 1, supported_reasoning_levels: [{ effort: 'low' }, { effort: 'medium' }, { effort: 'high' }] },
@@ -86,10 +85,7 @@ if (args.length === 3 && args[0] === 'debug' && args[1] === 'models' && args[2] 
       { slug: 'gpt-pv-2', display_name: 'PV Two', visibility: 'list', priority: 2 },
     ],
   }, null, 2)}\n`);
-  process.exit(0);
-}
-
-if (args[0] === 'exec' && args.includes('--json') && args[args.length - 1] === '-') {
+} else if (args[0] === 'exec' && args.includes('--json') && args[args.length - 1] === '-') {
   const chunks = [];
   process.stdin.on('data', (c) => chunks.push(c));
   process.stdin.on('end', () => {
@@ -103,11 +99,9 @@ if (args[0] === 'exec' && args.includes('--json') && args[args.length - 1] === '
       { type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: `PV stand-in review of ${prompt.length} bytes. First change line: ${first}` } },
       { type: 'turn.completed', usage: { input_tokens: prompt.length, cached_input_tokens: 0, output_tokens: 9 } },
     ];
-    process.stdout.write(events.map((e) => JSON.stringify(e)).join('\n') + '\n');
-    process.exit(0);
+    process.stdout.write(`${events.map((e) => JSON.stringify(e)).join('\n')}\n`);
   });
-  return;
+} else {
+  process.stderr.write(`pv-codex-stand-in: a command line it does not answer: ${JSON.stringify(args)}\n`);
+  process.exitCode = 2;
 }
-
-process.stderr.write(`pv-codex-stand-in: a command line it does not answer: ${JSON.stringify(args)}\n`);
-process.exit(2);
