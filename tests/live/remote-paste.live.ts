@@ -291,6 +291,8 @@ describe('a picture into a Claude Code tab through the session helper, by the CL
     const env = sshRun('for p in $(pgrep -x claude); do tr "\\0" "\\n" < /proc/$p/environ 2>/dev/null | grep "^PATH="; done')
     note('cli-path', env.out.trim().split('\n'))
     expect(env.out.split('\n').some((l) => l.startsWith(`PATH=${folder}/bin:`)), env.out).toBe(true)
+    // A reading for a cause: the clipboard command lines the CLI's binary carries (probe PR1 records the exact ones).
+    note('cli-clipboard-strings', sshRun(`grep -a -o -E '(xclip|wl-paste) [-a-zA-Z0-9 /_.]{0,100}' ${q(claude)} | sort -u | head -n 40`).out.split('\n').filter(Boolean))
     // The session's own xclip is the stand-in: no picture yet, so its list is empty and it exits 1.
     const empty = sshRun(`${q(`${folder}/bin/xclip`)} -selection clipboard -o -t TARGETS; echo "exit=$?"`)
     expect(empty.out.trim()).toBe('exit=1')
