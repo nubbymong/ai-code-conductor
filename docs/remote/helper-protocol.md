@@ -1890,16 +1890,21 @@ checked by their bytes first; with no awk, no `bin/` is written either. The
 which fails nothing: the session starts, and the tab's image paste is not
 available. The launch then puts
 `sessions/<sid>/bin` first on `PATH`: core's `remoteLaunchSpec`
-(`src/main/remote-helper/session.ts:177-188`) does it inside the `-c` wrapper
-text, after the rc files, when the Claude package's remote launch asks for the
-stand-in (a `RemoteLaunch` field, not a variable, since a provider's
-environment may not set `PATH`, `:183-186`); for a login shell outside the sh
-family (no wrapper, `:178`) the folder goes in front of the host account's
-`PATH` (`:139`), where no rc file runs. The wrapper text is
+(`src/main/remote-helper/session.ts`, through `clipStandInFolder`) does it
+inside the `-c` wrapper text, after the rc files, when the Claude package's
+remote launch asks for the stand-in (`clipStandIn`, a `RemoteLaunch` field,
+not a variable: `remoteLaunchSpec`'s check of the provider's environment
+refuses a variable the launch sets itself, `PATH` among them); for a login
+shell outside the sh family (no wrapper: neither `PLAIN_WRAPPER` nor the
+stand-in's) the folder goes in front of the host account's `PATH`
+(`hostAccountEnv`), where no rc file runs. The wrapper text
+(`CLIP_STAND_IN_WRAPPER`) is
 `PATH="$1${PATH:+:$PATH}"; export PATH; shift; exec "$0" "$@"`, the folder
 the first argument after the program, so no host path is in the text and an
 empty `PATH` gets no trailing colon. A folder that holds a colon, a single
-quote, a backslash or a control character gets no stand-in.
+quote, a backslash or a control character gets no stand-in, and neither does
+a host that is not Linux (the machine's recorded system; Claude Code on macOS
+reads the pasteboard, not `xclip`): its `files` exec is asked for `none`.
 
 ```
 aicc-helper clip --store <folder> --session <sid> --as xclip|wl-paste [--real <path>] -- [args...]
@@ -1941,7 +1946,8 @@ file, and never touches a display or the host's clipboard itself; it starts no
 process but the real tool, writes nothing and opens no connection. It exits 2
 on a command line it does not take, a `--real` that is not absolute or lies
 inside the session's `bin/` (by its names, or by its real path) included. On
-Windows it exits 1. `bin/` goes with the session folder at the session's end.
+Windows a command line it takes exits 1; one it does not take exits 2.
+`bin/` goes with the session folder at the session's end.
 Code: `helper/src/clip.rs`, its tests `helper/tests/clip.rs`.
 
 **Change.** The `hold` and `list` command lines and their exit codes, the

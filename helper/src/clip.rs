@@ -62,7 +62,7 @@
 //! never reads another session's folder or any other file, and never touches a
 //! display or the host's clipboard itself; it starts no process but the real
 //! tool, writes nothing and opens no connection. On Windows it does not run:
-//! it exits 1.
+//! a command line it takes exits 1; one it does not take exits 2.
 
 use crate::hello;
 use std::ffi::OsString;
