@@ -197,8 +197,53 @@ describe('ci.yml: the Snap e2e job only reads, runs Playwright once per test, an
   })
 
   it('has a job timeout, which no step raises', () => {
-    expect(job['timeout-minutes']).toBe(45)
+    // Since 2.1.3-beta.21 (plan phase 2, 2.3) set per dispatch from the press
+    // count times each test's bound plus the build: 45 for parts one and
+    // two, 70 with the paste probes, 95 with the paste gate.
+    const minutes = (paste: string) => Number(evalValue(job['timeout-minutes'], dispatch({ snap_e2e: true, snap_e2e_paste: paste })))
+    expect(minutes('')).toBe(45)
+    expect(minutes('probe')).toBe(70)
+    expect(minutes('gate')).toBe(95)
     for (const s of job.steps) expect((s as { 'timeout-minutes'?: unknown })['timeout-minutes'], String(s.name)).toBeUndefined()
+  })
+})
+
+// Plan 2.1.3-beta.21 phase 2 (ADR-032, 2.2 and 2.3): the clipboard image
+// paste's part of the Snap spec, named by one string input; with it, Claude
+// Code 2.1.332 is installed from its platform package with scripts off into a
+// prefix of its own, and the spec is handed the part and that folder.
+describe('ci.yml: the Snap e2e dispatch\'s clipboard paste part', () => {
+  it('is named by one string input that is empty unless set, and starts nothing on its own', () => {
+    const input = ci.on.workflow_dispatch.inputs.snap_e2e_paste
+    expect(input, 'no snap_e2e_paste dispatch input').toBeDefined()
+    expect(input.type).toBe('string')
+    expect(input.default).toBe('')
+    expect(input.required).toBe(false)
+    expect(runs(dispatch({ snap_e2e_paste: 'gate' }))).toBe(false)
+    expect(runs(dispatch({ snap_e2e: true, snap_e2e_paste: 'probe' }))).toBe(true)
+  })
+
+  it('installs Claude Code 2.1.332 from its platform package, scripts off, only when the part is named, before Playwright runs', () => {
+    const install = step('Install Claude Code 2.1.332 into its own prefix')
+    expect(install.shell).toBe('bash')
+    expect(String(install.run).trim()).toBe('npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"')
+    expect(install.env?.CLAUDE_VERSION).toBe('2.1.332')
+    for (const name of ['Resolve this runner\'s Claude Code package', 'Install Claude Code 2.1.332 into its own prefix', 'Locate the installed Claude Code']) {
+      const s = step(name)
+      expect(evalIf(s.if, dispatch({ snap_e2e: true, snap_e2e_paste: '' })), name).toBe(false)
+      expect(evalIf(s.if, dispatch({ snap_e2e: true, snap_e2e_paste: 'gate' })), name).toBe(true)
+      expect(names().indexOf(name)).toBeLessThan(names().indexOf('Run the Snap end-to-end check'))
+    }
+    expect(step('Resolve this runner\'s Claude Code package').run).toBe('node tests/integration/claude-conformance-ci.mjs package')
+    expect(String(step('Locate the installed Claude Code').run).trim()).toBe('node tests/integration/claude-conformance-ci.mjs bin "$PREFIX" "$CLAUDE_PACKAGE"')
+  })
+
+  it('hands the spec the part and the Claude Code folder, and the spec reads both', () => {
+    const run = step('Run the Snap end-to-end check')
+    expect(run.env?.SNAP_E2E_PASTE).toBe('${{ inputs.snap_e2e_paste }}')
+    expect(run.env?.SNAP_E2E_CLAUDE).toBe('${{ steps.claudebin.outputs.dir }}')
+    expect(read(SPEC)).toContain('SNAP_E2E_PASTE')
+    expect(read(SPEC)).toContain('SNAP_E2E_CLAUDE')
   })
 })
 
