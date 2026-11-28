@@ -58,6 +58,30 @@ function constrainToMaxDim(img: ReturnType<typeof nativeImage.createFromBuffer>,
 const SCREENSHOT_MAX_DIM = 1920
 const SCREENSHOT_JPEG_QUALITY = 85
 
+/** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.5): each saved Snap picture's
+ *  bitmap (at the same 1920 cap as its JPEG), kept by its file until the
+ *  paste module takes it, so the clipboard gets the picture itself, not its
+ *  JPEG decoded again. The last few only. */
+const keptPictures = new Map<string, Electron.NativeImage>()
+const KEPT_PICTURES_MAX = 4
+
+function keepPicture(file: string, picture: Electron.NativeImage): void {
+  keptPictures.set(file, picture)
+  while (keptPictures.size > KEPT_PICTURES_MAX) {
+    const oldest = keptPictures.keys().next().value
+    if (oldest === undefined) break
+    keptPictures.delete(oldest)
+  }
+}
+
+/** The picture saved as `file`, once (the paste module's), or null when it
+ *  is not kept any more. */
+export function takeSnapPicture(file: string): Electron.NativeImage | null {
+  const picture = keptPictures.get(file) ?? null
+  keptPictures.delete(file)
+  return picture
+}
+
 /**
  * The previous Snap's capture of a rectangle region of the screen: Snap on
  * macOS and Linux; on Windows a setting away (the new Snap is the default)
@@ -200,7 +224,9 @@ export function saveSnapPicture(picture: { width: number; height: number; bgra: 
   const filePath = uniquePath(generateFilename())
   const img = nativeImage.createFromBitmap(picture.bgra, { width: picture.width, height: picture.height })
   if (img.isEmpty()) throw new Error('an empty picture')
-  writeFileSync(filePath, constrainToMaxDim(img, SCREENSHOT_MAX_DIM).toJPEG(SCREENSHOT_JPEG_QUALITY))
+  const constrained = constrainToMaxDim(img, SCREENSHOT_MAX_DIM)
+  writeFileSync(filePath, constrained.toJPEG(SCREENSHOT_JPEG_QUALITY))
+  keepPicture(filePath, constrained)
   return filePath
 }
 
@@ -308,6 +334,7 @@ function previousSnapPress(library: Screenshots): Promise<string | null> {
         // captures land under Claude's image-size budget every time.
         const constrained = constrainToMaxDim(img, SCREENSHOT_MAX_DIM)
         writeFileSync(filePath, constrained.toJPEG(SCREENSHOT_JPEG_QUALITY))
+        keepPicture(filePath, constrained)
         finish(filePath)
       } catch (err) {
         console.error('[screenshot] save failed:', err)
@@ -356,6 +383,7 @@ export async function captureWindow(sourceId: string): Promise<string | null> {
     // Cap longest edge, preserving aspect ratio
     const constrained = constrainToMaxDim(source.thumbnail, SCREENSHOT_MAX_DIM)
     writeFileSync(filePath, constrained.toJPEG(SCREENSHOT_JPEG_QUALITY))
+    keepPicture(filePath, constrained)
     return filePath
   } catch (err) {
     console.error('[screenshot] captureWindow error:', err)

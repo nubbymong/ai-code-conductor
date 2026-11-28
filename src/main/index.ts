@@ -15,6 +15,7 @@ import { submitRetry, submitMarker } from './session-input'
 import { registerResumeHandlers } from './ipc/resume-handlers'
 import { registerCliHandlers } from './ipc/cli-handlers'
 import { registerClipboardHandlers } from './ipc/clipboard-handlers'
+import { registerPasteHandlers } from './ipc/paste-handlers'
 import { buildAndSetAppMenu } from './app-menu'
 import { registerLogs2Handlers, registerLogsWipeHandlers } from './ipc/logs2-handlers'
 import { initIndexingGaps, flushIndexingGaps } from './logging/indexing-gaps'
@@ -281,6 +282,8 @@ function registerMainWindowIpc(): void {
   })
 
   registerClipboardHandlers()
+  // ADR-032: the clipboard image paste's one channel (paste:imageKey).
+  registerPasteHandlers(() => mainWindow)
 
   // Encrypted credential storage using safeStorage. save/delete are keyed to the
   // app's own id shape (credentials-handlers.ts): a renderer can address the

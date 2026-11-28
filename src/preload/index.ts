@@ -5,6 +5,7 @@ import { isIpcStreamEnd, IPC_STREAM_END_WAIT_MS } from '../shared/ipc-stream'
 import type { HookEvent, HooksGatewayStatus } from '../shared/hook-types'
 import type { StatuslineData, SubmitTextResult, PromptButtonResult, AskConductorNotice, CanvasMarkerUndelivered, ClaudeMarkerAsk, ClaudeMarkerAnswer, CanvasSessionGuidance, AccountLogFolders, AccountLogFolderKind, AccountLogFolderOpenResult } from '../shared/types'
 import type { WebviewNavState } from '../shared/browser-url'
+import type { PasteKeyPress, PasteKeyResult, SnapPasteAnswer, SnapPathRouteAnswer } from '../shared/clipboard-paste'
 import type { AccountPaneStateView, CodexWebSessionView, CodexWebSignInState } from '../shared/account-web-session'
 import type { ModelRegistry } from '../shared/model-registry'
 import type { SentinelStateSnapshot } from '../shared/sentinel-types'
@@ -182,6 +183,12 @@ export interface ElectronAPI {
     saveImage: () => Promise<{ path: string; posixShell?: 'sh' | 'other' } | { error: 'no-image' | 'too-large' }>
     /** Focus-independent clipboard text read, retried for Windows delayed-render (#145). */
     readText: () => Promise<string>
+  }
+  /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.4): the image paste key (or
+   *  the text paste chord with no text on the clipboard) was pressed in a
+   *  session. No clipboard content and no path go to main. */
+  paste: {
+    imageKey: (press: PasteKeyPress) => Promise<PasteKeyResult>
   }
   /** Input diagnostics (#145), gated on CCC_INPUT_DEBUG=1 in the main process. */
   inputDebug: {
@@ -633,9 +640,13 @@ export interface ElectronAPI {
     captureGlyph: (payload: unknown) => Promise<{ ok: boolean; jsonPath?: string; imagePath?: string; error?: string }>
   }
   screenshot: {
-    /** The picture's file; a press that captured nothing and says why (no desktop to capture); or null. */
-    captureRectangle: () => Promise<string | { notCaptured: 'no-desktop' } | null>
-    captureWindow: (sourceId: string) => Promise<string | null>
+    /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.5): the capture names the
+     *  session it is for. Its answer: what the paste of the picture did
+     *  (`snapped`, no path); a press that captured nothing and says why (no
+     *  desktop to capture); null; or, on the path route behind the test
+     *  switch only, the picture's file and the session's image line. */
+    captureRectangle: (sessionId: string) => Promise<SnapPasteAnswer | SnapPathRouteAnswer | { notCaptured: 'no-desktop' } | null>
+    captureWindow: (sourceId: string, sessionId: string) => Promise<SnapPasteAnswer | SnapPathRouteAnswer | null>
     listWindows: () => Promise<Array<{ id: string; name: string; thumbnail: string }>>
     cleanup: (maxAgeDays: number) => Promise<number>
   }
@@ -1090,6 +1101,9 @@ const electronAPI: ElectronAPI = {
     saveImage: () => ipcRenderer.invoke(IPC.CLIPBOARD_SAVE_IMAGE),
     readText: () => ipcRenderer.invoke(IPC.CLIPBOARD_READ_TEXT)
   },
+  paste: {
+    imageKey: (press: PasteKeyPress) => ipcRenderer.invoke(IPC.PASTE_IMAGE_KEY, press),
+  },
   inputDebug: {
     enabled: () => ipcRenderer.invoke(IPC.DEBUG_INPUT_ENABLED),
     log: (line: string) => ipcRenderer.send(IPC.DEBUG_LOG_INPUT, line)
@@ -1364,8 +1378,8 @@ const electronAPI: ElectronAPI = {
     captureGlyph: (payload: unknown) => ipcRenderer.invoke(IPC.DIAGNOSTICS_CAPTURE_GLYPH, payload),
   },
   screenshot: {
-    captureRectangle: () => ipcRenderer.invoke(IPC.SCREENSHOT_CAPTURE_RECTANGLE),
-    captureWindow: (sourceId: string) => ipcRenderer.invoke(IPC.SCREENSHOT_CAPTURE_WINDOW, sourceId),
+    captureRectangle: (sessionId: string) => ipcRenderer.invoke(IPC.SCREENSHOT_CAPTURE_RECTANGLE, sessionId),
+    captureWindow: (sourceId: string, sessionId: string) => ipcRenderer.invoke(IPC.SCREENSHOT_CAPTURE_WINDOW, sourceId, sessionId),
     listWindows: () => ipcRenderer.invoke(IPC.SCREENSHOT_LIST_WINDOWS),
     cleanup: (maxAgeDays: number) => ipcRenderer.invoke(IPC.SCREENSHOT_CLEANUP, maxAgeDays)
   },

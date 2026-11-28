@@ -202,7 +202,9 @@ export function resolveClaudeMarkerAnswer(raw: unknown): void {
   pending.delete(answer.requestId)
   clearTimeout(waiting.timer)
   const reason = typeof answer.reason === 'string' ? answer.reason.slice(0, 200) : undefined
-  waiting.resolve({ requestId: answer.requestId, ok: answer.ok === true, ...(reason !== undefined ? { reason } : {}) })
+  // ADR-032: a 'read' answers a placeholder count, a small whole number only.
+  const images = typeof answer.images === 'number' && Number.isInteger(answer.images) && answer.images >= 0 && answer.images < 1000 ? answer.images : undefined
+  waiting.resolve({ requestId: answer.requestId, ok: answer.ok === true, ...(reason !== undefined ? { reason } : {}), ...(images !== undefined ? { images } : {}) })
 }
 
 export interface ClaudeMarkerTypingDeps {

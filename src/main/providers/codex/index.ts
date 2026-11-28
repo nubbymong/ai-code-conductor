@@ -10,7 +10,8 @@ import { CODEX_ENABLEMENT } from './enablement'
 import { CODEX_LOCAL_LAUNCH } from './local-launch'
 import { CODEX_LIFECYCLE } from './lifecycle'
 import { resolveCodexBinary, resolveCodexBinaryAsync, buildCodexSpawn, codexHookDataDir, sweepStaleCodexPickFolders, warmNodeExeOnPosix } from './spawn'
-import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage } from './session-screen'
+import { openCodexScreen, feedCodexScreen, resizeCodexScreen, closeCodexScreen, hasCodexScreen, submitCodexText, submitCodexImage, submitCodexClipboard } from './session-screen'
+import { CODEX_CLIPBOARD_PASTE } from './clipboard-paste'
 import { codexDoorMembers } from './run-screen-doors'
 import type { CodexScreenPrimitives } from './run-screen-doors'
 import { detectCodexUi } from './ui-detection'
@@ -145,6 +146,8 @@ const CODEX_SCREEN_PRIMITIVES: CodexScreenPrimitives = {
   has: (sessionId) => hasCodexScreen(sessionId),
   submit: (sessionId, text, opts) => submitCodexText(sessionId, text, opts),
   submitImage: (sessionId, imagePath, sentence, opts) => submitCodexImage(sessionId, imagePath, sentence, opts),
+  // ADR-032 (plan 2.1.3-beta.21 phase 2): Codex's own clipboard image paste.
+  submitClipboard: (sessionId, key, sentence, opts) => submitCodexClipboard(sessionId, key, sentence, opts),
 }
 const CODEX_RUN_SCREEN: SessionRunScreen = {
   open: (sessionId, opts) => openCodexScreen(sessionId, opts),
@@ -227,6 +230,8 @@ export class CodexProvider implements SessionProvider {
   }
 
   readonly runScreen: SessionRunScreen = CODEX_RUN_SCREEN
+  /** ADR-032 (row 14): Codex's own clipboard image paste, per OS (clipboard-paste.ts). */
+  readonly clipboardPaste = CODEX_CLIPBOARD_PASTE
 
   /** 2.1.3-beta.19 section 2: its CLI as the terminal's own program (local-launch.ts). */
   readonly localLaunch: ProviderLocalLaunch = CODEX_LOCAL_LAUNCH

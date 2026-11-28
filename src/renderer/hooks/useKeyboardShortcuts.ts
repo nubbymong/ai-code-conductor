@@ -5,15 +5,11 @@ import { requestCloseSession } from '../stores/sshCloseStore'
 import { matchesShortcut, DEFAULT_SHORTCUTS } from '../utils/shortcuts'
 import { captureGlyphDiagnostic } from '../utils/glyphDiagnostic'
 import { requestResync } from '../components/terminal/repaintRegistry'
-import { sendImageToSession, sendImageToCodexSession, typeImagePathIntoShell } from '../utils/imageTransfer'
-import { CODEX_IMAGE_LINE } from '../lib/codexComposer'
-import { usePasteHintStore } from '../stores/pasteHintStore'
+import { pasteImageFromOutside } from '../utils/imagePaste'
 import { useAppMetaStore } from '../stores/appMetaStore'
 import { deriveOnboarding } from '../onboarding/gate'
 import { useHelloCodexStore } from '../onboarding/hello-codex-open'
 import { PARTNER_PTY_SUFFIX } from '../../shared/multi-spawn-rule'
-import { hasSpawned } from '../ptyTracker'
-import { sessionCapabilities } from '../lib/session-capabilities'
 import type { ViewType } from '../types/views'
 
 /**
@@ -29,13 +25,6 @@ function partnerOnScreen(sessionId: string): boolean {
   return Array.from(document.querySelectorAll('[data-terminal-session]')).some(
     (el) => el.getAttribute('data-terminal-session') === partnerId && el.hasAttribute('data-terminal-active'),
   )
-}
-
-/** PR-level ADR-009 round 1 (A1): the hint when a plain terminal or a partner
- *  shell gets nothing typed (typeImagePathIntoShell): where the image was
- *  saved. */
-function notTypedHint(path: string): string {
-  return `The image was saved on this computer at ${path}; nothing was typed into this terminal.`
 }
 
 /**
@@ -122,96 +111,19 @@ export function useKeyboardShortcuts(
       // NOTE: rename (F2) is handled in Sidebar so it edits the active session
       // in the Active Sessions list (only when the sidebar is visible), not the
       // tab. Tab double-click / right-click still edit the tab inline.
-      // Paste clipboard image: saves to host screenshots dir, then routes it by
-      // the pane on screen. A Claude session: a local one gets the absolute path
-      // as a bracketed paste, which Claude Code attaches as its own pasted image,
-      // then the sentence and Enter (imageTransfer.ts, 2.1.3-beta.16 X1.2), an SSH
-      // one, which can't reach the host filesystem, the Conductor MCP fetch over
-      // the reverse tunnel. A Codex session: main pastes the path as Codex's own
-      // paste, then the sentence and Enter (2.1.3-beta.17 C6); what main cannot
-      // paste gets its line through the Codex typing rule. A plain terminal:
-      // only the quoted path, with no Enter; over SSH nothing, with a hint
-      // saying where the image is. The partner shell in
-      // the partner view of a local tab: only the quoted path, with no Enter;
-      // of an SSH tab (#86: a shell on the host) nothing, with the same hint as
-      // a plain terminal over SSH. A plain terminal or a partner
-      // shell that is not running gets nothing, with a hint saying so and where
-      // the image is. Off Windows (PR-level ADR-009 round 1, A1) the path is
-      // typed only into a shell of the sh family, and only with no control
-      // character in it; otherwise nothing, with the hint saying where it is.
+      // Paste clipboard image (ADR-032; plan 2.1.3-beta.21 phase 2, 2.1.4):
+      // Alt+V with the focus outside the terminal (a focused terminal's own
+      // capture handler takes it in a Claude Code or Codex session:
+      // terminalKeybindings.ts). The pane on screen when it is pressed is the
+      // target. The partner view and a plain terminal get Alt+V as a key, ESC v,
+      // for the program there (plan Q3); a Claude Code or Codex session is
+      // reported to main, which reads the clipboard, writes a picture only when
+      // it has to and sends the CLI's own paste key, then the sentence and
+      // Enter (utils/imagePaste.ts). No path is typed anywhere.
       if (matchesShortcut(e, shortcuts.pasteImage)) {
         e.preventDefault()
-        const state = useSessionStore.getState()
-        const sessionId = state.activeSessionId
-        if (sessionId) {
-          const session = state.sessions.find((s) => s.id === sessionId)
-          // The pane on screen when Alt+V is pressed is the target, read
-          // before the image is saved, as the session is.
-          const showingPartner = partnerOnScreen(sessionId)
-          const res = await window.electronAPI.clipboard.saveImage()
-          if ('path' in res) {
-            // P3.15 (row 70): this runs with focus outside the terminal (a
-            // focused terminal hands Alt+V to the CLI, which pastes the image
-            // itself). Since 2.1.3-beta.17 C6 a Codex session's image goes in
-            // as Codex's own paste, by main (sendImageToCodexSession); what main
-            // cannot paste gets the line by the rule the app types into Codex
-            // by, and a line it could not send says why.
-            if (showingPartner) {
-              // P3.16a (N9): in the partner view the partner shell is on screen
-              // and the session's terminal is hidden, so the image goes to the
-              // partner shell and the assistant behind it gets nothing. A local
-              // tab's partner is a plain shell on this computer, so it gets what
-              // a plain terminal on this computer gets: the image's path, quoted
-              // for its shell, with no sentence and no Enter. A partner
-              // shell that is not running (no spawn of it is current: its
-              // process ended, or a Restart's next one has not started) has no
-              // shell to type into: nothing is typed, and the hint says so, as
-              // for a plain terminal that is not running.
-              // #86: an SSH tab's partner is a shell on the HOST now, which
-              // cannot read a file on this computer: nothing is typed, and the
-              // hint says where the image is, as for a plain terminal over SSH.
-              const partnerId = sessionId + PARTNER_PTY_SUFFIX
-              if (!hasSpawned(partnerId)) {
-                usePasteHintStore.getState().show(sessionId, `This terminal is not running, so nothing was typed; the image was saved on this computer at ${res.path}.`)
-              } else if (sessionCapabilities(session).runsOn('partner') === 'remote') {
-                usePasteHintStore.getState().show(sessionId, `The image was saved on this computer at ${res.path}; the remote shell cannot read it, so nothing was typed.`)
-              } else if (!typeImagePathIntoShell(partnerId, res.path, window.electronPlatform === 'win32', res.posixShell)) {
-                // PR-level ADR-009 round 1 (A1): off Windows, not typed (as below).
-                usePasteHintStore.getState().show(sessionId, notTypedHint(res.path))
-              }
-            } else if (session?.shellOnly) {
-              // P3.16a (U6): a plain terminal has no assistant to tell, so it
-              // gets the image's path, quoted for its shell, and no sentence or
-              // Enter. Over SSH the file is on this computer, which the remote
-              // shell cannot read: nothing is typed, and the hint says where it is.
-              // A terminal whose process has ended or never started has no shell
-              // to type into: nothing is typed, and the hint says so (round 1),
-              // as the Codex route says when its session is not running.
-              if (session.ptyExited || session.neverStarted) {
-                usePasteHintStore.getState().show(sessionId, `This terminal is not running, so nothing was typed; the image was saved on this computer at ${res.path}.`)
-              } else if (session.sessionType === 'ssh') {
-                usePasteHintStore.getState().show(sessionId, `The image was saved on this computer at ${res.path}; the remote shell cannot read it, so nothing was typed.`)
-              } else if (!typeImagePathIntoShell(sessionId, res.path, window.electronPlatform === 'win32', res.posixShell)) {
-                // PR-level ADR-009 round 1 (A1): off Windows, a shell main did not
-                // say is of the sh family, or a path with a control character:
-                // nothing is typed, and the hint says where the image is.
-                usePasteHintStore.getState().show(sessionId, notTypedHint(res.path))
-              }
-            } else if (session?.provider === 'codex') {
-              sendImageToCodexSession(sessionId, res.path, CODEX_IMAGE_LINE, (note) => usePasteHintStore.getState().show(sessionId, note))
-            } else {
-              // Success is self-evident: the image shows in the prompt (Claude Code's [Image #1] for a local session, the typed line over SSH), so no toast.
-              sendImageToSession(sessionId, res.path, 'I just pasted an image — please view it.', session?.sessionType)
-            }
-          } else {
-            usePasteHintStore.getState().show(
-              sessionId,
-              res.error === 'too-large'
-                ? 'Image too large to paste (max 10 MB)'
-                : 'No image in clipboard — copy an image or an image file, then Alt+V',
-            )
-          }
-        }
+        const sessionId = useSessionStore.getState().activeSessionId
+        if (sessionId) pasteImageFromOutside(sessionId, partnerOnScreen(sessionId))
       }
     }
 

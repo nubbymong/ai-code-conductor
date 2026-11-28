@@ -66,30 +66,46 @@ export function registerClipboardHandlers(): void {
   // and the absolute path (for local-only flows that bypass MCP).
   // PR-level ADR-009 round 1 (A1): off Windows, with whether a plain
   // terminal's shell is of the sh family (withShell), for Alt+V.
+  // ADR-032 (plan 2.1.3-beta.21 phase 2): since 2.1.3-beta.21 the renderer
+  // asks for it on the path route behind the test switch only; the old SSH
+  // path's fetch request saves through saveClipboardImage in main (the paste
+  // module), and no other session gets a file for a picture already on the
+  // clipboard.
   ipcMain.handle(IPC.CLIPBOARD_SAVE_IMAGE, async (): Promise<SavedImage> => {
-    const screenshotsDir = join(getResourcesDirectory(), 'screenshots')
-    // Retry the read so the FIRST Alt+V after copying an image reliably detects
-    // it -- Windows' delayed-render clipboard can return empty on the first read
-    // after the window gains focus, which was the "no image detected" miss.
-    const img = await readClipboardImageWithRetry()
-    if (img) {
-      // [perf] resize + JPEG encode is the suspected clipboard-paste freeze; time it
-      // with the source dimensions, since cost scales with input size.
-      const __t0 = Date.now()
-      const resized = constrainToMaxDim(img, 1920)
-      const jpeg = resized.toJPEG(85)
-      const __dt = Date.now() - __t0
-      if (__dt > 150) {
-        const s = img.getSize()
-        logInfo(`[perf] clipboard-image resize+encode took ${__dt}ms (${s.width}x${s.height})`)
-      }
-      if (!existsSync(screenshotsDir)) mkdirSync(screenshotsDir, { recursive: true })
-      const filename = `clipboard-${Date.now()}-${randomBytes(4).toString('hex')}.jpg`
-      const filePath = join(screenshotsDir, filename)
-      writeFileSync(filePath, jpeg)
-      return withShell({ path: filePath })
-    }
-    // No bitmap on the clipboard — fall back to a copied image FILE (BUG-8).
-    return withShell(await readClipboardImageFilePath(screenshotsDir))
+    return withShell(await saveClipboardImage())
   })
+}
+
+/**
+ * The clipboard's picture saved as a JPEG in the shared screenshots folder
+ * (a copied image FILE copied there when the clipboard holds no bitmap,
+ * BUG-8), or why there is none: CLIPBOARD_SAVE_IMAGE's body, unchanged, and
+ * since 2.1.3-beta.21 (ADR-032 decision 9) the old SSH path's save for its
+ * fetch request.
+ */
+export async function saveClipboardImage(): Promise<PasteableImage> {
+  const screenshotsDir = join(getResourcesDirectory(), 'screenshots')
+  // Retry the read so the FIRST Alt+V after copying an image reliably detects
+  // it -- Windows' delayed-render clipboard can return empty on the first read
+  // after the window gains focus, which was the "no image detected" miss.
+  const img = await readClipboardImageWithRetry()
+  if (img) {
+    // [perf] resize + JPEG encode is the suspected clipboard-paste freeze; time it
+    // with the source dimensions, since cost scales with input size.
+    const __t0 = Date.now()
+    const resized = constrainToMaxDim(img, 1920)
+    const jpeg = resized.toJPEG(85)
+    const __dt = Date.now() - __t0
+    if (__dt > 150) {
+      const s = img.getSize()
+      logInfo(`[perf] clipboard-image resize+encode took ${__dt}ms (${s.width}x${s.height})`)
+    }
+    if (!existsSync(screenshotsDir)) mkdirSync(screenshotsDir, { recursive: true })
+    const filename = `clipboard-${Date.now()}-${randomBytes(4).toString('hex')}.jpg`
+    const filePath = join(screenshotsDir, filename)
+    writeFileSync(filePath, jpeg)
+    return { path: filePath }
+  }
+  // No bitmap on the clipboard — fall back to a copied image FILE (BUG-8).
+  return readClipboardImageFilePath(screenshotsDir)
 }

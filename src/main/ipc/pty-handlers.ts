@@ -4,6 +4,7 @@ import { spawnPty, writePty, resizePty, killPty, getSshFlow, endSshRemoteDetaile
 import type { CodexLaunch } from '../pty-manager'
 import { forgetRemoteHelperTab, noteRestoredRemoteTabs, remoteHelperFlowState, remoteHelperLiveness } from '../remote-helper'
 import { handOffAskQuestion, submitPrompt, submitImage, type PromptButtonMode, type ImageSubmitResult } from '../session-input'
+import { pathRouteOn } from '../paste/path-route'
 import { ensureHelpWorkspace, helpWorkspaceDir } from '../help-workspace'
 import { ASK_HELP_FOLDER_FAILED } from '../../shared/ask-conductor-provider'
 import { getResourcesDirectory } from './setup-handlers'
@@ -835,12 +836,20 @@ export function registerPtyHandlers(getWindow: () => BrowserWindow | null): void
   // channel asks main's image door (session-input submitImage) to type the
   // path as a bracketed paste, then the text, then Enter. An image is always
   // sent: the Type it only setting is the prompt buttons', not read here.
+  // ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.6): the image branch is the
+  // one IPC that carries a path, and it is the path route's. It is refused
+  // here, in main, unless the test switch is on (pathRouteOn: not packaged
+  // and CCC_E2E_PATH_ROUTE=1), so a packaged app refuses an image path
+  // whatever the renderer sends. Deleted in 2.1.3-beta.22.
   ipcMain.handle(IPC.PTY_SUBMIT_PROMPT, async (e, args: unknown): Promise<PromptButtonResult | ImageSubmitResult> => {
     if (!fromApp(e)) return { outcome: 'not-sent', reason: 'session-gone' }
     const parsed = promptSubmitSchema.safeParse(args)
     if (!parsed.success) return { outcome: 'not-sent', reason: 'refused-text' }
     if (isPartnerPtyId(parsed.data.sessionId)) return { outcome: 'not-sent', reason: 'session-gone' }
-    if (parsed.data.image !== undefined) return submitImage(parsed.data.sessionId, parsed.data.image, parsed.data.text)
+    if (parsed.data.image !== undefined) {
+      if (!pathRouteOn()) return { outcome: 'not-sent', reason: 'refused-text' }
+      return submitImage(parsed.data.sessionId, parsed.data.image, parsed.data.text)
+    }
     return submitPrompt(parsed.data.sessionId, parsed.data.text, promptButtonMode())
   })
 

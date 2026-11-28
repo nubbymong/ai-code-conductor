@@ -3,10 +3,19 @@ import { quoteArgForShell } from '../../shared/shell-quote'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { sendImagePathToCodex, NOT_AT_PROMPT, IMAGE_AT_PROMPT } from '../lib/codexComposer'
-import { sessionCapabilities } from '../lib/session-capabilities'
 import type { ImageLine } from '../lib/session-capabilities'
 import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 /**
+ * ADR-032 (plan 2.1.3-beta.21 phase 2): since 2.1.3-beta.21 no session gets a
+ * picture's path. Alt+V and Snap go through main's paste module (the CLI's
+ * own clipboard paste: utils/imagePaste.ts asks, main answers). What is left
+ * here is reached only two ways: a tab on the old SSH path's fetch request
+ * (sendFetchRequestFor), which names the saved file for the host fetch tool,
+ * never its path; and the path route behind the test switch (main answers
+ * `path-route` only when the app is not packaged and CCC_E2E_PATH_ROUTE=1),
+ * kept byte for byte as in 2.1.3-beta.20 for the C2 proof and deleted in
+ * 2.1.3-beta.22. The text below describes that path route.
+ *
  * Image transfer helper: gets a host-saved image into a session. The prompts
  * below are a Claude session's; a plain terminal (and the partner shell) gets
  * only the image's path, quoted for its shell (composeShellImagePath, below);
@@ -190,10 +199,11 @@ function sendFetchRequest(sessionId: string, request: string): void {
   }, whole)
 }
 
-/** The session's image line (sessionCapabilities' imageLine), from its
- *  record in the session store, read as every reader of the store reads one. */
-function imageLineOf(sessionId: string): ImageLine | null {
-  return sessionCapabilities(useSessionStore.getState().sessions.find((s) => s.id === sessionId)).imageLine
+/** ADR-032 decision 9: the old SSH path's request naming the saved file
+ *  `filename` (never its path) for the host fetch tool, then its Enter, as
+ *  2.1.3-beta.20 sent it. */
+export function sendFetchRequestFor(sessionId: string, filename: string, userContext?: string): void {
+  sendFetchRequest(sessionId, composeFetchHostScreenshotPrompt(filename, userContext))
 }
 
 /**
@@ -210,17 +220,20 @@ function imageLineOf(sessionId: string): ImageLine | null {
  *                     image line; 'ssh' uses MCP fetch. Defaults to MCP fetch
  *                     for back-compat with any caller that doesn't yet
  *                     thread the type through.
+ * @param line - 'local' only: the session's image line, from main's
+ *               path-route answer (its provider's table, ADR-032 row 14).
  */
 export function sendImageToSession(
   sessionId: string,
   hostFilePath: string,
   userContext?: string,
-  sessionType?: 'local' | 'ssh'
+  sessionType?: 'local' | 'ssh',
+  line: ImageLine | null = null,
 ): void {
   if (sessionType === 'local') {
     // 2.1.3-beta.18 section 4: main's door for every session on this
     // computer; what it does not paste, the session's own image line.
-    sendImageThroughMain(sessionId, hostFilePath, userContext ?? '', imageLineOf(sessionId), (note) => usePasteHintStore.getState().show(sessionId, note))
+    sendImageThroughMain(sessionId, hostFilePath, userContext ?? '', line, (note) => usePasteHintStore.getState().show(sessionId, note))
     return
   }
   // Its Enter submits the prompt to Claude (sendFetchRequest).
