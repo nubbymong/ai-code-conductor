@@ -17,9 +17,18 @@
  *   the folder alone.
  *
  * Each run has only HOME and PATH (and nothing of this process's own
- * environment). The home is a new folder in this user's home folder, since
- * the scripts refuse a home under a folder others may write (/tmp). Skipped
- * where there is no /bin/sh (Windows).
+ * environment). The scripts refuse a home under a folder its group or others
+ * may write (scripts.ts CHECKS, `home-open-to-others`), so the test homes are
+ * new folders in the CI runner's own temp folder (RUNNER_TEMP, `<work>/_temp`,
+ * which the home guard allows), whose folders up to / no other user may
+ * write. Not os.homedir() or os.tmpdir(): under vitest's home isolation both
+ * are inside the shared temp folder (/tmp on Linux, mode 1777), which every
+ * run would be refused for. A `none` run in beforeAll must answer
+ * `end ok` exactly, so a refusal from a folder on the way is named, not
+ * hidden behind every test's own expectation. The files script's tests need
+ * RUNNER_TEMP: on CI without it the file fails, never skips; elsewhere
+ * without it they are skipped. All of it is skipped where there is no
+ * /bin/sh (Windows).
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync } from 'child_process'
@@ -30,6 +39,9 @@ import { scriptText } from '../../../src/main/remote-helper/scripts'
 import { CLIP_STAND_IN_WRAPPER } from '../../../src/main/remote-helper/session'
 
 const POSIX = process.platform !== 'win32' && fs.existsSync('/bin/sh')
+/** Where the files script's test homes go: the CI runner's own temp folder. */
+const BASE = process.env.RUNNER_TEMP || ''
+if (POSIX && process.env.CI && !BASE) throw new Error('RUNNER_TEMP is needed on CI: the files script\'s tests make their homes there and would otherwise be skipped')
 
 const D = '0123456789abcdef0123456789abcdef'
 const I = 'fedcba9876543210fedcba9876543210'
@@ -45,10 +57,16 @@ function sh(args: string[], env: Record<string, string>, input = ''): { code: nu
 
 const mode = (p: string): number => fs.statSync(p).mode & 0o777
 
-describe.skipIf(!POSIX)('the files script writes the stand-in on a real sh', () => {
+describe.skipIf(!POSIX || !BASE)('the files script writes the stand-in on a real sh', () => {
   let root = ''
-  beforeAll(() => { root = fs.mkdtempSync(path.join(os.homedir(), '.aicc-clip-sh-')) })
-  afterAll(() => { if (root.startsWith(path.join(os.homedir(), '.aicc-clip-sh-'))) fs.rmSync(root, { recursive: true, force: true }) })
+  beforeAll(() => {
+    root = fs.mkdtempSync(path.join(BASE, 'aicc-clip-sh-'))
+    // Every folder from a test home up to / passes the script's home checks:
+    // a run that asks for no stand-in answers `end ok` and nothing else.
+    const r = home('base').run(SID, 'none')
+    if (r.out !== `AICC-RESULT ${N} end ok\n`) throw new Error(`the test homes under ${root} do not pass the files script's checks: ${JSON.stringify(r.out)} ${JSON.stringify(r.err)}`)
+  })
+  afterAll(() => { if (BASE && root.startsWith(path.join(BASE, 'aicc-clip-sh-'))) fs.rmSync(root, { recursive: true, force: true }) })
 
   /** A home laid out as Add leaves it: the device folder, its marker, this
    *  build's helper (a stand-in that prints its arguments), and a real
