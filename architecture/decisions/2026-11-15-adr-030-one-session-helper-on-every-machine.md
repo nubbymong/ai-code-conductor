@@ -68,7 +68,7 @@ and text paste, and services with a measured cost.
 - **Replaced: the step plan R1 to R14**, by the ordered slices of D2. Probes
   P1 to P6 are carried; P6 no longer gates session launch (D8). Eleven probes
   are added.
-- **Unchanged.** ~~Codex over SSH stays in the feature queue.~~ **ADR-032 (2026-11-28):** Codex over SSH is in 2.1.3 (ADR-032, owner 28 Nov); Codex remote sessions are planned for 2.1.3-beta.24.
+- ~~**Unchanged.** Codex over SSH stays in the feature queue.~~ **ADR-032 (2026-11-28):** Codex over SSH is in 2.1.3 (ADR-032, owner 28 Nov); Codex remote sessions are planned for 2.1.3-beta.24.
 
 ## Components
 
@@ -119,7 +119,7 @@ Rows are numbered so that "does not own" can name the owner.
   first checks that Claude Code and Codex attach an inserted path like their
   own paste; a CLI that does not keeps its own paste on This computer.~~ **Images, ADR-032 (2026-11-28):** superseded by ADR-032's decisions 1 to 6: every picture goes in through the CLI's own clipboard paste, on this computer and on remote machines, and no path is typed or inserted anywhere. The rest of D5 stands. Text
   paste goes through the holder, chunked on whole characters. The paste folder
-  is capped and deleted when the session ends (on hosts only, ADR-032), and the shared screenshots
+  is capped and deleted when the session ends (for pasted and Snapped pictures, on hosts only, ADR-032; vision screenshots keep the parity table's Vision screenshots target, parked Q6), and the shared screenshots
   library goes away (declared exception 13 keeps it until the remote deletion). Other file kinds and drag and drop are not in 2.1.3.
 - **D6 Remote gains.** Remote sessions get the hook event stream, canvas notes
   at the turn boundary, Watchdog StopFailure, and ~~image paste into plain and
@@ -252,7 +252,7 @@ cut over.
 | Snap | A third-party overlay and native add-on; rectangle and window capture | The same capture, then the tool prompt route | The helper's capture mode and our overlay; whole screen or a rectangle (D3, D4); ~~delivered as an image paste~~ **ADR-032 (2026-11-28):** delivered as the CLI's own clipboard paste; the picture stays on this computer's clipboard |
 | Recent images and storyboard | None. The Recent menu was rendered nowhere and it alone sent a storyboard; the menu, its sender and the screenshot:listRecent chain were deleted in 2.1.3-beta.19 (aicc_planning#435) | None | None planned |
 | Other file kinds and drag and drop | None | None | Not in 2.1.3 (D5) |
-| Partner terminal | A second shell PTY in main | A second ssh terminal that types a `cd` line | A second holder in the session's folder on the same machine; image paste reaches it (D6) |
+| Partner terminal | A second shell PTY in main | A second ssh terminal that types a `cd` line | A second holder in the session's folder on the same machine; ~~image paste reaches it (D6)~~ **ADR-032 (2026-11-28):** Alt+V reaches it as a key, and no path is typed (D6 as amended) |
 | Ask Conductor hand-off | A one-shot help session on the app machine | Not applicable | A launch spec and `submit`, on the app machine only |
 | Session logging | Claude and Codex sessions | Never | Local unchanged. Remote: the helper forwards the conversation file to row 10's checked intake (D9) |
 | Usage index (Tokenomics) | Cost-only headline and chart; always on; no exclusions | None | Token counts and a tokens or cost switch; on or off in Settings; exclusion per account; counted walks (D11). Remote sessions and exclusion per machine with D9 |
