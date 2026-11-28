@@ -77,6 +77,34 @@
  *      tab's program and this file sends the call itself, as phase 6 shipped.
  * Then: the tab ends, the fixture folders, the config folder, the env file
  * and the machine's device folder go; a ~/.codex it did not make stays.
+ *
+ * Readings of the CI line with real Claude Code as the caller (2.1.3-beta.21,
+ * phase 6 follow-up; remote-helper-e2e dispatches of fix/b21-p6ci):
+ *   - run 46155764250, head f5d6294d: red. The stand-in read the prompt's
+ *     turn as `other` (Claude Code 2.1.332 sends user messages of its own
+ *     after the prompt) and answered it with text; fixed in 8cf0d1b4.
+ *   - run 46156957116, head 3fcf7712, the mutant (the review run on this
+ *     computer, not on the machine): red on purpose, on exactly the new
+ *     assertion, "the review process (pid 9992) descends from this check's
+ *     own process (pid 8982): it started on this computer's app side, not on
+ *     the machine", with every earlier one passing. Read there: Claude
+ *     Code's version banner `2.1.332 (Claude Code)` (`claude --version`;
+ *     the tab's screen: `Claude Code v2.1.332`); the tool_use the stand-in
+ *     sent, `mcp__conductor__codex_review` with input
+ *     {"mode":"working","effort":"low","timeoutSeconds":300}, called through
+ *     the relay as `codex_review`; and the footer of the result Claude Code
+ *     sent back: "Codex review on review host (runner@127.0.0.1:2222), with
+ *     review host (runner@127.0.0.1:2222)'s own Codex sign-in, on the
+ *     reviewer account's default model, not named (default), effort low
+ *     (caller; requested, not confirmed) -- 1 message used -- 821 input
+ *     tokens (0 cached), 9 output tokens." The review process's chain was
+ *     MainThread (this check's own process) < MainThread < sh < npm exec
+ *     vitest < bash < Runner.Worker; on the machine (PV1's run in the same
+ *     dispatch) it is aicc-helper < sshd-session < sshd-session < sshd <
+ *     systemd.
+ *   - 849ca94e reverts the mutant; its tree equals 8cf0d1b4's. The green
+ *     run on the commit that records these readings is reported where this
+ *     branch is merged: a file cannot name the run of its own commit.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
