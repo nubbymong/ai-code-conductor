@@ -35,7 +35,7 @@ import { bundledHelperPaths, manifestSha256For, readBundledLinuxHelpers } from '
 import { EXEC_TIMEOUT_MS, nodeSshRunner } from '../remote-helper/ssh-exec'
 import { readHostReviewMaterial, runOnHost } from '../remote-helper/review'
 import { hostRunEnv } from '../remote-helper/session'
-import { setRemoteReviewDeps } from '../codex-review-mcp-tool'
+import { codexRemoteReview, setRemoteReviewDeps } from '../codex-review-mcp-tool'
 import { MACHINES_NOT_APP, answer } from './machines-handlers'
 import { appWindowSender } from './trusted-sender'
 
@@ -145,6 +145,9 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       runner, store: fileStore(recordsFile), bundled: () => readBundledLinuxHelpers(where), inUse: remoteTabsOn, log: logInfo,
       // 2.1.3-beta.20 section 3.1.8: Remove signs out each account signed in there first, or names where to end each.
       signOutAccounts: signOutForRemove, accountsLeft: accountsLeftText, forgotten: forgetHostAccounts,
+      // 2.1.3-beta.21 (aicc_planning#446): a Check reads the machine's Codex
+      // version and model list by the Codex package's own rules.
+      reviewer: codexRemoteReview,
     })
     // 2.1.3-beta.20 section 3.1.6: each read of a machine's accounts reaches the renderer as it lands.
     setHostAccountsListener((m) => {

@@ -32,6 +32,7 @@ import { readCodexModelCatalogue } from './model-catalogue'
 import type { CodexCatalogueDeps } from './model-catalogue'
 import { createCodexAuthOperations } from './auth-operations'
 import { createCodexReviewOperations } from './review'
+import { codexRemoteReview } from './remote-review'
 import { createCodexBackgroundOperations } from './agent-run'
 import { createCodexInsightsOperations } from './insights-exec'
 import type { CodexAuthDeps, CodexAuthOperations } from './auth-operations'
@@ -671,8 +672,10 @@ export function createCodexPackage(deps: CodexPackageDeps = {}): ProviderPackage
       },
     },
     // A reviewer for another provider's sessions (plan: provider review
-    // through MCP), run from a launch the accounts service prepared.
-    review: createCodexReviewOperations(),
+    // through MCP), run from a launch the accounts service prepared; and
+    // (2.1.3-beta.21, aicc_planning#446) on the machine a remote session runs
+    // on, through the session helper there (remote-review.ts).
+    review: { ...createCodexReviewOperations(), remote: codexRemoteReview },
     // WP2 PR 4, P4.5 (row 57): a Cloud Agent's headless `codex exec`, run
     // from a launch the accounts service prepared (kind `background`).
     background: createCodexBackgroundOperations(),

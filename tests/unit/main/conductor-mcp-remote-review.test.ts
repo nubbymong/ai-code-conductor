@@ -36,6 +36,11 @@ vi.mock('../../../src/main/provider-accounts', () => ({
   getAccountsService: () => ({ reviewReady: () => true, prepareLaunch }),
 }))
 vi.mock('../../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
+vi.mock('../../../src/main/providers/core', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/main/providers/core')>()
+  const { codexRemoteReview } = await import('../../../src/main/providers/codex/remote-review')
+  return { ...real, tryGetProviderPackage: (id: string) => (id === 'codex' ? { review: { run: async () => ({ ok: false, code: 'failed', message: 'no local review here' }), remote: codexRemoteReview } } : real.tryGetProviderPackage(id as never)) }
+})
 vi.mock('../../../src/main/update-watcher', () => ({ isPackagedApp: () => false, getProjectRootPath: vi.fn(() => ''), hasSourcePath: vi.fn(() => false) }))
 const tmp = vi.hoisted(() => ({ dir: '' }))
 vi.mock('../../../src/main/ipc/setup-handlers', () => {

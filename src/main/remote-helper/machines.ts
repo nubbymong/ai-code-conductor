@@ -50,8 +50,7 @@ import * as path from 'path'
 import { parseSelfTestResult, parseVersionLine, readListing } from '../session-helper/protocol'
 import { CLI_READ_MAX, DID_RE, INSTALL_ID_RE } from './scripts'
 import { isCodexModelId, type InstalledCodexModels } from '../../shared/model-registry'
-import { classifyCodexVersion, parseCodexVersion } from '../providers/codex/cli-contract'
-import { codexModelListRead, parseCodexModelCatalogue } from '../providers/codex/model-catalogue'
+import type { ProviderRemoteReview } from '../providers/core'
 import {
   afterHashLine, newNonce, notStartedLogLine, readHashLine, readScriptResult, runScript, sshFailure, targetProblem,
   type ExecResult, type SshRunner, type SshTarget,
@@ -412,6 +411,12 @@ export interface MachinesDeps {
   /** A machine Remove took off the list: what the app keeps of it for the
    *  run goes (its accounts' last read). */
   forgotten?: (did: string) => void
+  /** 2.1.3-beta.21 (aicc_planning#446): the reviewing package's review on
+   *  another machine (core's ProviderRemoteReview: how its CLI's version and
+   *  model list read). A Check reads the version of Codex there and its model
+   *  list by it; absent or undefined, the version reads as not read, and a
+   *  review there is refused until a Check with it. */
+  reviewer?: () => ProviderRemoteReview | undefined
   log: (message: string) => void
   now?: () => number
   random?: () => string
@@ -710,7 +715,9 @@ export class RemoteMachines {
     // 2.1.3-beta.21 (aicc_planning#446): Codex there, by the same lookup, and
     // its version; the exec's git; the probes PV1 and PV2's line.
     const codexPath = hostPath(probe.values.get('il-codex'), 4096) ?? hostPath(probe.values.get('codex'), 4096)
-    const codexVersion = parseCodexVersion(probe.values.get('il-codex-version') || probe.values.get('codex-version') || '')
+    let reviewer: ProviderRemoteReview | undefined
+    try { reviewer = this.deps.reviewer?.() } catch { reviewer = undefined }
+    const codexVersion = reviewer ? reviewer.parseVersion(probe.values.get('il-codex-version') || probe.values.get('codex-version') || '') : null
     const git = gitVersionOf(probe.values.get('git'))
     const reviewProbes = reviewProbesOf(probe.values.get('review-probes'))
     const lang = probe.values.get('lang')
@@ -760,8 +767,8 @@ export class RemoteMachines {
     }
     if (codexPath) {
       // The model list is read only from a Codex this app can use, with the helper checked there.
-      const usable = codexVersion !== null && classifyCodexVersion(codexVersion) !== 'too-old'
-      const models = checked.ok && usable ? await this.readCodexModels(target, did, install, codexVersion) : null
+      const usable = reviewer !== undefined && codexVersion !== null && !reviewer.tooOld(codexVersion)
+      const models = checked.ok && usable && reviewer ? await this.readCodexModels(target, did, install, codexVersion, reviewer) : null
       record.codex = { path: codexPath, version: codexVersion, ...(models ? { models } : {}) }
     }
     if (checked.ok && !claudePath) record.check = { at: record.check.at, ok: false, detail: 'Claude Code was not found on it (not on the PATH of its login shell)' }
@@ -770,13 +777,13 @@ export class RemoteMachines {
 
   /**
    * 2.1.3-beta.21 (aicc_planning#446): the models Codex's own picker lists on
-   * the machine (the `cliread` script, with the Codex package's read: its list in
-   * a fresh, empty Codex home there), read by the Codex package's own reader
-   * (model-catalogue.ts parseCodexModelCatalogue), for `version`. Null, with
-   * one log line, when it gives no list: a review there then takes no model
-   * by name. Never throws.
+   * the machine (the `cliread` script, with the package's read: its list in a
+   * fresh, empty config folder there), read by the package's own reader
+   * (ProviderRemoteReview.parseModelList), for `version`. Null, with one log
+   * line, when it gives no list: a review there then takes no model by name.
+   * Never throws.
    */
-  private async readCodexModels(target: SshTarget, did: string, install: string, version: string): Promise<HostCodexModels | null> {
+  private async readCodexModels(target: SshTarget, did: string, install: string, version: string, reviewer: ProviderRemoteReview): Promise<HostCodexModels | null> {
     const nonce = newNonce()
     const no = (why: string): null => {
       this.deps.log(`[remote-helper] ${target.host}: the Codex model list there was not read (${why}); a review there takes no model by name until a Check reads it`)
@@ -784,7 +791,7 @@ export class RemoteMachines {
     }
     let r: ExecResult
     try {
-      r = await runScript(this.deps.runner, target, 'cliread', [nonce, did, install, codexModelListRead.program, codexModelListRead.words.join(','), codexModelListRead.configVariable], { stdoutMax: 2 * CLI_READ_MAX + 64 * 1024 })
+      r = await runScript(this.deps.runner, target, 'cliread', [nonce, did, install, reviewer.program, reviewer.modelListRead.words.join(','), reviewer.modelListRead.configVariable], { stdoutMax: 2 * CLI_READ_MAX + 64 * 1024 })
     } catch (err) {
       return no((err as Error).message)
     }
@@ -799,7 +806,7 @@ export class RemoteMachines {
     const marker = `AICC-CLI ${nonce}\n`
     const at = text.indexOf(marker)
     if (at < 0) return no('Codex did not start through the login shell there')
-    const models = parseCodexModelCatalogue(text.slice(at + marker.length))
+    const models = reviewer.parseModelList(text.slice(at + marker.length))
     if (!models) return no('Codex did not print a model list this app reads')
     return { version, models: models.map((m) => ({ id: m.id, label: m.label, ...(m.efforts ? { efforts: [...m.efforts] } : {}) })) }
   }

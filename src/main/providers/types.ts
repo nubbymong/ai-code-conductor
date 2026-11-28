@@ -378,6 +378,12 @@ export interface ProviderRemoteLaunch {
    *  (RemoteAccounts). Absent: its accounts are not signed in on hosts, and
    *  its tabs run on the host's own sign-in. */
   accounts?(): RemoteAccounts
+  /** 2.1.3-beta.21 (aicc_planning#446): true when a tab of this provider
+   *  may ask for a review on its machine, in its folder there, by its
+   *  reviewing provider (the tool host's rule, offeredReviewTool: a Claude
+   *  Code tab's reviewer is Codex). Core registers the tab for it at each
+   *  start (remote-helper/review-sessions.ts). Absent: never. */
+  reviewsOnMachine?: boolean
   /** The tab's status line from one status the CLI posted, already cut to
    *  the launch's `statusKeep` (2.1.3-beta.18 section 3.2). Untrusted input;
    *  a remote path in it is display text only, never a transcript path.

@@ -47,7 +47,7 @@ import { CLAUDE_RUN_SCREEN } from '../../../src/main/providers/claude/run-screen
 import { runRemoteCodexReview, type RemoteReviewDeps } from '../../../src/main/codex-review-mcp-tool'
 import { GIT_HARDENING, DIFF_HARDENING, REVIEW_DIFF_MAX_BYTES, WORK_TREE_KEYS_PATTERN } from '../../../src/main/review-diff'
 import { codexCommandLine } from '../../../src/main/providers/codex/cli-runner'
-import { codexModelListRead } from '../../../src/main/providers/codex/model-catalogue'
+import { codexRemoteReview } from '../../../src/main/providers/codex/remote-review'
 import { mergeRegistry, type ModelRegistry } from '../../../src/shared/model-registry'
 import registryJson from '../../../resources/model-registry.json'
 
@@ -180,7 +180,7 @@ function memoryStore(): MachineStore {
 }
 
 async function added(ssh: FakeSsh): Promise<RemoteMachines> {
-  const m = new RemoteMachines({ runner: ssh, store: memoryStore(), bundled: async () => ({ ok: true, helpers: [HELPER] }), readFile: async () => Buffer.alloc(4096, 7), inUse: () => 0, log: (l) => { logs.push(l) } })
+  const m = new RemoteMachines({ runner: ssh, store: memoryStore(), bundled: async () => ({ ok: true, helpers: [HELPER] }), readFile: async () => Buffer.alloc(4096, 7), inUse: () => 0, log: (l) => { logs.push(l) }, reviewer: () => codexRemoteReview })
   const q = await m.prepare([{ id: 'cfg', label: 'Rocky', sessionType: 'ssh', sshConfig: { host: 'rocky.lan', port: 22, username: 'nick' } }], 'cfg')
   if (!q.ok) throw new Error(q.message)
   const r = await m.add(q.token)
@@ -252,7 +252,8 @@ describe('a Check reads Codex, its model list, the git and the probes\' line the
     // The words are the Codex package's: the runner's own models constant.
     const local = codexCommandLine('/x/codex', 'models', 'linux', {})
     if ('refused' in local) throw new Error(local.refused)
-    expect([...codexModelListRead.words]).toEqual(local.args)
+    expect([...codexRemoteReview.modelListRead.words]).toEqual(local.args)
+    expect(codexRemoteReview.modelListRead.configVariable).toBe('CODEX_HOME')
     expect(() => scriptCommand('cliread', ['0'.repeat(32), MACHINE.did, INSTALL, 'codex', 'debug,models;id', 'CODEX_HOME'])).toThrow(/words/)
   })
 })
@@ -558,6 +559,7 @@ describe('the limits, and a stop', () => {
       env: hostRunEnv,
       registry: () => mergeRegistry(registryJson as unknown as ModelRegistry, null),
       launchRefusal: () => null,
+      reviewer: () => codexRemoteReview,
     }
     let done = false
     const p = runRemoteCodexReview({ cccSessionId: 'rr-slow', mode: 'working', timeoutSeconds: 900 }, { did: m.did, cwd: '/home/nick/proj' }, deps).then((r) => { done = true; return r })

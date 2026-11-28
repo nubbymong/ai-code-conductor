@@ -31,18 +31,6 @@ import type { CodexDiscovery, CodexDiscoveryDeps } from './discovery'
 
 /** How long the read may take. */
 export const CODEX_CATALOGUE_TIMEOUT_MS = 15_000
-
-/** 2.1.3-beta.21 (aicc_planning#446): the same read on another machine, for
- *  a review there: the remote helper's `cliread` script runs the program with
- *  these words (the runner's `models` constant, cli-runner.ts) through the
- *  user's login shell there, with the variable that names Codex's home set to
- *  a fresh, empty folder it makes, and removes after it; its output is read
- *  by parseCodexModelCatalogue below. */
-export const codexModelListRead: Readonly<{ program: string; words: readonly string[]; configVariable: string }> = Object.freeze({
-  program: 'codex',
-  words: Object.freeze(['debug', 'models', '--bundled']),
-  configVariable: 'CODEX_HOME',
-})
 /** The most output kept (characters); more is no list. The 0.153.4 catalogue
  *  is about half a megabyte (each model carries its own instructions). */
 export const CODEX_CATALOGUE_MAX_CHARS = 4 * 1024 * 1024

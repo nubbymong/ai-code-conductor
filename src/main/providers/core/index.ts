@@ -2,7 +2,7 @@
 // dependency-boundary test fails this package on any concrete-provider import.
 export type {
   ProviderPackage, ProviderPackageFactory, ProviderSetupOperations, ProviderAuthOperations, ProviderRealmOperations,
-  ProviderManagedLaunchOperations, ProviderRealmFolderOperations, ProviderLaunchOperations, LaunchPreparation, ProviderReviewOperations, ReviewRunInput, ReviewRunResult, ReviewUsage, RealmFolderResult, RealmFolderFailureCode, ExternalDefaultRealmSpec, ProviderEnablementSpec,
+  ProviderManagedLaunchOperations, ProviderRealmFolderOperations, ProviderLaunchOperations, LaunchPreparation, ProviderReviewOperations, ProviderRemoteReview, ReviewRunInput, ReviewRunResult, ReviewUsage, RealmFolderResult, RealmFolderFailureCode, ExternalDefaultRealmSpec, ProviderEnablementSpec,
   ProviderBackgroundOperations, BackgroundRunInput, BackgroundRunResult,
   ProviderInsightsOperations, InsightsRunInput, InsightsRunResult,
   DiscoveryResult, InstallRecipe, InstalledCli, RealmRef, AuthOperationResult, AuthLoginInput, AuthLogoutOptions, AuthStatusOptions, AuthFailureCode, AuthCredentialKind,

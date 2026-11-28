@@ -21,6 +21,11 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 vi.mock('../../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
+vi.mock('../../../src/main/providers/core', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/main/providers/core')>()
+  const { codexRemoteReview } = await import('../../../src/main/providers/codex/remote-review')
+  return { ...real, tryGetProviderPackage: (id: string) => (id === 'codex' ? { review: { run: async () => ({ ok: false, code: 'failed', message: 'no local review here' }), remote: codexRemoteReview } } : real.tryGetProviderPackage(id as never)) }
+})
 const recordReview = vi.fn()
 vi.mock('../../../src/main/codex-review-usage', () => ({
   recordReview: (sessionId: string, payload: unknown) => recordReview(sessionId, payload),
@@ -33,6 +38,7 @@ import {
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import type { HostMaterial, HostReadInput, HostRunResult, HostRunSpec } from '../../../src/main/remote-helper/review'
 import { codexReviewCommandLine } from '../../../src/main/providers/codex/cli-runner'
+import { codexRemoteReview } from '../../../src/main/providers/codex/remote-review'
 import { mergeRegistry, withInstalledCodexModels, type ModelRegistry } from '../../../src/shared/model-registry'
 import registryJson from '../../../resources/model-registry.json'
 
@@ -71,6 +77,7 @@ function fake(over: Partial<RemoteReviewDeps> = {}): Fake {
     env: (m) => ({ HOME: m.home, PATH: m.path, LANG: 'C.UTF-8' }),
     registry: () => LOCAL,
     launchRefusal: () => null,
+    reviewer: () => codexRemoteReview,
     ...over,
   }
   return { deps, read, run, machine }

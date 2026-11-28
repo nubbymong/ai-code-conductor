@@ -52,11 +52,13 @@ describe('the modules the remote helper device check imports', () => {
       // 2.1.3-beta.20 section 3: an account's folder, its read and its sign-out, run by the live file too.
       import('../../../src/main/remote-helper/host-accounts'),
       // 2.1.3-beta.21 (aicc_planning#446): a review on the machine (its host
-      // read and its run, its registration, and the review tool's remote
-      // half), which the live file runs too.
+      // read and its run, its registration, the review tool's remote half,
+      // and the Codex package's review on another machine), which the live
+      // file runs too.
       import('../../../src/main/remote-helper/review'),
       import('../../../src/main/remote-helper/review-sessions'),
-      import('../../../src/main/codex-review-mcp-tool'),
+      import('../../../src/main/codex-review-remote'),
+      import('../../../src/main/providers/codex/remote-review'),
     ])
     expect(typeof modules[0].remoteLaunchOf).toBe('function')
     expect(typeof modules[5].claudeRemoteLaunch.launch).toBe('function')
@@ -67,6 +69,7 @@ describe('the modules the remote helper device check imports', () => {
     expect(typeof modules[10].runOnHost).toBe('function')
     expect(typeof modules[11].registerRemoteReviewSession).toBe('function')
     expect(typeof modules[12].runRemoteCodexReview).toBe('function')
+    expect(typeof modules[13].codexRemoteReview.args).toBe('function')
   })
 
   it('the live file imports no other module of the app', async () => {

@@ -7,8 +7,9 @@
 // through the helper's one-shot run mode (runOnHost), on the machine's own
 // Codex sign-in (owner default Q10, until Codex accounts on machines come in
 // 2.1.3-beta.22). Its argv is ADR-031's, the same constant plus the same two
-// allow-listed values as on this computer (codexReviewArgs), with the
-// machine's Codex as argv[0]; the allow-lists are the machine's own Codex list
+// allow-listed values as on this computer (the Codex package's remote review,
+// core's ProviderRemoteReview), with the machine's Codex as argv[0]; the
+// allow-lists are the machine's own Codex list
 // (read at its Check), applied here: the helper decides nothing (ADR-030 row
 // 4). Nothing of it ever runs on this computer: a review the machine cannot
 // run is refused, and says why. Until the probes PV1 and PV2 have passed on
@@ -16,18 +17,16 @@
 // a review there is refused before anything is read or run.
 //
 // Pure of the app's settings and accounts: what it needs of them (the model
-// registry, main's launch rule, the usage record) comes in its deps, so the
+// registry, main's launch rule, the reviewing package's remote review, the
+// usage record) comes in its deps, so the
 // remote-helper-e2e job runs it under plain Node
 // (tests/live/remote-helper-device.live.ts). codex-review-mcp-tool.ts
 // registers it as the tool and hands it the running app's.
 import { randomBytes } from 'crypto'
-import type { ReviewUsage } from './providers/core'
+import type { ProviderRemoteReview, ReviewUsage } from './providers/core'
 import type { ProviderId, ProviderLaunchRefusal } from '../shared/providers'
 import { withInstalledCodexModels, type InstalledCodexModels, type ModelRegistry } from '../shared/model-registry'
 import { logInfo } from './debug-logger'
-import { codexReviewArgs } from './providers/codex/cli-runner'
-import { createCodexExecEventReader } from './providers/codex/review'
-import { CODEX_MIN_SUPPORTED_VERSION, classifyCodexVersion } from './providers/codex/cli-contract'
 import { clip, finishReview, redactFailure, redactHead, MAX_MESSAGE } from './providers/review-support'
 import { machineName, type RemoteMachineRecord } from './remote-helper/machines'
 import { RUN_OUTPUT_MAX, hostReviewPaths, type HostMaterial, type HostReadInput, type HostRunResult, type HostRunSpec } from './remote-helper/review'
@@ -59,6 +58,9 @@ export interface RemoteReviewDeps extends RemoteReviewHost {
   registry: () => ModelRegistry
   /** Main's one launch rule (provider-launch-gate.ts). */
   launchRefusal: (providerId: ProviderId) => ProviderLaunchRefusal | null
+  /** The reviewing package's review on another machine (its argv, how its
+   *  output and version read); undefined: it has none. */
+  reviewer: () => ProviderRemoteReview | undefined
   /** After the run, whatever the outcome (a failed turn still used quota). */
   onUsage?: (sessionId: string, usage: ReviewUsage) => void
   /** A finished review, for channel routing. Best-effort. */
@@ -143,9 +145,12 @@ export async function runRemoteCodexReview(
   const name = machineName(m)
   const refused = (why: string): ReviewToolResult => ({ isError: true, text: `Codex review refused: ${why} ${NOTHING_RAN}` })
   if (!m.codex) return refused(`Codex was not found on ${name} at its last Check (not on the PATH of its login shell). Install Codex there and sign it in there, then press Check on the Machines page.`)
+  let reviewer: ProviderRemoteReview | undefined
+  try { reviewer = deps.reviewer() } catch { reviewer = undefined }
+  if (!reviewer) return refused('the Codex package of this app cannot review on another machine.')
   const version = m.codex.version
   if (version === null) return refused(`the version of Codex on ${name} did not read at its last Check. Press Check on the Machines page.`)
-  if (classifyCodexVersion(version) === 'too-old') return refused(`${name} has Codex ${version}, older than ${CODEX_MIN_SUPPORTED_VERSION}, the oldest version this app runs. Update Codex there, then press Check on the Machines page.`)
+  if (reviewer.tooOld(version)) return refused(`${name} has Codex ${version}, older than ${reviewer.minVersion}, the oldest version this app runs. Update Codex there, then press Check on the Machines page.`)
   // The probes PV1 and PV2 (helper/probes/README.md): a review runs on a
   // machine only once both have passed there, for the Codex and the git its
   // last Check found. Never a review on this computer in its place: that
@@ -158,8 +163,8 @@ export async function runRemoteCodexReview(
   if ('refused' in chosen) return { isError: true, text: chosen.refused }
   const pick: ReviewPick = chosen
   // ADR-031's argv, as a review here has it: the constant and the two values.
-  const argv = codexReviewArgs(pick.argv)
-  if (!Array.isArray(argv)) return refused(`Codex could not be started with that choice (${argv.refused}).`)
+  const argv = reviewer.args(pick.argv)
+  if (!Array.isArray(argv)) return refused(`Codex could not be started with that choice (${(argv as { refused: string }).refused}).`)
   if (signal?.aborted) return { isError: true, text: 'Codex review was cancelled.' }
   const running = reviewsInFlight.get(sid) ?? new Set<AbortController>()
   if (running.size >= MAX_REVIEWS_PER_SESSION) {
@@ -192,9 +197,7 @@ export async function runRemoteCodexReview(
     logInfo(`[codex-review] session ${sid}: mode ${args.mode}, on ${m.host}'s own Codex sign-in (${m.did.slice(0, 8)}), on ${codexRanOn(pick)}`)
     const prompt = buildCodexPrompt(args, material, randomBytes(8).toString('hex'))
     const r = await deps.run(m, { argv: [m.codex.path, ...argv], cwd: target.cwd, env: deps.env(m) }, prompt, timeoutMs, stop.signal)
-    const reader = createCodexExecEventReader()
-    reader.push(r.stdout)
-    const out = reader.end()
+    const out = reviewer.readOutput(r.stdout)
     // The run mode's result line says how Codex's run ended there; with none,
     // Codex is not known to have run, so the footer names no model.
     const ended = r.outcome

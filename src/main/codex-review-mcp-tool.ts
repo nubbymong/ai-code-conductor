@@ -13,7 +13,7 @@ import * as path from 'path'
 import { randomBytes } from 'crypto'
 import { isHomeOrAncestor } from './path-utils'
 import { tryGetProviderPackage } from './providers/core'
-import type { AccountsService, ProviderReviewOperations, ReviewUsage, ReviewRunResult } from './providers/core'
+import type { AccountsService, ProviderRemoteReview, ProviderReviewOperations, ReviewUsage, ReviewRunResult } from './providers/core'
 import { getAccountsService } from './provider-accounts'
 import { providerLaunchRefusal } from './provider-launch-gate'
 import type { ProviderId, ProviderLaunchRefusal } from '../shared/providers'
@@ -569,12 +569,21 @@ export function currentRemoteReviewDeps(): RemoteReviewHost | null {
 
 /** The running app's deps for a review on a machine: the machine side, the
  *  registry, main's launch rule, the usage record and the channels. */
+/** The Codex package's review on another machine (core's ProviderRemoteReview),
+ *  through the registry as a review here reaches the package; undefined
+ *  before the package is registered. The remote machines' Check reads a
+ *  machine's Codex by it too (ipc/remote-machines-handlers.ts). */
+export function codexRemoteReview(): ProviderRemoteReview | undefined {
+  return defaultReviewDeps.reviewer()?.remote
+}
+
 function runningAppRemoteDeps(host: RemoteReviewHost | null): RemoteReviewDeps | null {
   if (!host) return null
   return {
     ...host,
     registry: () => getRegistry(),
     launchRefusal: (providerId) => providerLaunchRefusal(providerId),
+    reviewer: () => codexRemoteReview(),
     onUsage: (sid, usage) => CODEX_SPEC.onUsage?.(sid, usage),
     onReview: (sid, review) => CODEX_SPEC.onReview?.(sid, review),
   }
