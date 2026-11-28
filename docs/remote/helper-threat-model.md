@@ -49,7 +49,7 @@ the two share one home folder (3.4). Each claim holds from its step in 2.1.
 | Host folders per device id; clean-up and removal only behind this install's marker, another install's folder read-only to the app; sessions `elsewhere` or `unknown` never ended or removed by the app, an `unmanaged` or `orphaned` one only on the user's explicit end, shown by the CLI's stopped state (protocol 7); removal reads a session as dead only on positive proof | fixed scripts, app | R2; states R6, R9 |
 | Fixed ssh options, minimal environment and per-connection pins; on a terminal `-e none` and the environment first, the rest later | app | R2 (execs), R6 (side channel); terminal R2, R10 |
 | Saved ssh passwords only through askpass, under its release rules | app | R2 (execs), R10 (terminal) |
-| Host home recorded once; the only pasted host text is a checked upload path; remote terminal: no clipboard read or write, links `http` or `https` only, on a click | app | R2 |
+| Host home recorded once; no host text is pasted or typed into a terminal (ADR-032, from 2.1.3-beta.21; before it, the only pasted host text was a checked upload path); remote terminal: no clipboard read or write in answer to anything the host sends (the user's own Alt+V or Snap is 3.3's ADR-032 row), links `http` or `https` only, on a click | app | R2; ADR-032 rows from 2.1.3-beta.21 |
 | Remote allow-list: tools list filtered, argument rules, no local render roots, inline canvas content under the egress-confined policy, remote-session flag | app (Conductor server) | R2 (route before R8), R8 (side channel) |
 | Browser tools for a remote session: `http` and `https` only, filtering proxy, throwaway context | app | R8 (refused before) |
 | Device records under a MAC, the only store of host-key pins; consent re-checked against pin and hash | app | R2 (pins), R3 (records) |
@@ -325,7 +325,7 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 
 | Class of tool | For a remote session |
 | --- | --- |
-| Reading the app's screenshot or other local folders; script evaluation in a browser; local accounts, other sessions, local files or settings | not allowed (remote images arrive by upload, R2 and R7) |
+| Reading the app's screenshot or other local folders; script evaluation in a browser; local accounts, other sessions, local files or settings | not allowed (remote images arrive by `file.put` on the session's own connection, protocol section 15, ADR-032; the R2 and R7 uploads were not built) |
 | Opening, reading or driving a page (every navigate or open tool, the in-app browser's included) | from R8 only, in that session's own browser context, through the filtering proxy below. After URL normalisation the scheme is `http` or `https` only; any other (`file`, `chrome`, `view-source`, `data`, `javascript`, `blob`, `filesystem`, `about` other than `about:blank`) is refused before the browser sees it, and page-initiated navigations to them are refused in the remote context |
 | Showing on the canvas; its review notes | inline content only: no local path, no local URL, no local render root; served only under the egress-confined design policy (connections only to the app, WebRTC blocked, DNS prefetch off, resource hints stripped, including ones a script adds); review notes on that session's own canvas only |
 | `codex_review` from a Claude Code helper tab whose machine record names Codex (from 2.1.3-beta.21, aicc_planning#446) | runs on the host, never on this computer: one exec of the helper's one-shot run mode (protocol section 4) in the tab's working folder there, on that machine's own Codex sign-in. The change it reviews is read on the host by a fixed script and passes through main as capped data, never written to disk here and never opened as a path; no local path reaches it. The model and the effort pass ADR-031's allow-lists, against the host's own Codex list, before any exec; a working folder that is the host home or above is refused, as locally. It joins with a fixture row and argument rules, as any new tool |
@@ -401,8 +401,10 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 
 ### 3.9 Consent, removal and clean-up
 
-- R2 and R3 place no helper. R2 writes only pasted images and the marker under
-  `~/.aicc/<did>/`; outside `~/.aicc`, R3's setup writes only the files it
+- R2 and R3 place no helper. R2 writes only the marker under `~/.aicc/<did>/`
+  (its image upload was not built; from 2.1.3-beta.21 a picture arrives by
+  `file.put` into `sessions/<sid>/paste/`, protocol section 15); outside
+  `~/.aicc`, R3's setup writes only the files it
   records in the device record, backing up any it replaces (protocol 13).
 - The helper is placed only after the user agrees (ADR decision 2) on a screen
   that also names the folder-trust edit in plain words. Consent is per target;
