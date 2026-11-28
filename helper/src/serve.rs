@@ -448,6 +448,19 @@ enum Next {
     Close,
 }
 
+/// How long a connection's next read waits for a frame when it has no
+/// picture on its way: `IDLE_TIMEOUT`, and, for the read just after a
+/// picture's chunk wait ran out (`after_stall`), only what is left of it
+/// since the last frame, so a stall never starts the 60 s anew (none left:
+/// zero, and the connection closes).
+fn idle_limit(after_stall: bool, since_last_frame: Duration) -> Duration {
+    if after_stall {
+        IDLE_TIMEOUT.saturating_sub(since_last_frame)
+    } else {
+        IDLE_TIMEOUT
+    }
+}
+
 /// True for a refusal that counts toward a connection's budget (section
 /// 12): `bad-field` and `too-large`.
 fn counts_toward_budget(r: &Refusal) -> bool {
@@ -1862,7 +1875,7 @@ impl Serve {
                     self.read_next(conn, reader, limit, "a chunk of the picture did not arrive in time", self.max_json(allowed.mcp), true)
                 }
                 None => {
-                    let limit = if after_stall { IDLE_TIMEOUT.saturating_sub(last_frame.elapsed()) } else { IDLE_TIMEOUT };
+                    let limit = idle_limit(after_stall, last_frame.elapsed());
                     after_stall = false;
                     self.read_next(conn, reader, limit, "no frame from the app in 60 seconds", self.max_json(allowed.mcp), false)
                 }
@@ -2755,6 +2768,20 @@ mod tests {
         assert_eq!(REFUSALS_PER_MINUTE, 20);
         assert_eq!(MAX_JSON_BEFORE_ACK, 4 * 1024);
         assert_eq!(MAX_JSON_AFTER_LAUNCH, 64 * 1024);
+    }
+
+    #[test]
+    fn after_a_stalled_picture_the_idle_wait_runs_on_from_the_last_frame() {
+        // 30 s since the last frame when the chunk wait ran out: 30 s are
+        // left of the 60, not 60 more.
+        assert_eq!(idle_limit(true, Duration::from_secs(30)), Duration::from_secs(30));
+        assert_eq!(idle_limit(true, Duration::from_millis(59_500)), Duration::from_millis(500));
+        // None left: zero, and the read closes the connection at once.
+        assert_eq!(idle_limit(true, Duration::from_secs(60)), Duration::ZERO);
+        assert_eq!(idle_limit(true, Duration::from_secs(61)), Duration::ZERO);
+        // Every other read waits the whole 60 s, however long ago the last frame came.
+        assert_eq!(idle_limit(false, Duration::from_secs(30)), IDLE_TIMEOUT);
+        assert_eq!(idle_limit(false, Duration::from_secs(61)), IDLE_TIMEOUT);
     }
 
     fn full() -> io::Result<()> {
