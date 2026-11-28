@@ -65,6 +65,8 @@
 //! a command line it takes exits 1; one it does not take exits 2.
 
 use crate::hello;
+pub use crate::paste::Kind;
+use crate::paste::picture_name;
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
@@ -97,40 +99,6 @@ impl Tool {
             "xclip" => Some(Tool::Xclip),
             "wl-paste" => Some(Tool::WlPaste),
             _ => None,
-        }
-    }
-}
-
-/// A picture's type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Kind {
-    Png,
-    Jpeg,
-}
-
-impl Kind {
-    /// The type as a list prints it and a read names it.
-    pub fn mime(self) -> &'static str {
-        match self {
-            Kind::Png => "image/png",
-            Kind::Jpeg => "image/jpeg",
-        }
-    }
-
-    /// The type a read names, when it is one the stand-in serves.
-    pub fn of_mime(t: &str) -> Option<Kind> {
-        match t {
-            "image/png" => Some(Kind::Png),
-            "image/jpeg" => Some(Kind::Jpeg),
-            _ => None,
-        }
-    }
-
-    /// The bytes a picture of this type begins with.
-    pub fn signature(self) -> &'static [u8] {
-        match self {
-            Kind::Png => b"\x89PNG\r\n\x1a\n",
-            Kind::Jpeg => b"\xff\xd8\xff",
         }
     }
 }
@@ -404,28 +372,11 @@ fn to_real(o: &Options) -> u8 {
     EXIT_NOTHING
 }
 
-/// The picture a name in `paste/` holds: its number and its type, for
-/// `paste-<n>.png` and `paste-<n>.jpg` only (`<n>` 1 to 9 digits, no leading
-/// zero).
-pub fn picture_name(name: &str) -> Option<(u64, Kind)> {
-    let rest = name.strip_prefix("paste-")?;
-    let (n, kind) = if let Some(n) = rest.strip_suffix(".png") {
-        (n, Kind::Png)
-    } else if let Some(n) = rest.strip_suffix(".jpg") {
-        (n, Kind::Jpeg)
-    } else {
-        return None;
-    };
-    if n.is_empty() || n.len() > 9 || n.starts_with('0') || !n.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    Some((n.parse().ok()?, kind))
-}
-
 /// The current picture's name among `names`, with its type: the picture name
-/// of the highest number; None when there is none, or two share it.
+/// (`paste::picture_name`, the one rule `file.put` takes names by) of the
+/// highest number; None when there is none, or two share it.
 pub fn newest<'a, I: IntoIterator<Item = &'a str>>(names: I) -> Option<(&'a str, Kind)> {
-    let mut best: Option<(u64, &'a str, Kind)> = None;
+    let mut best: Option<(u32, &'a str, Kind)> = None;
     let mut tie = false;
     for name in names {
         let (n, kind) = match picture_name(name) {
@@ -617,33 +568,9 @@ mod tests {
         assert_eq!(ask(Tool::WlPaste, &[OsString::from("-t"), OsString::from_vec(vec![0xff])]), Ask::Other);
     }
 
-    #[test]
-    fn picture_names_are_paste_n_png_or_jpg_only() {
-        assert_eq!(picture_name("paste-1.png"), Some((1, Kind::Png)));
-        assert_eq!(picture_name("paste-42.jpg"), Some((42, Kind::Jpeg)));
-        assert_eq!(picture_name("paste-999999999.png"), Some((999_999_999, Kind::Png)));
-        for name in [
-            "paste-0.png",
-            "paste-01.png",
-            "paste-.png",
-            "paste-1000000000.png",
-            "paste-1.jpeg",
-            "paste-1.gif",
-            "paste-1.PNG",
-            "paste-1.png.txt",
-            "paste-1",
-            "paste--1.png",
-            "paste-+1.png",
-            "paste-1a.png",
-            ".part-1",
-            "paste-1.png.part",
-            "Paste-1.png",
-            "xpaste-1.png",
-            "",
-        ] {
-            assert_eq!(picture_name(name), None, "{name:?}");
-        }
-    }
+    // The name rule itself, picture_name, is tested where it lives
+    // (paste.rs, a_picture_name_is_paste_a_number_and_png_or_jpg), with
+    // every name this file's own test of it took or refused.
 
     #[test]
     fn the_current_picture_is_the_highest_number_and_a_tie_is_none() {
@@ -741,9 +668,10 @@ mod tests {
     /// A folder of this test, `mode` set outright, never left to the umask.
     ///
     /// The lib tests share one process and its umask, and a socket bind
-    /// beside them sets it to 0177 for a moment (transport/unix.rs,
-    /// `bind_private`). A level `create_dir_all` made in that moment was 0600,
-    /// with no search bit, so the next level could not be made inside it
+    /// beside them sets it to 0177 around each bind (transport/unix.rs,
+    /// `bind_private`), and two binds that overlap can leave it there for the
+    /// rest of the run. A level `create_dir_all` made while it was 0177 was
+    /// 0600, with no search bit, so the next level could not be made inside it
     /// ("Permission denied", seen on the macOS runner). So each missing level
     /// is made on its own and set to 0700 before the next is made in it.
     #[cfg(unix)]

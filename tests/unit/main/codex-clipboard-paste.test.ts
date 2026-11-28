@@ -20,6 +20,10 @@
 //    prompt up after the sentence: `prompt-on-screen`, whose hint does not
 //    ask for Enter. Both red on 713c585f (Ctrl+U cleared the picture; the
 //    prompt answered `sentence-not-sent`).
+//  - Review round 3 (R3-1): a prompt up after the key, before the
+//    placeholder, with a sentence or without: `prompt-on-screen`, the key
+//    only (the `no-placeholder` hint asks for Alt+V, and ESC v at an
+//    approval form can act on it). Red on 55b75e70 (`no-placeholder`).
 // Red on 0c54a1c6: no such rule. Mutants this must catch: the key split over
 // two writes; the key sent inside a bracketed paste; a take-back after no
 // placeholder; the sentence handed to the primitive without `takeBack: false`.
@@ -153,9 +157,9 @@ describe('a press from outside the terminal, and Snap', () => {
     expect(s.turns).toEqual([])
   })
 
-  it('a prompt after the key: nothing more typed', async () => {
+  it('a prompt after the key: prompt-on-screen (its hint asks for no Alt+V), nothing more typed', async () => {
     const s = sim({ promptAfterKeyMs: 50 })
-    expect(await pasteClipboardIntoCodexComposer(ESC_V, SENTENCE, s.deps, OPTS)).toEqual({ outcome: 'no-placeholder' })
+    expect(await pasteClipboardIntoCodexComposer(ESC_V, SENTENCE, s.deps, OPTS)).toEqual({ outcome: 'prompt-on-screen' })
     expect(datas(s.writes)).toEqual([ESC_V])
   })
 
@@ -201,6 +205,12 @@ describe('a press in the terminal (the user is writing)', () => {
   it('no picture: the key only, and the answer says so', async () => {
     const s = sim({ clipboard: null, typed: 'look ' })
     expect(await pasteClipboardIntoCodexComposer(ESC_V, null, s.deps, OPTS)).toEqual({ outcome: 'no-placeholder' })
+    expect(datas(s.writes)).toEqual([ESC_V])
+  })
+
+  it('a prompt after the key: prompt-on-screen, the key only', async () => {
+    const s = sim({ promptAfterKeyMs: 50, typed: 'look ' })
+    expect(await pasteClipboardIntoCodexComposer(ESC_V, null, s.deps, OPTS)).toEqual({ outcome: 'prompt-on-screen' })
     expect(datas(s.writes)).toEqual([ESC_V])
   })
 })

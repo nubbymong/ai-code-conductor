@@ -45,9 +45,10 @@ export type PasteNotPastedReason =
   | 'no-placeholder'
   /** The sentence after the placeholder was not sent (the picture is at the prompt). */
   | 'sentence-not-sent'
-  /** A prompt came up after the placeholder, before the sentence was sent
-   *  (review round 2, R2-1): Enter would answer the prompt, so the hint does
-   *  not ask for it. */
+  /** A prompt came up after the key, before the placeholder or the
+   *  sentence's Enter, for a press from outside the terminal or in it (review
+   *  rounds 2 and 3, R2-1 and R3-1): Enter or the key again could act on the
+   *  prompt, so the hint asks for neither. */
   | 'prompt-on-screen'
   /** The CLI was not at a composer that takes a paste within the wait. */
   | 'busy'

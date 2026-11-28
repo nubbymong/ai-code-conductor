@@ -18,7 +18,13 @@
 //    never a path.
 //  - A macOS or Linux app (plan s4: the remote route from there comes in
 //    2.1.3-beta.23): "not available yet", nothing sent, nothing typed; Snap
-//    still leaves its picture on this computer's clipboard (Q1).
+//    still leaves its picture on this computer's clipboard (Q1). The check
+//    comes after the tab lookup and the clipboard reads (phase 5 review 2,
+//    R2-1): Ctrl+V or Alt+V with nothing to paste is "no picture" there too,
+//    Alt+V with a copied file over the cap "too large", and no such tab is
+//    "session gone". Red on 55b75e70 (all "not available"); the Alt+V cases
+//    are red too with a second platform check just before the copied file's
+//    read (follow-up review 1, R1-5).
 //  - file.put's refusals, each with its own hint; a picture over 20 MiB as a
 //    PNG goes as a JPEG; over that too, "too large". The hints of a picture
 //    already sent name the session's machine, not this computer's clipboard.
@@ -138,7 +144,7 @@ describe('Alt+V and Ctrl+V in a helper tab: the picture by file.put, then the ke
     expect(puts).toHaveLength(1)
     onClipboard = null
     copied = { picture: picture(FILE_PNG) }
-    expect(await press('text', true)).toEqual(PASTE_NOTES['no-picture'] && { outcome: 'not-pasted', reason: 'no-picture', note: PASTE_NOTES['no-picture'] })
+    expect(await press('text', true)).toEqual({ outcome: 'not-pasted', reason: 'no-picture', note: PASTE_NOTES['no-picture'] })
     copied = { error: 'no-image' }
     expect((await press('text', false)).outcome).toBe('not-pasted')
     expect(puts).toHaveLength(1)
@@ -241,15 +247,32 @@ describe('not available yet, never a path', () => {
     expect(puts).toEqual([])
   })
 
-  it('a macOS or Linux app (plan s4: the remote route from there comes in 2.1.3-beta.23): not available yet, nothing sent, nothing typed; Snap still leaves its picture on this computer\'s clipboard (Q1)', async () => {
+  it('a macOS or Linux app (plan s4: the remote route from there comes in 2.1.3-beta.23): not available yet, nothing sent, nothing typed; Snap still leaves its picture on this computer\'s clipboard (Q1); with nothing to paste, or no such tab, the same answer as on Windows', async () => {
     for (const p of ['darwin', 'linux'] as const) {
       platform = p
       written = []
+      onClipboard = picture()
       expect(await press('image', false), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
       expect(await press('image', true), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
       expect(await press('text', true), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
       expect(await snap(), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
       expect(written, p).toHaveLength(1)
+      // Review 2, R2-1: the platform check comes after the tab and the
+      // clipboard reads, so Ctrl+V with nothing on the clipboard is the
+      // renderer's quiet nothing-to-paste, Alt+V with nothing there is no
+      // picture (its own hint), Alt+V with a copied file over the cap is too
+      // large, and a tab not open is gone.
+      onClipboard = null
+      copied = { error: 'no-image' }
+      expect(await press('text', true), p).toEqual({ outcome: 'not-pasted', reason: 'no-picture', note: PASTE_NOTES['no-picture'] })
+      expect(await press('image', false), p).toEqual({ outcome: 'not-pasted', reason: 'no-picture', note: PASTE_NOTES['no-picture'] })
+      copied = { error: 'too-large' }
+      expect(await press('image', false), p).toEqual({ outcome: 'not-pasted', reason: 'too-large', note: PASTE_NOTES['too-large'] })
+      const open = tab
+      tab = null
+      onClipboard = picture()
+      expect(await press('image', false), p).toEqual({ outcome: 'not-pasted', reason: 'session-gone', note: PASTE_NOTES['session-gone'] })
+      tab = open
     }
     expect(puts).toEqual([])
     expect(door).toEqual([])
