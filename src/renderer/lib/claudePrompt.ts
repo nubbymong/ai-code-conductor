@@ -22,7 +22,7 @@
  * session helper on its machine (the request's `enterApart`, 2.1.3-beta.19
  * section 6.1): there this types the line alone and main types its Enter.
  */
-import { readClaudeScreen } from '../../shared/claude-screen'
+import { claudeImagePlaceholders, readClaudeScreen } from '../../shared/claude-screen'
 import { CLAUDE_MARKER_REFUSED, canvasMarkerLineOk } from '../../shared/canvas-marker-line'
 import type { ClaudeMarkerAnswer } from '../../shared/types'
 import { readSessionScreen, type ScreenLine } from '../components/terminal/screenRegistry'
@@ -126,10 +126,9 @@ function rememberTyped(typed: Set<string>, key: string): void {
 const idOk = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= MAX_ID
 
 /** How many of Claude Code's image placeholders ("[Image #N]") a prompt's
- *  text holds (ADR-032: the clipboard paste reads a new one after its key). */
-export function claudeImagePlaceholders(text: string): number {
-  return (text.match(/\[Image #\d{1,3}\]/g) ?? []).length
-}
+ *  text holds (ADR-032): shared/claude-screen.ts's, which main also reads a
+ *  helper tab's holder screen with (2.1.3-beta.21, plan block 5.1). */
+export { claudeImagePlaceholders }
 
 /**
  * Answer one of main's canvas marker requests (canvas:claudeMarkerAsk) from

@@ -1021,6 +1021,13 @@ export interface RunScreenTyping {
   /** Resolves `delayMs` after the last slice the write port cuts `data`, just
    *  written, into has gone. */
   settled(data: string, delayMs: number): Promise<void>
+  /** 2.1.3-beta.21 (ADR-032; plan block 5.1): the holder's screen of a tab
+   *  through the session helper on its machine whose connection reads it
+   *  (the remote helper's remoteTabScreen, read when the door is asked), for
+   *  a member that reads the CLI's screen there (Claude Code's clipboard
+   *  paste, its placeholder). Absent for every other session, and for a tab
+   *  whose connection reads no screen now. */
+  readonly heldScreen?: () => Promise<HeldScreenRows>
 }
 
 /** Why a run screen's image rule did not paste and send an image: the

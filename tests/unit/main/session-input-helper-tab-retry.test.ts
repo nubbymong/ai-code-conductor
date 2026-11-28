@@ -51,7 +51,8 @@ vi.mock('../../../src/main/providers', async () => {
   const { CLAUDE_RUN_SCREEN } = await import('../../../src/main/providers/claude/run-screen')
   return { getProvider: () => ({ runScreen: CLAUDE_RUN_SCREEN }) }
 })
-vi.mock('../../../src/main/remote-helper', () => ({ isRemoteHelperTab: (sessionId: string) => h.helperTabs.has(sessionId) }))
+// 2.1.3-beta.21: these tabs' connections read no holder screen (the paste's placeholder read is not theirs).
+vi.mock('../../../src/main/remote-helper', () => ({ isRemoteHelperTab: (sessionId: string) => h.helperTabs.has(sessionId), remoteTabScreen: () => undefined }))
 vi.mock('../../../src/main/canvas/claude-marker-typing', () => ({ queueClaudeMarkerLine: () => {} }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: () => {}, logError: () => {} }))
 
