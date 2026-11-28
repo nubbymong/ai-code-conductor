@@ -23,7 +23,7 @@ import { join } from 'path'
 import type { IPty } from 'node-pty'
 import type { RemoteAccounts, SessionProvider } from '../../../src/main/providers/types'
 import { registerProvider } from '../../../src/main/providers'
-import { accountsLeftText, adoptRemoteAccounts, forgetRemoteHelperTab, readRemoteAccounts, remoteAccountsState, remoteHelperPty, setRemoteHelperDeps, signOutForRemove, signOutRemoteAccount } from '../../../src/main/remote-helper'
+import { accountsLeftText, adoptRemoteAccounts, forgetRemoteHelperTab, readRemoteAccounts, remoteAccountsState, remoteHelperPty, remoteTabPaste, setRemoteHelperDeps, signOutForRemove, signOutRemoteAccount } from '../../../src/main/remote-helper'
 import { CLAUDE_REMOTE_ACCOUNTS, claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
 import { CLAUDE_RUN_SCREEN } from '../../../src/main/providers/claude/run-screen'
 import { remoteSessionId } from '../../../src/main/remote-helper/session'
@@ -728,6 +728,25 @@ describe('fix round: the sign-in method, a kept session\'s attach, and the notes
     expect(ssh.scripts()).toEqual(['accounts', 'list', 'bridge'])
     expect(notices()).toEqual([])
     expect(holder.launch).toEqual({ t: 'term.launch' })
+    pty.kill()
+    forgetRemoteHelperTab(id)
+  })
+
+  it('2.1.3-beta.21: that attach reads no host file, so it gives no paste key (never Ctrl+V unread) and its image paste is not available yet', async () => {
+    const persistent: RemoteMachineRecord = { ...MACHINE, logind: { kill: 'no', exclude: '', linger: 'no' } }
+    plugIn({ findByTarget: () => persistent, get: () => persistent, list: () => [persistent], installId: () => INSTALL } as unknown as RemoteMachines)
+    const id = 'kept-unsigned-paste'
+    holder = new FakeHolder(remoteSessionId(id), id, store)
+    holder.launch = { t: 'term.launch' }
+    holder.child = 'running'
+    kept = [keptRecord(holder)]
+    const pty = remoteHelperPty(win, id, { ssh: { ...SSH_TAB, detachable: true }, profileId: 'profile-unsigned' }, 100, 30) as IPty
+    await until(() => holder.attaches > 0)
+    expect(ssh.scripts()).not.toContain('reads')
+    const tab = remoteTabPaste(id)
+    expect(tab).not.toBeNull()
+    expect(tab!.key).toBeUndefined()
+    expect(tab!.standIn).toBe(false)
     pty.kill()
     forgetRemoteHelperTab(id)
   })

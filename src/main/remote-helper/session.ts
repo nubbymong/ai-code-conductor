@@ -400,21 +400,16 @@ export class RemoteDriver implements HelperPtyDriver {
    *  folder). A start that attaches to a kept session runs no `files` exec,
    *  so a driver that launched nothing (a kept tab after the app restarts)
    *  has false, although that session's CLI may have the stand-in: the host
-   *  is not asked yet. The app route that reads this (plan block 5.1, its
-   *  App bullet) decides readiness on attach too: clipStandInKept. */
+   *  is not asked. The app's paste route reads this (RemoteHelperPty
+   *  pasteStandIn, plan block 5.1): false is "image paste is not available
+   *  yet", the plan's s5 fallback until probe PR1 passes on a host, so such
+   *  an attach sends no picture and types no key, never a path. */
   clipStandInReady = false
-  /** 2.1.3-beta.21 (plan block 5.1): a start that attached to a session kept
-   *  for this tab, whose launch asks for the stand-in on a Linux host. That
-   *  session's own launch (this app's, which asks at every launch there) had
-   *  its `files` exec write bin/ and put it first on its CLI's PATH, and bin/
-   *  stays with the session's folder, so the stand-in is taken as there; the
-   *  host is not asked (an attach runs no `files` exec). A session kept from
-   *  before 2.1.3-beta.21, or one whose stand-in was not written, then shows
-   *  no placeholder, and the paste hint says so: no path either way. */
-  clipStandInKept = false
   /** 2.1.3-beta.21 (ADR-032 row 14): the key this start's launch gave for
    *  the CLI's image paste, from the host reads it made (the host's own
-   *  keybindings file), set again at every start, launch or attach. */
+   *  keybindings file), set again at every start, launch or attach; none
+   *  for a start that made no host read (an attach its account's read
+   *  stopped from launching), never Ctrl+V unread. */
   imagePasteKey: PasteKey | undefined
   /** 2.1.3-beta.21: a take-over of a kept session reads no holder size first
    *  (HelperPtyDriver): the tab's connection acks `screen` only for its
@@ -507,9 +502,10 @@ export class RemoteDriver implements HelperPtyDriver {
         if (first) {
           this.signals?.launched(first)
           this.filesSent = first.files.length > 0
-          // 2.1.3-beta.21: its paste, as for any attach (no host read made: the default key).
-          this.attachedPaste(first)
         }
+        // 2.1.3-beta.21: no host read was made, so no key was read (the
+        // host's keybindings file may rebind it): none, rather than Ctrl+V.
+        this.imagePasteKey = undefined
         this.adopted = true
         this.untilEnded = true
         return { record: kept, attach: true }
@@ -531,20 +527,10 @@ export class RemoteDriver implements HelperPtyDriver {
       this.signals?.launched(launch)
       // 2.1.3-beta.21: the key this start read for the CLI's image paste.
       this.imagePasteKey = launch.imagePasteKey
-      if (held.attach) {
-        this.filesSent = launch.files.length > 0
-        this.attachedPaste(launch)
-      } else if (launch.files.length > 0) await this.writeFiles(sid, held.record, launch)
+      if (held.attach) this.filesSent = launch.files.length > 0
+      else if (launch.files.length > 0) await this.writeFiles(sid, held.record, launch)
     }
     return held
-  }
-
-  /** 2.1.3-beta.21 (plan block 5.1): an attach to a session kept for this
-   *  tab: its paste key from this start's launch, and the stand-in taken as
-   *  there when that launch asks for it on a Linux host (clipStandInKept). */
-  private attachedPaste(launch: RemoteLaunch): void {
-    this.imagePasteKey = launch.imagePasteKey
-    this.clipStandInKept = clipStandInFolder(this.o.machine, launch, this.current.plan?.helper.folder) !== null
   }
 
   /** 2.1.3-beta.21: the tab's own connection reads its holder's screen (for
@@ -1181,10 +1167,12 @@ export class RemoteHelperPty implements IPty {
   get everShown(): boolean { return this.driver.wasAttached }
   /** 2.1.3-beta.21: this start wrote the clipboard stand-in (RemoteDriver clipStandInReady). */
   get clipStandInReady(): boolean { return this.driver.clipStandInReady }
-  /** 2.1.3-beta.21 (plan block 5.1): the stand-in serves this tab's CLI:
-   *  written by this start's launch, or by the launch of the kept session
-   *  this start attached to (RemoteDriver clipStandInKept). */
-  get pasteStandIn(): boolean { return this.driver.clipStandInReady || this.driver.clipStandInKept }
+  /** 2.1.3-beta.21 (plan block 5.1): the stand-in serves this tab's CLI, as
+   *  the app's paste route takes it: written by this start's launch
+   *  (clipStandInReady). An attach to a kept session wrote none, so its
+   *  image paste is not available yet (the plan's s5 fallback until probe
+   *  PR1), whatever that session's own launch wrote. */
+  get pasteStandIn(): boolean { return this.driver.clipStandInReady }
   /** 2.1.3-beta.21 (ADR-032 row 14): the key for the CLI's image paste this
    *  start's launch gave, from the host's own keybindings file; undefined
    *  before the start read it, and for a launch that takes no image paste. */

@@ -11,15 +11,18 @@
  *   its launch gave from the host's own keybindings file (a rebound chord
  *   included), and its picture sent by file.put;
  * - an attach to a session kept for the tab (an SSH Persistent tab after the
- *   app restarts): the stand-in its own launch wrote is taken as there (it
- *   stays with the session's folder; no files exec runs at an attach), the
- *   key is read again at this start, and the holder's size is NOT read before
+ *   app restarts): this start wrote no stand-in (no files exec runs at an
+ *   attach, and the host is not asked whether one is there), so its image
+ *   paste is not available yet (the plan's s5 fallback until probe PR1):
+ *   the paste route sends nothing and types nothing, never a path; the key
+ *   is read again at this start, and the holder's size is NOT read before
  *   the attach (a helper tab on another machine shows its replay as before:
  *   the screen read is for the paste only);
  * - no such tab: nothing.
  * Red on e89996bb: no screen read on a helper tab's connection, no key, no
  * route port. Mutants this must catch: the holder's size read before a kept
- * attach; the stand-in taken as there for a launch that does not ask.
+ * attach; the stand-in taken as there for a launch that does not ask; the
+ * stand-in taken as there at an attach (this start did not write it).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
@@ -30,6 +33,8 @@ import { registerProvider } from '../../../src/main/providers'
 import { claudeRemoteLaunch } from '../../../src/main/providers/claude/remote-launch'
 import { forgetRemoteHelperTab, remoteHelperPty, remoteTabPaste, remoteTabScreen, setRemoteHelperDeps } from '../../../src/main/remote-helper'
 import { remoteSessionId, type RemoteHelperPty } from '../../../src/main/remote-helper/session'
+import { helperPasteRoute } from '../../../src/main/paste/helper-route'
+import { notPasted } from '../../../src/shared/clipboard-paste'
 import type { RemoteMachineRecord, RemoteMachines } from '../../../src/main/remote-helper/machines'
 import { PASTE_NAME_RE } from '../../../src/main/session-helper/protocol'
 import { DEFAULT_PROVIDER_ID } from '../../../src/shared/providers/ids'
@@ -197,7 +202,7 @@ describe('a helper tab whose launch does not ask for the stand-in', () => {
 })
 
 describe('an attach to a session kept for the tab', () => {
-  it('takes the stand-in its launch wrote as there, reads the key again, and reads no holder size before the attach', async () => {
+  it('says image paste is not available yet (this start wrote no stand-in), reads the key again, and reads no holder size before the attach', async () => {
     plugIn()
     const id = 'paste-tab-kept'
     forgetRemoteHelperTab(id)
@@ -222,8 +227,21 @@ describe('an attach to a session kept for the tab', () => {
     expect(holder.attached!.ackedCaps).toEqual(expect.arrayContaining(['screen', 'title']))
     const tab = remoteTabPaste(id)!
     expect(second.clipStandInReady).toBe(false)
-    expect(tab.standIn).toBe(true)
+    expect(tab.standIn).toBe(false)
     expect(tab.key).toEqual({ bytes: ESC_V, chord: 'alt+v', from: 'keybindings' })
+    // The app's paste route for the tab: not available yet, nothing sent there, nothing typed.
+    const typed: string[] = []
+    const answer = await helperPasteRoute({
+      platform: 'win32',
+      tab: (sid) => remoteTabPaste(sid),
+      readPicture: async () => ({ isEmpty: () => false, toPNG: () => Buffer.from([0x89, 0x50, 0x4e, 0x47]), toJPEG: () => Buffer.alloc(0) }),
+      readCopiedImage: async () => ({ error: 'no-image' }),
+      write: async () => 'written',
+      door: async (_sid, key) => { typed.push(key); return { outcome: 'sent' } },
+    }).paste(id, { press: { sessionId: id, chord: 'image', focused: false } })
+    expect(answer).toEqual(notPasted('not-available'))
+    expect(holder.pictures).toEqual([])
+    expect(typed).toEqual([])
     second.kill()
     await until('let go again', () => holder.attached === null)
   })
