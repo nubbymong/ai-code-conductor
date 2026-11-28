@@ -57,6 +57,15 @@
 // the submit primitive is; what that rule cannot paste the renderer types by
 // its own Codex rule, written at submitImage.
 //
+// Since 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) every picture goes
+// in through the CLI's own clipboard paste instead: a new door,
+// pasteFromClipboard, types the CLI's paste key as one write for the paste
+// module (src/main/paste), then reads its placeholder and, for a press from
+// outside the terminal and for Snap, types the sentence and Enter, through
+// the run screen's `clipboard` member. No path. submitImage stays, unchanged,
+// for the path route behind the test switch only (pty:submitPrompt refuses
+// an image path otherwise), and goes in 2.1.3-beta.22.
+//
 // Since 2.1.3-beta.10 section A2 the Watchdog's retry comes in through one
 // door, submitRetry: a Codex session's goes through the Codex package's
 // submit primitive, as a canvas marker's does, instead of the raw writer

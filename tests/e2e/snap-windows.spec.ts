@@ -1567,6 +1567,17 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
 //     beta.20's (PRESS_TEST_MS, CODEX_TURN_MS); C4's are PRESS_TEST_MS plus 2
 //     times CLAUDE_TURN_MS, never raised. The CPU is read through every group
 //     (typeperf, once a second) for the diagnosis.
+//   CLAUDE CODE'S OWN READ, ON A WARM POWERSHELL CACHE: Claude Code reads the
+//     clipboard by Windows PowerShell 5.1 (WinForms Clipboard.GetImage). In
+//     probe run 46128029706, with the app on a fresh, empty module analysis
+//     cache (coldPowerShellEnv, beta.20's D1 condition for the first app), it
+//     took the key ("Pasting..." in its footer) and its read did not end
+//     within 15 s in 7 of 8 presses (one showed its placeholder 13.7 s after
+//     its key): a cold cmdlet lookup took 21.6 to 27.4 s on this runner
+//     (46040073797). A user's computer keeps that cache, so Claude Code's PW1
+//     and C4 run on the runner's own cache, warmed first by the same command
+//     (warmClaudeClipboardRead); the Codex groups keep beta.20's cold cache
+//     (Codex reads the clipboard without PowerShell).
 
 const PASTE = process.env.SNAP_E2E_PASTE ?? ''
 /** The folder holding the job's Claude Code 2.1.332 (claude.exe), or ''. */
@@ -1735,6 +1746,21 @@ async function openCodexPasteTab(projectDir: string, label: string): Promise<voi
   throw new Error(`no Codex composer with its count within ${CODEX_START_MS} ms:\n${await codexScreen()}`)
 }
 
+/** Claude Code's clipboard read, run once outside the app on the runner's
+ *  own module analysis cache (the default one, under the runner's
+ *  LOCALAPPDATA, which the app's Claude Code reads too), so the cache is
+ *  warm as on a user's computer. Answers the time it took and its output. */
+function warmClaudeClipboardRead(): { ms: number; out: string } {
+  const temp = path.join(PASTE_OUT, 'ps-warm-temp')
+  fs.mkdirSync(temp, { recursive: true })
+  const t0 = Date.now()
+  const r = spawnSync(path.join(SYSTEM_ROOT, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Sta', '-Command', 'Add-Type -AssemblyName System.Windows.Forms; $i = [System.Windows.Forms.Clipboard]::GetImage(); if ($i) { "image" } else { "none" }'], {
+    encoding: 'utf8', timeout: 180_000, windowsHide: true,
+    env: minimalEnv({ TEMP: temp, TMP: temp, ...(process.env.LOCALAPPDATA ? { LOCALAPPDATA: process.env.LOCALAPPDATA } : {}), ...(process.env.USERPROFILE ? { USERPROFILE: process.env.USERPROFILE } : {}), ...(process.env.PSModulePath ? { PSModulePath: process.env.PSModulePath } : {}) }),
+  })
+  return { ms: Date.now() - t0, out: `${r.stdout ?? ''}`.trim().slice(0, 200) }
+}
+
 /** Launch an app whose Claude Code is the job's 2.1.332, pointed at the stand-in. */
 async function launchClaudePasteApp(name: string): Promise<{ standIn: StandIn; projectDir: string }> {
   ctx = undefined
@@ -1742,6 +1768,8 @@ async function launchClaudePasteApp(name: string): Promise<{ standIn: StandIn; p
   mainLines.length = 0
   expect(CLAUDE_DIR, 'SNAP_E2E_CLAUDE names the Claude Code the job installed').not.toBe('')
   expect(fs.existsSync(path.join(CLAUDE_DIR, 'claude.exe')), `no claude.exe in ${CLAUDE_DIR}`).toBe(true)
+  // Twice: the first run writes the cache, the second reads it (both timed).
+  readings[`paste_${name}_warmup`] = [warmClaudeClipboardRead(), warmClaudeClipboardRead()]
   const standIn = createModelStandIn({ onEvent: (e) => { standInEvents.push(e) } })
   const port = await standIn.listen()
   let projectDir = ''
@@ -1764,7 +1792,7 @@ async function launchClaudePasteApp(name: string): Promise<{ standIn: StandIn; p
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CCC_E2E_SNAP_HELPER: HELPER,
       ...DEAD_PROXY,
-      ...coldPowerShellEnv(dataDir),
+      // No coldPowerShellEnv: the runner's own, warmed cache (see the header).
     }),
   })
   ctx.app.on('console', (m) => { mainLines.push(m.text()) })
@@ -1952,7 +1980,7 @@ for (const cli of ['codex', 'claude'] as const) {
     test.afterAll(async () => {
       test.setTimeout(120_000)
       stopCpu()
-      savePaste(`pw1-${cli}`, { rows, mainLines: mainLines.filter((l) => /paste|codex|claude/i.test(l)).slice(-80) })
+      savePaste(`pw1-${cli}`, { rows, warmup: readings[`paste_pw1-${cli}_warmup`] ?? null, mainLines: mainLines.filter((l) => /paste|codex|claude/i.test(l)).slice(-80) })
       await closeIsolatedApp(ctx)
       ctx = undefined
       await standIn?.close()
@@ -2099,7 +2127,7 @@ test.describe('GATE C4: Claude Code Snap on the clipboard route, every press at 
   test.afterAll(async () => {
     test.setTimeout(120_000)
     stopCpu()
-    savePaste('gate-c4', { rows, mainLines: mainLines.filter((l) => /paste|claude/i.test(l)).slice(-80) })
+    savePaste('gate-c4', { rows, warmup: readings['paste_gate-c4_warmup'] ?? null, mainLines: mainLines.filter((l) => /paste|claude/i.test(l)).slice(-80) })
     await closeIsolatedApp(ctx)
     ctx = undefined
     await standIn?.close()
