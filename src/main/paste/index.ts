@@ -82,6 +82,10 @@ export interface PasteDeps {
   provider(sessionId: string): ProviderId | null
   /** That provider's clipboard paste table (row 14). */
   rule(id: ProviderId): ClipboardPasteRule | undefined
+  /** The config folder the session's launch gave its CLI (its account's own;
+   *  null on this computer's own sign-in), so the table reads that account's
+   *  own keybindings. */
+  accountDir(sessionId: string): string | null
   /** The picture on the clipboard (retried for Windows' delayed render), or null. */
   readPicture(): Promise<NativeImage | null>
   /** The files copied to the clipboard (Windows and macOS), or none. */
@@ -105,6 +109,7 @@ const realDeps = (): PasteDeps => ({
   where: () => null,
   provider: (sessionId) => providerOfSession(sessionId),
   rule: (id) => tryGetProvider(id)?.clipboardPaste,
+  accountDir: () => null,
   readPicture: () => readClipboardImageWithRetry(),
   readFiles: () => readClipboardFilePaths(),
   fileSize: (path) => {
@@ -138,30 +143,11 @@ export function setPasteDeps(partial: Partial<PasteDeps>): void {
 export function _resetPasteForTest(): void {
   deps = realDeps()
   remoteRoute = null
-  accountDirs.clear()
 }
 
 /** Plan phase 5: the remote route for tabs through the session helper. */
 export function setRemotePasteRoute(route: RemotePasteRoute | null): void {
   remoteRoute = route
-}
-
-/** Each local session's config folder for its CLI (its account's own, or
- *  null on this computer's own sign-in), noted at its launch, so the
- *  provider table reads that account's own keybindings. */
-const accountDirs = new Map<string, string | null>()
-/** No app runs anywhere near this many sessions. */
-const ACCOUNT_DIRS_MAX = 512
-
-/** The launch's note (src/main/sessions/launch-bindings.ts). */
-export function notePasteAccountDir(sessionId: string, dir: string | null): void {
-  accountDirs.delete(sessionId)
-  accountDirs.set(sessionId, dir)
-  while (accountDirs.size > ACCOUNT_DIRS_MAX) {
-    const oldest = accountDirs.keys().next().value
-    if (oldest === undefined) break
-    accountDirs.delete(oldest)
-  }
 }
 
 /** What the clipboard holds, for a paste. */
@@ -197,7 +183,9 @@ function fromDoor(result: ClipboardPasteDoorResult): PasteKeyResult {
 
 /** The key for `sessionId`'s CLI by its table, then the door. */
 async function sendKey(sessionId: string, rule: ClipboardPasteRule, sentence: string | null): Promise<PasteKeyResult> {
-  const key = rule.key({ platform: deps.platform, accountDir: accountDirs.get(sessionId) ?? null })
+  let accountDir: string | null = null
+  try { accountDir = deps.accountDir(sessionId) } catch { accountDir = null }
+  const key = rule.key({ platform: deps.platform, accountDir })
   if (key.bytes === null) return notPasted('no-key')
   return fromDoor(await deps.door(sessionId, key.bytes, sentence))
 }

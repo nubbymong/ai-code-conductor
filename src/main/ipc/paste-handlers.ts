@@ -17,6 +17,8 @@ import { pasteImageKey, setPasteDeps, type PasteSessionWhere } from '../paste'
 import { saveClipboardImage } from './clipboard-handlers'
 import { getSshFlow, isSessionLiveOrStarting } from '../pty-manager'
 import { isRemoteHelperTab } from '../remote-helper'
+import { getClaudeProfileId } from '../claude-account-identity'
+import { getProfileConfigDir } from '../account-profiles'
 
 /** Where a session's CLI runs, from the remote helper's record of the tabs
  *  it started and the PTY manager's record of SSH flows; null when the
@@ -28,8 +30,16 @@ export function sessionWhere(sessionId: string): PasteSessionWhere | null {
   return 'local'
 }
 
+/** The config folder a local session's launch gave Claude Code: its
+ *  account's own (the profile it spawned under, claude-account-identity's
+ *  record), or null on this computer's own sign-in. */
+export function sessionAccountDir(sessionId: string): string | null {
+  const profileId = getClaudeProfileId(sessionId)
+  return profileId ? getProfileConfigDir(profileId) : null
+}
+
 export function registerPasteHandlers(getWindow: () => BrowserWindow | null): void {
-  setPasteDeps({ where: sessionWhere, savePicture: saveClipboardImage })
+  setPasteDeps({ where: sessionWhere, savePicture: saveClipboardImage, accountDir: sessionAccountDir })
   const fromApp = appWindowSender(getWindow)
   ipcMain.handle(IPC.PASTE_IMAGE_KEY, async (e, press: unknown): Promise<PasteKeyResult> => {
     if (!fromApp(e)) return notPasted('session-gone')

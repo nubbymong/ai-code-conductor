@@ -20,7 +20,8 @@
 //    name elsewhere; on a machine whose writer is not in this beta, nothing
 //    pasted and the line s6 names. No path in any answer or door call, on
 //    Rectangle's and Window's sentences alike.
-//  - The account's folder (noted at launch) reaches the table.
+//  - The session's account folder (the profile it spawned under) reaches
+//    the table.
 //  - The path route behind the test switch: the line, and nothing written
 //    or typed.
 // Red on 0c54a1c6: no such module. Mutants this must catch: a write when the
@@ -60,6 +61,7 @@ let pathRoute: boolean
 /** The OS the module reads (a spread copies values, so it is set through setPasteDeps). */
 const setPlatform = (p: NodeJS.Platform) => { paste.setPasteDeps({ platform: p }) }
 let keyCtx: Array<{ platform: NodeJS.Platform; accountDir: string | null }>
+let accountDir: string | null
 
 beforeEach(() => {
   paste._resetPasteForTest()
@@ -77,12 +79,14 @@ beforeEach(() => {
   saved = { path: 'C:\\res\\screenshots\\clipboard-1-abcd.jpg' }
   pathRoute = false
   keyCtx = []
+  accountDir = null
   const spy = (rule: typeof CLAUDE_CLIPBOARD_PASTE) => ({ ...rule, key: (ctx: { platform: NodeJS.Platform; accountDir: string | null }) => { keyCtx.push(ctx); return rule.key(ctx) } })
   paste.setPasteDeps({
     platform: 'win32',
     where: () => where,
     provider: () => provider,
     rule: (id) => (id === 'claude' ? spy(CLAUDE_CLIPBOARD_PASTE) : id === 'codex' ? spy(CODEX_CLIPBOARD_PASTE) : undefined),
+    accountDir: () => accountDir,
     readPicture: async () => onClipboard,
     readFiles: async () => files,
     fileSize: (p) => sizes[p] ?? null,
@@ -181,9 +185,9 @@ describe('a Claude Code or Codex session on this computer', () => {
     expect(door).toEqual([])
   })
 
-  it('the account\'s folder noted at launch reaches the table; none is this computer\'s own sign-in', async () => {
+  it('the session\'s account folder (the profile it spawned under) reaches the table; none is this computer\'s own sign-in', async () => {
     await press('image', true)
-    paste.notePasteAccountDir('s1', 'C:\\acct\\one')
+    accountDir = 'C:\\acct\\one'
     await press('image', true)
     expect(keyCtx).toEqual([{ platform: 'win32', accountDir: null }, { platform: 'win32', accountDir: 'C:\\acct\\one' }])
   })
