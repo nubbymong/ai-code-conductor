@@ -21,7 +21,7 @@
 // registry, main's launch rule, the reviewing package's remote review, the
 // usage record) comes in its deps, so the
 // remote-helper-e2e job runs it under plain Node
-// (tests/live/remote-helper-device.live.ts). codex-review-mcp-tool.ts
+// (tests/live/remote-review.live.ts). codex-review-mcp-tool.ts
 // registers it as the tool and hands it the running app's.
 import { randomBytes } from 'crypto'
 import type { ProviderRemoteReview, ReviewUsage } from './providers/core'

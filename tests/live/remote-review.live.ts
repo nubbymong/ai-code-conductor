@@ -138,8 +138,11 @@ let inUse = 0
 /** The run's own folder on the host, inside the home folder (a review there
  *  refuses the home folder itself): the fixtures, the fake CLI. */
 let hostDir = ''
-/** The run's own folder here, for the fixture made the same. */
-let localDir = ''
+/** The run's own folder here, under the system's temporary folder, for the
+ *  fixture made the same: made when the file loads, so afterAll (which runs
+ *  even when beforeAll fails) removes it on every run in which a test of this
+ *  file runs (a run that filters out all of its tests runs no hooks). */
+const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aicc-pv-'))
 /** Which probes passed. */
 const passed = { pv1: false, pv2: false }
 /** This run's PASS of both, once step 5 has it: the proof step 6's review is
@@ -313,11 +316,10 @@ beforeAll(async () => {
   note('target', `${target.user}@${target.host}:${target.port}`)
   note('codex', codexKind)
   machines = new RemoteMachines({ runner, store: memoryStore(), bundled: async () => ({ ok: true, helpers: [helper] }), inUse: () => inUse, log: (l) => { logs.push(l) }, reviewer: () => codexRemoteReview })
-  // The run's own folders: on the host inside the home folder, here under the system's temporary folder.
+  // The run's own folder on the host, inside the home folder (this computer's is localDir).
   const up = sshRun('umask 077; d=$(mktemp -d "$HOME/aicc-pv.XXXXXXXX") && mkdir "$d/repo" "$d/big" && cat > "$d/aicc-fake-cli" && chmod 700 "$d/aicc-fake-cli" && echo "$d"', fs.readFileSync(fakeCli))
   hostDir = up.out.trim().split('\n').pop() ?? ''
   if (!/^\/[A-Za-z0-9._/-]+\/aicc-pv\.[A-Za-z0-9]+$/.test(hostDir)) throw new Error(`the host folder was not made: ${up.err}`)
-  localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aicc-pv-'))
 })
 
 afterAll(async () => {
@@ -325,7 +327,7 @@ afterAll(async () => {
     try { await machines.remove(machine.did) } catch { /* the readings say what is left */ }
   }
   if (/^\/[A-Za-z0-9._/-]+\/aicc-pv\.[A-Za-z0-9]+$/.test(hostDir)) sshRun(`rm -rf -- '${hostDir}'`)
-  if (localDir && path.basename(localDir).startsWith('aicc-pv-')) fs.rmSync(localDir, { recursive: true, force: true })
+  if (path.basename(localDir).startsWith('aicc-pv-')) fs.rmSync(localDir, { recursive: true, force: true })
   note('logs', logs)
   note('spawned', [...new Set(spawned)])
   if (OUT) {

@@ -563,12 +563,6 @@ export function setRemoteReviewDeps(host: RemoteReviewHost | null): void {
   remoteReviewHost = host
 }
 
-export function currentRemoteReviewDeps(): RemoteReviewHost | null {
-  return remoteReviewHost
-}
-
-/** The running app's deps for a review on a machine: the machine side, the
- *  registry, main's launch rule, the usage record and the channels. */
 /** The Codex package's review on another machine (core's ProviderRemoteReview),
  *  through the registry as a review here reaches the package; undefined
  *  before the package is registered. The remote machines' Check reads a
@@ -577,6 +571,8 @@ export function codexRemoteReview(): ProviderRemoteReview | undefined {
   return defaultReviewDeps.reviewer()?.remote
 }
 
+/** The running app's deps for a review on a machine: the machine side, the
+ *  registry, main's launch rule, the usage record and the channels. */
 function runningAppRemoteDeps(host: RemoteReviewHost | null): RemoteReviewDeps | null {
   if (!host) return null
   return {

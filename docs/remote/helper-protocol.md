@@ -297,7 +297,7 @@ aicc_planning#446; **pending probe PV1** of the 2.1.3-beta.21 plan, phase 6). A 
 Claude Code helper tab runs on that tab's machine: the app starts, through the
 launcher, `run --nonce <n> --timeout <seconds>` on one `ssh -T` exec, beside
 the tab's own connection. `--timeout` is the review's own timeout, 30 to 900
-seconds (300 by default; `src/main/codex-review-mcp-tool.ts:31`, `:770`); each
+seconds (300 by default; `src/main/review-request.ts:15`, `:20-21`, `:43`); each
 option is given once, and nothing else is taken. No value a host reported is
 put on the command line: the run mode reads its request from standard input,
 one line holding a JSON object with exactly `argv`, `cwd` and `env`, at most
@@ -579,7 +579,7 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
 | What | Limit | On expiry |
 | --- | --- | --- |
 | hello; a one-shot exec | 20 s; 60 s, from ssh start, paused while an askpass prompt is open | `no-hello`; ssh stopped, exec failed |
-| the one-shot run mode (`run`, section 4; from 2.1.3-beta.21) | the review's own timeout (300 s default, at most 900 s, `src/main/codex-review-mcp-tool.ts:31`, `:770`) plus 30 s, from ssh start: the exec's own `timeoutMs` (`src/main/remote-helper/ssh-exec.ts:285`), not the one-shot exec's 60 s (`EXEC_TIMEOUT_MS`, `:171`). The run mode itself ends the program at the review's own timeout after its start (`--timeout`) | ssh stopped, exec failed; the run mode ends the program's group when its standard output closes |
+| the one-shot run mode (`run`, section 4; from 2.1.3-beta.21) | the review's own timeout (300 s default, at most 900 s, `src/main/review-request.ts:15`, `:20-21`, `:43`) plus 30 s, from ssh start: the exec's own `timeoutMs` (`src/main/remote-helper/ssh-exec.ts:285`), not the one-shot exec's 60 s (`EXEC_TIMEOUT_MS`, `:171`). The run mode itself ends the program at the review's own timeout after its start (`--timeout`) | ssh stopped, exec failed; the run mode ends the program's group when its standard output closes |
 | a reply; `probe`, `session.prepare`, `session.start`, `session.end` | 10 s; 30 s | `timeout` |
 | `file.put` (section 15) | 30 s between chunks; reply 10 s after the last | `timeout`, partial file removed |
 | heartbeat; helper with no frame from the app | `ping` every 15 s; 60 s | no `pong` in 45 s: link dropped; the relay exits, the holder stays |

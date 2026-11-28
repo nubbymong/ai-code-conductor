@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-28T08:21:55.209Z",
-  "head": "6eb905e8482f75fe581daa2a5449b2f55f5b45f1",
-  "tree": "fc6f716a11d56452d0933b9adca68ecb55ec7172",
+  "generatedAt": "2026-11-28T09:51:50.837Z",
+  "head": "c47d47640b0690adb42bc66169dc9b68ef15dc89",
+  "tree": "425b39990683583e0b56085af98677a3897e2e64",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 4041,
+  "trackedFileCount": 4042,
   "excludedFileCount": 654,
-  "scannedFileCount": 3387,
+  "scannedFileCount": 3388,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1160,
-  "pathDigest": "45df41a73325f530f2f1bf8dd44fabfae4b76f5e1f2aa68c87600ab35fcd53f6",
+  "matchedPathCount": 1161,
+  "pathDigest": "de45268318549f99994cf0198239ba8c4f4f22af3c76a8fba5639669d77b01e6",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -148,7 +148,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 86
+      "lineCount": 87
     },
     {
       "path": ".github/workflows/upstream-cli-watch.yml",
@@ -218,7 +218,7 @@
       "predicates": [
         "P12"
       ],
-      "lineCount": 22
+      "lineCount": 20
     },
     {
       "path": "docs/remote/helper-threat-model.md",
@@ -1066,7 +1066,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 50
+      "lineCount": 57
     },
     {
       "path": "helper/probes/c7-scenarios.json",
@@ -2435,14 +2435,14 @@
         "P04",
         "P14"
       ],
-      "lineCount": 40
+      "lineCount": 34
     },
     {
       "path": "src/main/remote-helper/scripts.ts",
       "predicates": [
         "P14"
       ],
-      "lineCount": 10
+      "lineCount": 11
     },
     {
       "path": "src/main/review-request.ts",
@@ -4921,7 +4921,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 61
+      "lineCount": 65
     },
     {
       "path": "tests/unit/account-web-codex-session.test.ts",
@@ -5593,7 +5593,7 @@
         "P08",
         "P13"
       ],
-      "lineCount": 82
+      "lineCount": 91
     },
     {
       "path": "tests/unit/main/codex-review-session-abort.test.ts",
@@ -5762,7 +5762,7 @@
         "P08",
         "P13"
       ],
-      "lineCount": 26
+      "lineCount": 35
     },
     {
       "path": "tests/unit/main/conductor-mcp-review-switches.test.ts",
@@ -7465,13 +7465,20 @@
       "lineCount": 5
     },
     {
+      "path": "tests/unit/remote-helper/remote-review-stand-in.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 14
+    },
+    {
       "path": "tests/unit/remote-helper/remote-review.test.ts",
       "predicates": [
         "P04",
         "P08",
         "P13"
       ],
-      "lineCount": 53
+      "lineCount": 79
     },
     {
       "path": "tests/unit/renderer/SessionRow.effort.test.tsx",
