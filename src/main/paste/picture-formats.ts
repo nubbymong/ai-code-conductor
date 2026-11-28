@@ -36,8 +36,9 @@ export interface PictureFormat {
 /** The largest picture made into a TIFF: a Snap's bound, 1920 pixels on its
  *  longer side (SCREENSHOT_MAX_DIM, src/main/screenshot-capture.ts), so at
  *  most 1920 by 1920. Only a Snap needs the TIFF: it is written for both
- *  CLIs, and Codex reads TIFF only on macOS. A copied image file is written
- *  for Claude Code alone, which reads public.png only, and it can be a photo
+ *  CLIs, and the other CLI's read (arboard) takes TIFF only there. A copied
+ *  image file is written for Claude Code alone, which reads public.png only
+ *  (the other CLI reads the file itself), and it can be a photo
  *  of tens of megapixels, whose TIFF (4 bytes a pixel, built on the main
  *  thread) would stall every terminal's output for hundreds of milliseconds
  *  (review round 1, N3). A larger picture is written as public.png alone. */
