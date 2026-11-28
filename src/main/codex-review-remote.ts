@@ -103,6 +103,9 @@ function formatRemoteFooter(usage: ReviewUsage | undefined, machine: string, ran
   return `${head} -- 1 message used -- ${usage.inputTokens} input tokens (${usage.cachedInputTokens} cached), ${usage.outputTokens} output tokens.`
 }
 
+/** What Codex says when the machine's own sign-in is missing, expired or refused. */
+const SIGNED_OUT = /\b401\b|unauthori[sz]ed|not (logged|signed) in|codex login/i
+
 /** The last lines of what the run wrote on standard error, redacted and bounded. */
 function hostErrorTail(stderr: string): string {
   const lines = redactFailure(stderr).split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
@@ -207,7 +210,9 @@ export async function runRemoteCodexReview(
     if (ended.code !== 0) {
       const how = ended.code !== null ? `exited with code ${ended.code}` : `was ended by signal ${ended.signal ?? 'unknown'}`
       const detail = out.error !== undefined ? clip(redactHead(out.error, redactFailure)) : clip(hostErrorTail(r.stderr))
-      return { isError: true, text: `Codex review failed on ${name}: Codex ${how}${detail ? `: ${detail}` : ''}.${formatRemoteFooter(out.usage, name, ranOn)}` }
+      // The machine's own sign-in (Q10): one that is missing or signed out is said so.
+      const signIn = SIGNED_OUT.test(detail) ? ` Codex there may be signed out: sign it in on ${name} (codex login, in a terminal there), then try again.` : ''
+      return { isError: true, text: `Codex review failed on ${name}: Codex ${how}${detail ? `: ${detail}` : ''}.${signIn}${formatRemoteFooter(out.usage, name, ranOn)}` }
     }
     if (out.text === null || !out.text.trim()) {
       const why = out.error !== undefined ? clip(redactHead(out.error, redactFailure)) : out.dropped ? 'Codex printed an event larger than this app reads, and no review after it.' : 'Codex returned no review.'

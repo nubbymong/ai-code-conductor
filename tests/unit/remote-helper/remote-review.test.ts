@@ -257,6 +257,36 @@ describe('a Check reads Codex, its model list, the git and the probes\' line the
   })
 })
 
+describe('the review\'s three scripts are fixed scripts like every other (protocol sections 4 and 13)', () => {
+  const names = ['run', 'reviewread', 'cliread'] as const
+  it('hold no single quote, backslash or line end; check the device id, the home folder and the owner marker first', () => {
+    for (const n of names) {
+      const t = scriptText(n)
+      expect(t, n).not.toMatch(/['\\\r\n]/)
+      expect(t, n).toContain('no bad-device-id')
+      expect(t, n).toContain('no home-open-to-others')
+      expect(t, n).toContain('mk || no not-this-install')
+    }
+  })
+
+  it('each command line fits one argument of a Linux exec (128 KiB), with its values', () => {
+    const N = '0'.repeat(32)
+    const lines = [
+      scriptCommand('run', [N, MACHINE.did, INSTALL, MACHINE.helper.folder, SHA, '900']),
+      scriptCommand('reviewread', [N, MACHINE.did, INSTALL]),
+      scriptCommand('cliread', [N, MACHINE.did, INSTALL, 'codex', 'debug,models,--bundled', 'CODEX_HOME']),
+    ]
+    for (const l of lines) expect(Buffer.byteLength(l), l.slice(0, 40)).toBeLessThan(128 * 1024)
+  })
+
+  it('the host read and the CLI read write only their own folder in the device folder, removed when they end', () => {
+    expect(scriptText('reviewread').match(/rm -rf/g)).toEqual(['rm -rf'])
+    expect(scriptText('reviewread')).toContain('cl() { [ -d "$T" ] && rm -rf -- "${A:?}/rv-${N:?}"; }')
+    expect(scriptText('cliread').match(/rm -rf/g)).toEqual(['rm -rf'])
+    expect(scriptText('run')).not.toMatch(/rm |mkdir|>\s*"?\$/)
+  })
+})
+
 // ── the host read ────────────────────────────────────────────────────────────
 
 describe('the change, read on the machine', () => {

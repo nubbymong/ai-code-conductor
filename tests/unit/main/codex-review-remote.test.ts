@@ -312,9 +312,14 @@ describe('how a run there ends', () => {
     expect(r.text).toMatch(/own Codex sign-in -- 1 message used\. Usage data unavailable\.$/)
     expect(r.text).not.toMatch(/effort/)
   })
-  it('Codex failing there, by its own error event', async () => {
+  it('Codex failing there, by its own error event; a sign-in failure says to sign Codex in on that machine (Q10)', async () => {
     const r = await ending({ ...ended({ code: 1 }), stdout: `${JSON.stringify({ type: 'error', message: 'stream error: 401 Unauthorized' })}\n` })
-    expect(r.text).toMatch(/^Codex review failed on Rocky \(nick@rocky\.lan:22\): Codex exited with code 1: stream error: 401 Unauthorized\./)
+    expect(r.text).toMatch(/^Codex review failed on Rocky \(nick@rocky\.lan:22\): Codex exited with code 1: stream error: 401 Unauthorized\. Codex there may be signed out: sign it in on Rocky \(nick@rocky\.lan:22\) \(codex login, in a terminal there\), then try again\.\n\n---\n/)
+    for (const message of ['Not logged in. Run codex login.', 'error: unauthorized']) {
+      expect((await ending({ ...ended({ code: 1 }), stdout: `${JSON.stringify({ type: 'error', message })}\n` })).text, message).toContain('Codex there may be signed out')
+    }
+    const other = await ending({ ...ended({ code: 1 }), stdout: `${JSON.stringify({ type: 'error', message: 'model gpt-x does not exist' })}\n` })
+    expect(other.text).not.toContain('signed out')
   })
   it('Codex ended by a signal there, with its last error line', async () => {
     const r = await ending({ ...ended({ code: null, signal: 9 }), stderr: 'thread main panicked\nkilled\n' })
