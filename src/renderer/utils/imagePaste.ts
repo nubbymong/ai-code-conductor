@@ -6,7 +6,7 @@
  * key (src/main/paste).
  *
  * WHICH KEYS ARE TAKEN.
- * - A Claude Code or Codex session on this computer, or a tab through the
+ * - An agent session on this computer, or a tab through the
  *   session helper on its machine: Alt+V wherever the focus is, and Ctrl+V
  *   (Cmd+V on a Mac) when the clipboard holds no text, so main pastes a
  *   picture if it holds one (plan Q2). Text paste is unchanged (ADR-008).
@@ -24,8 +24,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { hasSpawned } from '../ptyTracker'
 import { PARTNER_PTY_SUFFIX } from '../../shared/multi-spawn-rule'
 import { PASTE_SENTENCE, type PasteKeyResult } from '../../shared/clipboard-paste'
-import { sendFetchRequestFor, sendImageToSession, sendImageToCodexSession } from './imageTransfer'
-import { CODEX_IMAGE_LINE } from '../lib/codexComposer'
+import { sendFetchRequestFor, pasteImageByPathRoute } from './imageTransfer'
 import type { Session } from '../stores/sessionStore'
 
 /** Alt+V as a terminal sends it: what a plain terminal or a partner shell gets. */
@@ -39,7 +38,7 @@ export type PasteSession = Pick<Session, 'id' | 'shellOnly' | 'sessionType'> & P
 
 /** Where a press of Alt+V from outside the terminal goes: the program in a
  *  plain terminal or a partner shell, as a key; or main, for a Claude Code or
- *  Codex session. */
+ *  agent session. */
 export type OutsidePasteTarget = { kind: 'key'; ptyId: string; running: boolean } | { kind: 'main' }
 
 export function outsidePasteTarget(session: PasteSession, showingPartner: boolean): OutsidePasteTarget {
@@ -52,7 +51,7 @@ export function outsidePasteTarget(session: PasteSession, showingPartner: boolea
 }
 
 /** Whether a focused terminal's capture handler takes Alt+V, or Ctrl+V with
- *  no text, and reports it to main: a Claude Code or Codex session on this
+ *  no text, and reports it to main: an agent session on this
  *  computer, or a tab main says runs through the session helper
  *  (`throughHelper`); never a plain terminal, a partner pane, or a tab on
  *  the old SSH path. */
@@ -60,19 +59,6 @@ export function terminalTakesImagePaste(session: PasteSession | undefined, opts:
   if (!session || opts.partnerPane || session.shellOnly) return false
   if (session.sessionType === 'ssh') return opts.throughHelper
   return true
-}
-
-/** The path route behind the test switch only (main answers `path-route`
- *  only when the app is not packaged and CCC_E2E_PATH_ROUTE=1): beta.20's
- *  Alt+V flow for a session on this computer, by the line main named. */
-async function pasteByPathRoute(sessionId: string, line: 'enter' | 'composer' | null): Promise<void> {
-  const res = await window.electronAPI.clipboard.saveImage()
-  if (!('path' in res)) {
-    usePasteHintStore.getState().show(sessionId, res.error === 'too-large' ? 'Image too large to paste (max 10 MB)' : 'No image in clipboard: copy an image or an image file, then press Alt+V.')
-    return
-  }
-  if (line === 'composer') sendImageToCodexSession(sessionId, res.path, CODEX_IMAGE_LINE, (note) => usePasteHintStore.getState().show(sessionId, note))
-  else sendImageToSession(sessionId, res.path, PASTE_SENTENCE, 'local', line)
 }
 
 /**
@@ -99,7 +85,7 @@ export function applyPasteResult(sessionId: string, result: PasteKeyResult, how:
       // Ctrl+V with no text said nothing to paste.
       if (how.textChord) return true
       if (how.focused) { writeSessionInput(sessionId, ALT_V_KEY); return false }
-      void pasteByPathRoute(sessionId, result.line)
+      void pasteImageByPathRoute(sessionId, result.line)
       return false
   }
 }

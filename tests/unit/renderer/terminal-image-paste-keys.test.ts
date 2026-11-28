@@ -12,7 +12,7 @@
  *  - Ctrl+V with no text on the clipboard, in such a session: reported as
  *    the text chord; "nothing to paste" only when main finds no picture.
  *    With text: pasted as text, main never asked (ADR-008 unchanged).
- *  - The take rule: a Claude Code or Codex session on this computer, or a
+ *  - The take rule: an agent session on this computer, or a
  *    tab main says runs through the session helper; never a plain terminal,
  *    a partner pane or a tab on the old SSH path.
  *  - The Claude Code prompt's 'read' (main's placeholder read): a count of
@@ -134,7 +134,7 @@ describe('Ctrl+V (Q2): a picture only when the clipboard holds no text', () => {
 
 describe('the take rule', () => {
   const local = { id: 's1', sessionType: 'local' as const }
-  it('a Claude Code or Codex session on this computer takes it; a helper tab when main says so', () => {
+  it('an agent session on this computer takes it; a helper tab when main says so', () => {
     expect(terminalTakesImagePaste(local, { partnerPane: false, throughHelper: false })).toBe(true)
     expect(terminalTakesImagePaste({ id: 's2', sessionType: 'ssh' }, { partnerPane: false, throughHelper: true })).toBe(true)
   })

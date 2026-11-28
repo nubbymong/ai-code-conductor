@@ -15,12 +15,12 @@
 //
 // WHEN IT WRITES (ADR-032 decision 2). A picture already on the clipboard:
 // nothing. A copied image file: nothing when the CLI reads copied files
-// itself (Codex on Windows and macOS), else its picture. Snap: always its
+// itself (the provider table says which), else its picture. Snap: always its
 // picture, which stays on the clipboard afterwards (plan Q1) whichever
 // machine the session runs on.
 //
 // BY KIND OF SESSION.
-// - On this computer, a Claude Code or Codex session: the CLI's own paste
+// - On this computer, an agent session: the CLI's own paste
 //   (above).
 // - A tab on the old SSH path (ADR-032 decision 9, plan Q9): a press from
 //   outside the terminal saves the picture in the shared screenshots folder

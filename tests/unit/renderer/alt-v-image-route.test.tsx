@@ -32,6 +32,7 @@ const h = vi.hoisted(() => ({
   sendImageToSession: vi.fn(),
   sendImageToCodexSession: vi.fn(),
   sendFetchRequestFor: vi.fn(),
+  pasteImageByPathRoute: vi.fn(async (..._a: unknown[]) => {}),
 }))
 vi.mock('../../../src/renderer/onboarding/gate', () => ({ deriveOnboarding: () => ({ due: false, steps: [] }) }))
 vi.mock('../../../src/renderer/components/terminal/tmuxWheelScroll', () => ({ writeSessionInput: (id: string, data: string) => { h.writes.push([id, data]) } }))
@@ -39,6 +40,7 @@ vi.mock('../../../src/renderer/utils/imageTransfer', () => ({
   sendImageToSession: h.sendImageToSession,
   sendImageToCodexSession: h.sendImageToCodexSession,
   sendFetchRequestFor: h.sendFetchRequestFor,
+  pasteImageByPathRoute: h.pasteImageByPathRoute,
 }))
 
 const { useKeyboardShortcuts } = await import('../../../src/renderer/hooks/useKeyboardShortcuts')
@@ -74,6 +76,7 @@ beforeEach(() => {
   h.sendImageToSession.mockReset()
   h.sendImageToCodexSession.mockReset()
   h.sendFetchRequestFor.mockReset()
+  h.pasteImageByPathRoute.mockClear()
   answer = { outcome: 'sent' }
   saveImage = vi.fn(async () => ({ path: IMG }))
   imageKey = vi.fn(async () => answer)
@@ -138,6 +141,7 @@ describe('Alt+V with focus outside the terminal, a Claude Code or Codex session 
     expect(saveImage).not.toHaveBeenCalled()
     expect(h.sendImageToSession).not.toHaveBeenCalled()
     expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
+    expect(h.pasteImageByPathRoute).not.toHaveBeenCalled()
   })
 
   it('a tab on the old SSH path: main answers the fetch request, typed naming the saved file, never its path (Q9)', async () => {
@@ -151,14 +155,12 @@ describe('Alt+V with focus outside the terminal, a Claude Code or Codex session 
   it('only main\'s path-route answer (the test switch) runs the beta.20 path flow, by the line main named', async () => {
     answer = { outcome: 'path-route', line: 'composer' }
     await altV([session('cx1', { provider: 'codex' } as Partial<Session>)], 'cx1')
-    await vi.waitFor(() => expect(h.sendImageToCodexSession).toHaveBeenCalledTimes(1))
-    expect(saveImage).toHaveBeenCalledTimes(1)
+    expect(h.pasteImageByPathRoute).toHaveBeenCalledWith('cx1', 'composer')
     answer = { outcome: 'path-route', line: 'enter' }
     await altV([session('cl1')], 'cl1')
-    await vi.waitFor(() => expect(h.sendImageToSession).toHaveBeenCalledTimes(1))
-    expect(h.sendImageToSession.mock.calls[0].slice(0, 2)).toEqual(['cl1', IMG])
-    expect(h.sendImageToSession.mock.calls[0][3]).toBe('local')
-    expect(h.sendImageToSession.mock.calls[0][4]).toBe('enter')
+    expect(h.pasteImageByPathRoute).toHaveBeenLastCalledWith('cl1', 'enter')
+    expect(h.pasteImageByPathRoute).toHaveBeenCalledTimes(2)
+    expect(h.writes).toEqual([])
   })
 })
 

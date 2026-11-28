@@ -54,7 +54,7 @@ export interface TerminalKeybindingOptions {
    *  failure is visible rather than silent — the property that let #145 hide. */
   onNothingToPaste?: () => void
   /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.4): the clipboard image paste,
-   *  for a session whose CLI takes it (a Claude Code or Codex session on
+   *  for a session whose CLI takes it (an agent session on
    *  this computer, or a helper tab; utils/imagePaste.ts). Absent: nothing
    *  changes, as in a plain terminal, a partner pane or a tab on the old SSH
    *  path, where Alt+V stays xterm's. */

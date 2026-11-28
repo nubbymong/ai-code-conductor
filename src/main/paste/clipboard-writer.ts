@@ -9,8 +9,8 @@
 // Windows: one Electron 44 clipboard.write() call with one item holding
 // image/png, the W3C-shaped API whose read the app already uses
 // (src/main/clipboard-image.ts). Probe PW2 reads back which Win32 formats
-// that call leaves (both CLIs read CF_DIB; Codex reads the registered PNG
-// format first).
+// that call leaves (both CLIs read CF_DIB; one of them reads the registered
+// PNG format first).
 //
 // macOS and Linux: not in this phase. Phase 3 (plan 3.1) fills each with the
 // formats its CLIs read (macOS public.png and public.tiff, Linux image/png),

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "dc9b0ea3c4ceb401d546946ed0913ba8b2047f91fbd3bcc8d9102d628ef4b615",
-  "manifestHead": "7205dc61706e1267709df4d6eff2f0a189ab4224",
+  "manifestPathDigest": "d5d8fb401ebffa57b85d3419a8898111177bb33ab5e050b85bc6c9dea1bd61c4",
+  "manifestHead": "813b23a1db7350af90d541ef4b6d608f43555f46",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -3058,6 +3058,17 @@
       "note": "created by WP2; replaces the legacy runCodexProcess/runCodexStreaming in auth.ts once the auth slice lands"
     },
     {
+      "path": "src/main/providers/codex/clipboard-paste.ts",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "category": "LAUNCH",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) module: the Codex package's clipboard image paste table (ADR-032 row 14): Codex's own paste key per OS (ESC v on Windows, Ctrl+V elsewhere), the formats its clipboard read takes, that it reads a copied file itself on Windows and macOS, and the path route's composer line behind the test switch; data only, no process, no Codex behaviour changed (WP1.68); tests/unit/main/clipboard-paste-tables.test.ts",
+      "note": "created by the clipboard paste; offered through the registered provider (SessionProvider.clipboardPaste)"
+    },
+    {
       "path": "src/main/providers/codex/composer-submit.ts",
       "predicates": [
         "P01",
@@ -3148,7 +3159,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "move",
-      "evidence": "CodexProvider class contract pinned by tests/wp1/codex-characterization.test.ts C2 (WP1.54); entry-point rule tests/wp1/dependency-boundaries.test.ts (WP1.66); WP2 final fixes: CodexProvider.resolveBinary and resumeCommand, which nothing called, refuse instead of resolving the codex on PATH (not used for Codex: launches go through the managed launch; C2 inverted), and cli.discovery and install.recipes are declared supported, what the package implements; realm.isolated stays unknown because the contract backs it with realms.realmEnvPatch, which Codex does not expose (WP1.17, WP1.18); tests/unit/providers/codex/spawn.test.ts, tests/wp1/provider-conformance.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): the wired package exposes the usage port (account.usage supported, unknown unwired) and CodexProvider records each session's allowance by its sessions folder (WP1.41); tests/wp1/provider-conformance.test.ts; tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 round-1 review fixes: the usage port uses the checked sessions folder, and a session opens and releases its realm's live figure (WP1.68); tests/unit/providers/codex/telemetry.test.ts; tests/unit/main/provider-account-usage.test.ts; WP2 P3 usage track MP3 round-2 review fixes: exports the lookup that tells unavailable from no reading, and the day-entry and timeout bounds (WP1.68); tests/unit/providers/codex/usage-last-seen.test.ts; WP2 P3 usage track MP7 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): exports the app-server client and the read result type (WP1.41); tests/unit/providers/codex/app-server-client.test.ts; WP2 P3 usage track MP8 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): wires the port's read to the auth operations and keys the verdict cache on the proven executable (codexExecutableKey) (WP1.41); tests/unit/main/codex-usage-read.test.ts; WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the usage index reads a realm's sessions folder held to the canonical-home check (WP1.2); tests/wp1/codex-auth-adapter.test.ts; WP2 PR 3 P3.5: the session telemetry passes the resumed id, the pick file and the claim listener to the watcher (WP1.68); tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 3 P3.6 (row 22): the realm folders get the conversation carry (conversation-carry.ts), replaceable only by a test (WP1.28); tests/wp1/conversation-carry-service.test.ts; WP2 PR 3 P3.9 (rows 39, 42): the package's setup operations state the supported range and read the proven CLI's model list (model-catalogue.ts), with test ports that never replace the proof (WP1.17, WP1.49); tests/unit/providers/codex/model-catalogue.test.ts; WP2 PR 3 P3.9 round 1: the model list read's empty home is made by codexModelsScratchHome, which first sweeps homes an earlier read left behind (own prefix, real folders, an hour old) (WP1.17); tests/unit/providers/codex/models-scratch-home.test.ts; WP2 PR 3 P3.9 round 2: exports the leftover and scope names of the runner and the reviewer (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 3: exports the run records and observation bounds of the runner (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 4: exports codexChainAlone and CodexObserveReason (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.10: the package deploys the hook forwarder, sweeps stale hook folders and offers prepareSessionHooks (a per-launch owner-only hook file); its telemetry source passes the exact claim and the refute through (WP1.68); tests/unit/providers/codex/hooks.test.ts, tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): the hook root in this install's data folder, owner-only by the app's folder rule, and the plain-path copy staged at boot (A5, V3); tests/unit/providers/codex/hooks.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): a plain-path copy that could not be made is logged at boot (R7); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 round 3 (the round 2 re-review and VM re-check) (WP1.68): a hook folder that cannot be made the user's is logged at boot and at a launch (F3); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): the provider's deploy copies the scripts only; prepareHookFolders prepares the hook folders and says when a preparation leaves sessions without hooks; prepareSessionHooks uses only the prepared root; tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): passes onRollout to the watcher; tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 4 P4.4: launch.accountFolders wired to the auth operations (WP1.68); tests/unit/main/account-folders-service.test.ts; WP2 PR 4 P4.5 (row 57): background in the launch kinds and the agent-run port (WP1.46); tests/unit/main/codex-background-launch.test.ts, tests/wp1/provider-conformance.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the CodexProvider members pty-manager reaches the package through (launchRoute, stagedSkillsDir, runScreen), committed by lane A directly (RBND-1, recorded in the plan's P4.1 record) (WP1.55); tests/unit/main/pty-codex-provider-port.test.ts, tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 owner answers (2026-10-04) (be38c516: removeLegacyMcpServerConfig and the pricing operations on the package; integration round 3: launchRoute removed, no consumer left) (WP1.55); tests/unit/providers/provider-entry-routing.test.ts, tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 owner answers review fix pass (FA's patch, integrated by FI): the header says the dependency-boundary test holds the deep imports at zero (WP1.55); tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 P4.7 fix pass 1: the package offers the Insights port (insights, createCodexInsightsOperations) that the Insights runner reaches through the registry (WP1.55); tests/wp1/provider-conformance.test.ts, tests/wp1/dependency-boundaries.test.ts; 2.1.3-beta.14 (aicc_planning#358, the code half: the dormant permission hold deleted) (WP1.68): the two marker constants are no longer exported; tests/unit/hooks/permission-hold-gone.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the run screen offers submitImage (submitCodexImage) beside submit (WP1.68); tests/unit/main/session-input-codex-image.test.ts; 2.1.3-beta.18 section 5 (aicc_planning#433, ADR-030 S12): a held Codex session's hook events through its holder (WP1.68); tests/unit/main/session-helper-codex-hooks.test.ts, tests/unit/scripts/codex-hook-forwarder-helper.test.ts; 2.1.3-beta.19 section 6.2 (aicc_planning#440): the run screen declares heldEnterWaitMs (PROMPT_ENTER_DELAY_MS), the wait a held Codex terminal's queued lone Enter keeps behind the frame before it (PB3) (WP1.68); tests/unit/main/session-helper-enter-wait.test.ts",
+      "evidence": "CodexProvider class contract pinned by tests/wp1/codex-characterization.test.ts C2 (WP1.54); entry-point rule tests/wp1/dependency-boundaries.test.ts (WP1.66); WP2 final fixes: CodexProvider.resolveBinary and resumeCommand, which nothing called, refuse instead of resolving the codex on PATH (not used for Codex: launches go through the managed launch; C2 inverted), and cli.discovery and install.recipes are declared supported, what the package implements; realm.isolated stays unknown because the contract backs it with realms.realmEnvPatch, which Codex does not expose (WP1.17, WP1.18); tests/unit/providers/codex/spawn.test.ts, tests/wp1/provider-conformance.test.ts; WP2 P3 usage track MP3 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md): the wired package exposes the usage port (account.usage supported, unknown unwired) and CodexProvider records each session's allowance by its sessions folder (WP1.41); tests/wp1/provider-conformance.test.ts; tests/unit/providers/codex/telemetry.test.ts; WP2 P3 usage track MP3 round-1 review fixes: the usage port uses the checked sessions folder, and a session opens and releases its realm's live figure (WP1.68); tests/unit/providers/codex/telemetry.test.ts; tests/unit/main/provider-account-usage.test.ts; WP2 P3 usage track MP3 round-2 review fixes: exports the lookup that tells unavailable from no reading, and the day-entry and timeout bounds (WP1.68); tests/unit/providers/codex/usage-last-seen.test.ts; WP2 P3 usage track MP7 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): exports the app-server client and the read result type (WP1.41); tests/unit/providers/codex/app-server-client.test.ts; WP2 P3 usage track MP8 (owner decision 2026-09-27, docs/wp1/owner-decisions-2026-09-27.md, the scoped WP1.41 exception; ADR-022): wires the port's read to the auth operations and keys the verdict cache on the proven executable (codexExecutableKey) (WP1.41); tests/unit/main/codex-usage-read.test.ts; WP2 P3 usage track MP9 round 1 (review fixes: B-F1, B-F2, Q-1 to Q-5): the usage index reads a realm's sessions folder held to the canonical-home check (WP1.2); tests/wp1/codex-auth-adapter.test.ts; WP2 PR 3 P3.5: the session telemetry passes the resumed id, the pick file and the claim listener to the watcher (WP1.68); tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 3 P3.6 (row 22): the realm folders get the conversation carry (conversation-carry.ts), replaceable only by a test (WP1.28); tests/wp1/conversation-carry-service.test.ts; WP2 PR 3 P3.9 (rows 39, 42): the package's setup operations state the supported range and read the proven CLI's model list (model-catalogue.ts), with test ports that never replace the proof (WP1.17, WP1.49); tests/unit/providers/codex/model-catalogue.test.ts; WP2 PR 3 P3.9 round 1: the model list read's empty home is made by codexModelsScratchHome, which first sweeps homes an earlier read left behind (own prefix, real folders, an hour old) (WP1.17); tests/unit/providers/codex/models-scratch-home.test.ts; WP2 PR 3 P3.9 round 2: exports the leftover and scope names of the runner and the reviewer (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 3: exports the run records and observation bounds of the runner (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.9 round 4: exports codexChainAlone and CodexObserveReason (WP1.17); tests/wp1/cli-discovery.test.ts; WP2 PR 3 P3.10: the package deploys the hook forwarder, sweeps stale hook folders and offers prepareSessionHooks (a per-launch owner-only hook file); its telemetry source passes the exact claim and the refute through (WP1.68); tests/unit/providers/codex/hooks.test.ts, tests/unit/main/pty-codex-hooks.test.ts; WP2 PR 3 P3.10 round 1 (ADR-009 pass 1, spec, quality and VM findings) (WP1.68): the hook root in this install's data folder, owner-only by the app's folder rule, and the plain-path copy staged at boot (A5, V3); tests/unit/providers/codex/hooks.test.ts; WP2 PR 3 P3.10 round 2 (the round 1 re-review and the VM re-check) (WP1.68): a plain-path copy that could not be made is logged at boot (R7); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 round 3 (the round 2 re-review and VM re-check) (WP1.68): a hook folder that cannot be made the user's is logged at boot and at a launch (F3); tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.10 rounds 3b and 4 (the hook wrapper and the picker resolve their helpers from fixed locations; the hook folders prepared asynchronously and read back; approval pairing; the Watchdog episode) (WP1.68): the provider's deploy copies the scripts only; prepareHookFolders prepares the hook folders and says when a preparation leaves sessions without hooks; prepareSessionHooks uses only the prepared root; tests/unit/providers/codex/spawn-hooks.test.ts; WP2 PR 3 P3.12 (rows 31, 32, 65; logs and GitHub context; parity) (WP1.68): passes onRollout to the watcher; tests/unit/providers/codex/spawn-resume.test.ts; WP2 PR 4 P4.4: launch.accountFolders wired to the auth operations (WP1.68); tests/unit/main/account-folders-service.test.ts; WP2 PR 4 P4.5 (row 57): background in the launch kinds and the agent-run port (WP1.46); tests/unit/main/codex-background-launch.test.ts, tests/wp1/provider-conformance.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the CodexProvider members pty-manager reaches the package through (launchRoute, stagedSkillsDir, runScreen), committed by lane A directly (RBND-1, recorded in the plan's P4.1 record) (WP1.55); tests/unit/main/pty-codex-provider-port.test.ts, tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 owner answers (2026-10-04) (be38c516: removeLegacyMcpServerConfig and the pricing operations on the package; integration round 3: launchRoute removed, no consumer left) (WP1.55); tests/unit/providers/provider-entry-routing.test.ts, tests/unit/providers/codex/spawn-canvas.test.ts; WP2 PR 4 owner answers review fix pass (FA's patch, integrated by FI): the header says the dependency-boundary test holds the deep imports at zero (WP1.55); tests/wp1/dependency-boundaries.test.ts; WP2 PR 4 P4.7 fix pass 1: the package offers the Insights port (insights, createCodexInsightsOperations) that the Insights runner reaches through the registry (WP1.55); tests/wp1/provider-conformance.test.ts, tests/wp1/dependency-boundaries.test.ts; 2.1.3-beta.14 (aicc_planning#358, the code half: the dormant permission hold deleted) (WP1.68): the two marker constants are no longer exported; tests/unit/hooks/permission-hold-gone.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the run screen offers submitImage (submitCodexImage) beside submit (WP1.68); tests/unit/main/session-input-codex-image.test.ts; 2.1.3-beta.18 section 5 (aicc_planning#433, ADR-030 S12): a held Codex session's hook events through its holder (WP1.68); tests/unit/main/session-helper-codex-hooks.test.ts, tests/unit/scripts/codex-hook-forwarder-helper.test.ts; 2.1.3-beta.19 section 6.2 (aicc_planning#440): the run screen declares heldEnterWaitMs (PROMPT_ENTER_DELAY_MS), the wait a held Codex terminal's queued lone Enter keeps behind the frame before it (PB3) (WP1.68); tests/unit/main/session-helper-enter-wait.test.ts; 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447): the run screen offers submitClipboard (submitCodexClipboard) and the package its clipboardPaste table (WP1.68); tests/unit/main/clipboard-paste-tables.test.ts, tests/unit/main/session-input-ownership.test.ts",
       "note": "becomes the Codex package public entry point; CodexProvider (session parity surface) retained for the runtime work package, its two PATH lookups refused; auth/setup/realm operations exported alongside"
     },
     {
@@ -3346,7 +3357,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.18 section 4 (aicc_planning#432) module: the Codex package's door members (retry, prompt, marker, image, ask), the Codex calls the session input module made for a session it tested as Codex, moved unchanged over the package's submit primitive and image rule (WP1.68); tests/unit/main/session-input-codex-image.test.ts, tests/unit/main/session-input-prompt.test.ts, tests/unit/providers/run-screen-doors-wired.test.ts",
+      "evidence": "new 2.1.3-beta.18 section 4 (aicc_planning#432) module: the Codex package's door members (retry, prompt, marker, image, ask), the Codex calls the session input module made for a session it tested as Codex, moved unchanged over the package's submit primitive and image rule (WP1.68); tests/unit/main/session-input-codex-image.test.ts, tests/unit/main/session-input-prompt.test.ts, tests/unit/providers/run-screen-doors-wired.test.ts; 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447): the clipboard door member, over the run screen's submitClipboard (WP1.68); tests/unit/main/codex-clipboard-paste.test.ts, tests/unit/main/session-input-ownership.test.ts",
       "note": "P01: the file path; P14: the Codex package's own door rules and their comments"
     },
     {
@@ -3357,7 +3368,7 @@
       ],
       "category": "LAUNCH",
       "disposition": "added",
-      "evidence": "new WP2 PR 4 P4.1 (row 51) module: main's bounded headless pane of each Codex run, one submission at a time (WP1.68); tests/unit/main/codex-session-screen.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the pane takes the Watchdog's CSI clamp from its caller and refuses to open without one, so it no longer reaches the Claude package (WP1.55); tests/unit/main/codex-session-screen.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.55); tests/unit/main/codex-session-screen.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the image rule (pasteImageIntoCodexComposer: wait for the ready, empty composer, the path as a bracketed paste, Codex's placeholder read, the sentence through the submit primitive read past the placeholder, Enter; Ctrl+U take-back only of its own paste) and its driver submitCodexImage, on the same per-run chain as submitCodexText (onRun) (WP1.68); tests/unit/main/codex-image-paste.test.ts, tests/unit/main/codex-session-screen-image.test.ts",
+      "evidence": "new WP2 PR 4 P4.1 (row 51) module: main's bounded headless pane of each Codex run, one submission at a time (WP1.68); tests/unit/main/codex-session-screen.test.ts; WP2 PR 4 lane A round 2 (9e200c0a, the provider port; no behaviour change): the pane takes the Watchdog's CSI clamp from its caller and refuses to open without one, so it no longer reaches the Claude package (WP1.55); tests/unit/main/codex-session-screen.test.ts; WP2 PR 4 ADR-009 round 1 (63968ba0): changed by the pass's fixes (WP1.55); tests/unit/main/codex-session-screen.test.ts; 2.1.3-beta.17 section C6 (aicc_planning#415): the image rule (pasteImageIntoCodexComposer: wait for the ready, empty composer, the path as a bracketed paste, Codex's placeholder read, the sentence through the submit primitive read past the placeholder, Enter; Ctrl+U take-back only of its own paste) and its driver submitCodexImage, on the same per-run chain as submitCodexText (onRun) (WP1.68); tests/unit/main/codex-image-paste.test.ts, tests/unit/main/codex-session-screen-image.test.ts; 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447): the clipboard paste rule (pasteClipboardIntoCodexComposer: the ready, empty composer for a press from outside the terminal, the key as one write, Codex's placeholder, the sentence through the submit primitive past it; no path and no take-back) and its driver submitCodexClipboard on the same per-run chain (onRun); the path rule unchanged (WP1.68); tests/unit/main/codex-clipboard-paste.test.ts, tests/unit/main/path-route-doors-frozen.test.ts",
       "note": ""
     },
     {
@@ -4148,16 +4159,6 @@
       "note": "session surface (runtime work package); provider conditionals here are outside the WP1 core/shared AST rule scope"
     },
     {
-      "path": "src/renderer/components/ScreenshotButton.tsx",
-      "predicates": [
-        "P11"
-      ],
-      "category": "UI-ONLY",
-      "disposition": "retain",
-      "evidence": "existing file retained; baseline suite green at 6bafcc33 (docs/wp1/baseline-2026-09-19.md); 2.1.3-beta.17 section C6 (aicc_planning#415), comment only: the sessionType comment says main pastes a saved image into Claude Code or Codex on this computer as the CLI's own paste, and a Codex session main cannot paste into gets the line by the Codex typing rule; no Codex code path in the file (WP1.33)",
-      "note": "matched since the 2.1.3-beta.17 release commit (was not matched); P11: one comment"
-    },
-    {
       "path": "src/renderer/components/SessionDialog.tsx",
       "predicates": [
         "P04",
@@ -4741,7 +4742,6 @@
     {
       "path": "src/renderer/hooks/useKeyboardShortcuts.ts",
       "predicates": [
-        "P05",
         "P11"
       ],
       "category": "UI-ONLY",
@@ -7679,6 +7679,17 @@
       "note": "created by WP2 PR 3 P3.13 round 1 (ADR-009 lens B probe adopted); node-pty faked, the project gate never answers, own temp folders removed"
     },
     {
+      "path": "tests/unit/main/clipboard-paste-tables.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/clipboard-paste-tables.test.ts): each CLI's own image paste key per OS, Claude Code's read from the account's keybindings through the fixed chord table, the formats and the copied-file rule, and each registered provider's table (WP1.2)",
+      "note": "created by the clipboard paste; pure tables and a temp keybindings folder, no process"
+    },
+    {
       "path": "tests/unit/main/cloud-agent-codex.test.ts",
       "predicates": [
         "P01",
@@ -7738,6 +7749,17 @@
       "disposition": "added",
       "evidence": "new WP2 PR 4 P4.5 (row 57) test: the background launch kind prepared, leased and refused remote (WP1.46); tests/unit/main/codex-background-launch.test.ts",
       "note": ""
+    },
+    {
+      "path": "tests/unit/main/codex-clipboard-paste.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/codex-clipboard-paste.test.ts): Codex's clipboard paste rule against a simulated composer: the key as one write, the placeholder, the sentence and Enter only from outside the terminal, no take-back, no Ctrl+C and no path (WP1.2)",
+      "note": "created by the clipboard paste; a simulated composer and a fake clock, no process"
     },
     {
       "path": "tests/unit/main/codex-composer-submit.test.ts",
@@ -8594,6 +8616,26 @@
       "note": "host-safe: ipcMain and Claude's scanner mocked"
     },
     {
+      "path": "tests/unit/main/paste-module.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/paste-module.test.ts): the paste module's decisions with fake reads and writes, a Codex session's key and copied-file rule among them (WP1.2)",
+      "note": "created by the clipboard paste; fakes only, no clipboard and no process"
+    },
+    {
+      "path": "tests/unit/main/path-route-doors-frozen.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/path-route-doors-frozen.test.ts): the path route's three doors, Codex's path paste and typed path among them, held to their 49a8ddb9 text for this beta (WP1.2)",
+      "note": "created by the clipboard paste; reads source text only"
+    },
+    {
       "path": "tests/unit/main/path-utils-home.test.ts",
       "predicates": [
         "P13"
@@ -9195,6 +9237,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.14 section A1 test (tests/unit/main/session-helper-update-keep.test.ts, S16 step 4, aicc_planning#387 with #359): an app update on Windows lets go of a held Claude Code or Codex session of a saved tab whose tools go through its holder, records it (provider, conversation, account, Codex hook folder), and the next start logs it, removes the record and its files and ends it before its tab starts a new CLI; an update that does not start ends it at once (WP1.68)",
       "note": "created by 2.1.3-beta.14 section A1; the P13 hits are the second provider's tab (kind codex) and its hook folder; a fake helper in memory and a mocked node-pty, no process starts"
+    },
+    {
+      "path": "tests/unit/main/session-input-clipboard.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/session-input-clipboard.test.ts): the clipboard paste door through the Claude Code rule; a Codex session with no clipboard member takes nothing (WP1.2)",
+      "note": "created by the clipboard paste; fake ports and a fake clock, no process"
     },
     {
       "path": "tests/unit/main/session-input-codex-image.test.ts",

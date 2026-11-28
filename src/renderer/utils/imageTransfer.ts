@@ -2,7 +2,8 @@ import { writeSessionInput } from '../components/terminal/tmuxWheelScroll'
 import { quoteArgForShell } from '../../shared/shell-quote'
 import { useSessionStore } from '../stores/sessionStore'
 import { usePasteHintStore } from '../stores/pasteHintStore'
-import { sendImagePathToCodex, NOT_AT_PROMPT, IMAGE_AT_PROMPT } from '../lib/codexComposer'
+import { sendImagePathToCodex, NOT_AT_PROMPT, IMAGE_AT_PROMPT, CODEX_IMAGE_LINE } from '../lib/codexComposer'
+import { PASTE_SENTENCE } from '../../shared/clipboard-paste'
 import type { ImageLine } from '../lib/session-capabilities'
 import { SSH_THROUGH_HELPER } from '../../shared/remote-machines'
 /**
@@ -197,6 +198,21 @@ function sendFetchRequest(sessionId: string, request: string): void {
       writeSessionInput(sessionId, '\r')
     }, HELPER_ENTER_DELAY_MS)
   }, whole)
+}
+
+/** The path route behind the test switch only (main answers `path-route`
+ *  only when the app is not packaged and CCC_E2E_PATH_ROUTE=1): beta.20's
+ *  Alt+V flow for a session on this computer, by the line main named: the
+ *  picture saved, then pasted or typed by that line. Deleted in
+ *  2.1.3-beta.22. */
+export async function pasteImageByPathRoute(sessionId: string, line: ImageLine | null): Promise<void> {
+  const res = await window.electronAPI.clipboard.saveImage()
+  if (!('path' in res)) {
+    usePasteHintStore.getState().show(sessionId, res.error === 'too-large' ? 'Image too large to paste (max 10 MB)' : 'No image in clipboard: copy an image or an image file, then press Alt+V.')
+    return
+  }
+  if (line === 'composer') sendImageToCodexSession(sessionId, res.path, CODEX_IMAGE_LINE, (note) => usePasteHintStore.getState().show(sessionId, note))
+  else sendImageToSession(sessionId, res.path, PASTE_SENTENCE, 'local', line)
 }
 
 /** ADR-032 decision 9: the old SSH path's request naming the saved file

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-27T23:42:08.591Z",
-  "head": "7205dc61706e1267709df4d6eff2f0a189ab4224",
-  "tree": "24fa2f2eb0499e2c3b85dca30384f239814d6954",
+  "generatedAt": "2026-11-28T08:17:53.602Z",
+  "head": "813b23a1db7350af90d541ef4b6d608f43555f46",
+  "tree": "cd276c7ce3a4cb068a62340949a6806202d9cbdf",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 4027,
-  "excludedFileCount": 653,
-  "scannedFileCount": 3374,
+  "trackedFileCount": 4044,
+  "excludedFileCount": 654,
+  "scannedFileCount": 3390,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1147,
-  "pathDigest": "dc9b0ea3c4ceb401d546946ed0913ba8b2047f91fbd3bcc8d9102d628ef4b615",
+  "matchedPathCount": 1152,
+  "pathDigest": "d5d8fb401ebffa57b85d3419a8898111177bb33ab5e050b85bc6c9dea1bd61c4",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -218,14 +218,14 @@
       "predicates": [
         "P12"
       ],
-      "lineCount": 8
+      "lineCount": 14
     },
     {
       "path": "docs/remote/helper-threat-model.md",
       "predicates": [
         "P12"
       ],
-      "lineCount": 6
+      "lineCount": 7
     },
     {
       "path": "docs/wp2/completion-plan.md",
@@ -2071,6 +2071,14 @@
       "lineCount": 219
     },
     {
+      "path": "src/main/providers/codex/clipboard-paste.ts",
+      "predicates": [
+        "P01",
+        "P14"
+      ],
+      "lineCount": 12
+    },
+    {
       "path": "src/main/providers/codex/composer-submit.ts",
       "predicates": [
         "P01",
@@ -2138,7 +2146,7 @@
         "P09",
         "P14"
       ],
-      "lineCount": 335
+      "lineCount": 340
     },
     {
       "path": "src/main/providers/codex/insights-exec.ts",
@@ -2285,7 +2293,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 20
+      "lineCount": 22
     },
     {
       "path": "src/main/providers/codex/session-screen.ts",
@@ -2293,7 +2301,7 @@
         "P01",
         "P14"
       ],
-      "lineCount": 69
+      "lineCount": 89
     },
     {
       "path": "src/main/providers/codex/spawn.ts",
@@ -2512,7 +2520,7 @@
       "predicates": [
         "P14"
       ],
-      "lineCount": 62
+      "lineCount": 66
     },
     {
       "path": "src/main/session-resume-enrich.ts",
@@ -2839,13 +2847,6 @@
         "P11"
       ],
       "lineCount": 6
-    },
-    {
-      "path": "src/renderer/components/ScreenshotButton.tsx",
-      "predicates": [
-        "P11"
-      ],
-      "lineCount": 3
     },
     {
       "path": "src/renderer/components/SessionDialog.tsx",
@@ -3244,10 +3245,9 @@
     {
       "path": "src/renderer/hooks/useKeyboardShortcuts.ts",
       "predicates": [
-        "P05",
         "P11"
       ],
-      "lineCount": 15
+      "lineCount": 6
     },
     {
       "path": "src/renderer/hooks/useLaunchConfig.ts",
@@ -3328,7 +3328,7 @@
         "P05",
         "P11"
       ],
-      "lineCount": 10
+      "lineCount": 8
     },
     {
       "path": "src/renderer/onboarding/AssistantsStep.tsx",
@@ -3709,7 +3709,7 @@
       "predicates": [
         "P11"
       ],
-      "lineCount": 16
+      "lineCount": 17
     },
     {
       "path": "src/renderer/utils/launchAccount.ts",
@@ -3764,7 +3764,7 @@
         "P12",
         "P14"
       ],
-      "lineCount": 184
+      "lineCount": 186
     },
     {
       "path": "src/shared/ask-conductor-provider.ts",
@@ -5317,6 +5317,14 @@
       "lineCount": 1
     },
     {
+      "path": "tests/unit/main/clipboard-paste-tables.test.ts",
+      "predicates": [
+        "P07",
+        "P13"
+      ],
+      "lineCount": 18
+    },
+    {
       "path": "tests/unit/main/cloud-agent-codex.test.ts",
       "predicates": [
         "P01",
@@ -5361,6 +5369,14 @@
         "P13"
       ],
       "lineCount": 28
+    },
+    {
+      "path": "tests/unit/main/codex-clipboard-paste.test.ts",
+      "predicates": [
+        "P01",
+        "P13"
+      ],
+      "lineCount": 23
     },
     {
       "path": "tests/unit/main/codex-composer-submit.test.ts",
@@ -5980,6 +5996,20 @@
       "lineCount": 5
     },
     {
+      "path": "tests/unit/main/paste-module.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 10
+    },
+    {
+      "path": "tests/unit/main/path-route-doors-frozen.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 6
+    },
+    {
       "path": "tests/unit/main/path-utils-home.test.ts",
       "predicates": [
         "P13"
@@ -6418,6 +6448,13 @@
       "lineCount": 9
     },
     {
+      "path": "tests/unit/main/session-input-clipboard.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
+    },
+    {
       "path": "tests/unit/main/session-input-codex-image.test.ts",
       "predicates": [
         "P01",
@@ -6437,7 +6474,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 84
+      "lineCount": 87
     },
     {
       "path": "tests/unit/main/session-input-prompt.test.ts",
@@ -7497,7 +7534,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 43
+      "lineCount": 12
     },
     {
       "path": "tests/unit/renderer/app-lifecycle-wiring.test.ts",
@@ -7927,7 +7964,7 @@
       "predicates": [
         "P13"
       ],
-      "lineCount": 18
+      "lineCount": 20
     },
     {
       "path": "tests/unit/renderer/image-transfer-local.test.ts",
@@ -9000,7 +9037,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 446,
+      "lineCount": 460,
       "truncated": true
     },
     {
