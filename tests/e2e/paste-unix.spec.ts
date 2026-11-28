@@ -55,8 +55,11 @@
  *     xclip (59 ms; TARGETS listed image/png) and not with wl-paste alone or
  *     with neither. Both writes the same. So under X11 Claude Code needs
  *     xclip, and the hint's rule follows that reading (the Claude package's
- *     claudeClipboardToolMissing); no CLI is shown not available.
- * NOT MEASURED HERE, and written down as not measured: Wayland desktops, and
+ *     claudeClipboardToolMissing, src/main/providers/claude/
+ *     linux-clipboard-tools.ts, which also asks the login shell the session
+ *     runs through); no CLI is shown not available.
+ * NOT MEASURED HERE, and written down as not measured: Wayland desktops
+ * (there the hint's rule takes wl-paste alone, as ADR-032's table says), and
  * the macOS privacy prompt (Paste from Other Apps). The real-Mac check is
  * 2.1.3-beta.23's, with aicc_planning#448.
  *
@@ -76,6 +79,16 @@
  *   - Linux under X11 without xclip (neither program, or wl-paste alone,
  *     which PL1 read does not serve Claude Code there): Claude Code gets no
  *     key and the paste hint names both programs; Codex pastes as before.
+ * WHICH WRITER RUNS. The readings write the picture with this spec's own
+ * writeInMain: the formats src/main/paste/picture-formats.ts builds, by one
+ * clipboard.write of one item in main, as src/main/paste/unix-writers.ts
+ * writes them, but not through the app's writeClipboardPicture. The app's
+ * own writer runs end to end only in the macOS copied-file press (its
+ * `clipboard info` after the press is that writer's). The Linux writer,
+ * writeLinuxClipboardPicture, is unit-tested only
+ * (tests/unit/main/paste-unix-writers.test.ts: one item, the key image/png,
+ * the PNG's own bytes), and the readings use the same format written here
+ * (review round 1, N5).
  * A red press is diagnosed from its readings, never retried.
  *   READ, readings run 46141950185 (c0b48d82), every press green. macOS:
  *     Codex and Claude Code each took Option+V in the terminal (59 and
@@ -102,6 +115,7 @@ import { nextFirstScreen, FOOTER, type FirstScreenAnswer } from './helpers/codex
 import { isolatedHomeDir } from './helpers/isolated-env'
 import { macPictureFormats, linuxPictureFormats, osClipboardFormat, type PictureFormat } from '../../src/main/paste/picture-formats'
 import { PASTE_NOTES } from '../../src/shared/clipboard-paste'
+import { resolveCdpPort } from '../../src/shared/cdp-ports'
 
 /** GitHub compares the dispatch input without case (ci.yml), so it is read in lower case. */
 const MODE = (process.env.PASTE_E2E ?? '').toLowerCase()
@@ -227,6 +241,7 @@ async function launch(name: string): Promise<{ claudeProject: string; codexProje
   const port = await standIn.listen()
   let claudeProject = ''
   let codexProject = ''
+  noteRunningBefore()
   ctx = await launchIsolatedApp({
     seedExtra: (dataDir) => {
       seedCodexAccount(dataDir, { fake: false, domTerminal: true, method: 'apiKey' })
@@ -265,17 +280,50 @@ async function launch(name: string): Promise<{ claudeProject: string; codexProje
 
 /** This checkout's Electron (the app's own processes run it). */
 const ELECTRON_DIST = path.resolve(__dirname, '../../node_modules/electron/dist')
+/** The vision browser's debug port in this run: the app is not packaged (it
+ *  starts out/main/index.js), so the dev port (9322 in every run so far). */
+const VISION_PORT = resolveCdpPort(false)
+
+/** Whether a command line is a vision browser on this run's port
+ *  (src/main/vision-manager.ts launchBrowser: --remote-debugging-port and a
+ *  <browser>-debug-<port> profile). */
+function visionBrowserOfThisPort(args: string): boolean {
+  return new RegExp(`--remote-debugging-port=${VISION_PORT}(?![0-9])`).test(args) && new RegExp(`(?:chrome|edge)-debug-${VISION_PORT}(?![0-9])`).test(args)
+}
+
+/** Every process now, by its pid and command line. */
+function processes(): Array<{ pid: number; args: string }> {
+  const r = spawnSync('/bin/ps', ['-A', '-o', 'pid=,args='], { env: minimalEnv(), encoding: 'utf8', timeout: 30_000 })
+  return (r.stdout ?? '').split('\n').map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m)
+    .map((m) => ({ pid: Number(m[1]), args: m[2] }))
+}
+
+/** The processes of the kinds the sweep takes (this checkout's Electron, a
+ *  vision browser on this run's port) that were running before this run's
+ *  app started: someone else's (a developer's own app from this checkout,
+ *  or its vision browser), never swept (review round 1, N6). By pid and
+ *  command line, so a reused pid is not one of them. (The app's own boot
+ *  still ends an earlier vision browser on the same port and profile,
+ *  vision-manager.ts launchBrowser; that is the app's doing, not this
+ *  sweep's.) */
+let runningBefore = new Set<string>()
+const processKey = (p: { pid: number; args: string }) => `${p.pid} ${p.args}`
+
+/** Record runningBefore; called just before the app starts. */
+function noteRunningBefore(): void {
+  runningBefore = new Set(processes().filter((p) => p.args.includes(ELECTRON_DIST) || visionBrowserOfThisPort(p.args)).map(processKey))
+}
 
 /** This run's processes still running: their command line names its own
  *  data folder (a mkdtemp folder no other run has), this checkout's
  *  Electron (one app at a time in this job), or the vision browser the app
- *  starts at boot (detached, on its own debug profile, so stopping the app
- *  leaves it: src/main/vision-manager.ts launchBrowser). */
+ *  starts at boot on this run's port (detached, on its own debug profile in
+ *  the temp folder, not the run's, so stopping the app leaves it:
+ *  src/main/vision-manager.ts launchBrowser); never one that was running
+ *  before this run's app started (runningBefore). */
 function leftovers(dataDir: string): Array<{ pid: number; args: string }> {
-  const r = spawnSync('/bin/ps', ['-A', '-o', 'pid=,args='], { env: minimalEnv(), encoding: 'utf8', timeout: 30_000 })
-  const ours = (args: string) => args.includes(dataDir) || args.includes(ELECTRON_DIST) || (args.includes('--remote-debugging-port=') && /chrome-debug-\d+/.test(args))
-  return (r.stdout ?? '').split('\n').map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m)
-    .map((m) => ({ pid: Number(m[1]), args: m[2] })).filter((p) => p.pid !== process.pid && ours(p.args))
+  const ours = (args: string) => args.includes(dataDir) || args.includes(ELECTRON_DIST) || visionBrowserOfThisPort(args)
+  return processes().filter((p) => p.pid !== process.pid && !runningBefore.has(processKey(p)) && ours(p.args))
 }
 
 /** The end of a run: each CLI ended first (Ctrl+C twice), so no session's

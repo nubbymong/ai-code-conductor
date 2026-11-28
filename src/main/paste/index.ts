@@ -288,11 +288,13 @@ export function pathRouteLineOf(sessionId: string): 'enter' | 'composer' | null 
   } catch { return null }
 }
 
-/** Snap's answer on an app machine whose writer is not in this beta yet
- *  (plan s6: macOS and Linux until plan 3.1). */
+/** Snap's answer when the writer answers `not-yet`. Not shown since plan
+ *  phase 3: no writer answers `not-yet` (clipboard-writer.ts), and this
+ *  note goes with this file's two `not-yet` branches (pasteImageKey's
+ *  copied file, pasteSnapPicture's write). */
 export const SNAP_NOT_AVAILABLE_NOTE = 'Snap into a session is not available on this computer in this beta.'
-/** A copied image file's answer there, when the CLI needs it written as a
- *  picture (plan s6: Claude Code on macOS until plan 3.1). */
+/** A copied image file's answer there, the same: not shown since plan
+ *  phase 3, and it goes with them. */
 export const COPIED_FILE_NOT_AVAILABLE_NOTE = 'Pasting a copied image file is not available on this computer in this beta.'
 
 /**
