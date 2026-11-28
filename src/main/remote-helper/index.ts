@@ -46,7 +46,7 @@ import type { DetachedRemote, DetachedRemoteLiveness } from '../../shared/types'
 import { DEFAULT_PROVIDER_ID, PROVIDER_IDS, type ProviderId } from '../../shared/providers/ids'
 import { tryGetProvider } from '../providers'
 import { colorFgBgValue, resolveHostColorScheme } from '../providers/host-color-scheme'
-import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHostFile, RemoteLaunchOptions } from '../providers/types'
+import type { HeldScreenRows, PasteKey, ProviderRemoteLaunch, RemoteAccounts, RemoteHostFile, RemoteLaunchOptions } from '../providers/types'
 import type { SSHOptions } from '../ssh-options'
 import { ROUTE_WHY, routeSshTab, type PersistentStanding, type Route } from './route'
 import { NoticePty, RemoteDriver, RemoteHelperPty, remoteCwd, remoteHelperCommands, remoteLaunchSpec, remoteSessionId, type RemoteLaunchPlan, type RemoteTabAccount } from './session'
@@ -148,6 +148,33 @@ export function remoteTabsOn(did: string): number {
  *  (the SSH flow overlay is not shown for it). */
 export function isRemoteHelperTab(sessionId: string): boolean {
   return startedThroughHelper.has(sessionId)
+}
+
+/** 2.1.3-beta.21 (ADR-032; plan block 5.1): what the paste route
+ *  (src/main/paste/helper-route.ts) needs of an open tab through the helper:
+ *  whether the clipboard stand-in serves its CLI, the key its launch gave
+ *  for the CLI's image paste, and its picture to its session's folder on the
+ *  machine by file.put (the name it took and its hash back, never a path). */
+export interface RemoteTabPaste {
+  readonly standIn: boolean
+  readonly key: PasteKey | undefined
+  put(bytes: Buffer, kind: 'png' | 'jpg'): Promise<{ name: string; sha256: string }>
+}
+
+/** The paste of this app session's open tab through the helper, or null:
+ *  no such tab open now. */
+export function remoteTabPaste(sessionId: string): RemoteTabPaste | null {
+  const pty = openTabs.get(sessionId)
+  if (!pty) return null
+  return { standIn: pty.pasteStandIn, key: pty.imagePasteKey, put: (bytes, kind) => pty.putPicture(bytes, kind) }
+}
+
+/** 2.1.3-beta.21 (ADR-032): the holder's screen read of this app session's
+ *  open tab through the helper (RemoteHelperPty screenRead), for the Claude
+ *  package's clipboard paste to read its placeholder there; undefined when
+ *  no such tab is open, or its connection reads no screen now. */
+export function remoteTabScreen(sessionId: string): (() => Promise<HeldScreenRows>) | undefined {
+  return openTabs.get(sessionId)?.screenRead
 }
 
 /** The tab was closed or restarted (the renderer's kill door): its start is

@@ -542,7 +542,9 @@ describe('the status line, hook events and tool streams of a helper tab', () => 
     answering(holder)
     const pty = remoteHelperPty(win, id, { ssh: SSH_TAB }, 100, 30)
     await until('attached', () => holder.attached !== null)
-    expect(holder.attached!.ackedCaps).toEqual(['core', 'local'])
+    // None of the signals. The screen reads and their title stay (2.1.3-beta.21,
+    // ADR-032): a Claude Code tab on a Linux host reads its paste's placeholder there.
+    expect(holder.attached!.ackedCaps).toEqual(['core', 'local', 'screen', 'title'])
     expect(ssh.scripts()).toEqual(['reads', 'field', 'hold', 'files', 'bridge'])
     pty!.kill()
     await until('the holder to end', () => holder.ended)
