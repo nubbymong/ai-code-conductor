@@ -161,7 +161,9 @@ export interface ClaudeClipboardDeps {
  * Claude Code reads it as its key, then reads the clipboard itself. Then the
  * placeholder: a new "[Image #N]" in the prompt, read every
  * CLAUDE_PLACEHOLDER_POLL_MS within `placeholderWaitMs` (the count before the
- * key is the start; a prompt that cannot be read then counts as none). For a
+ * key is the start; when the prompt cannot be read then, the first count read
+ * after the key is the start, so a picture already at the prompt is never
+ * taken for the new one: review round 1, R1-6). For a
  * session on this computer it is read from the session's terminal view, as
  * canvas markers read it (main reads no Claude Code screen, S13); a held
  * session's holder screen is read once that route lands (2.1.3-beta.21 phase
@@ -174,8 +176,8 @@ export interface ClaudeClipboardDeps {
  */
 export async function pasteClaudeClipboard(key: string, sentence: string | null, opts: { placeholderWaitMs: number; enterDelayMs: number }, typing: RunScreenTyping, deps: ClaudeClipboardDeps): Promise<RunScreenClipboardResult> {
   if (!typing.live()) return { outcome: 'session-gone' }
-  let before = 0
-  try { before = (await deps.placeholders()) ?? 0 } catch { before = 0 }
+  let before: number | null = null
+  try { before = await deps.placeholders() } catch { before = null }
   if (!typing.live()) return { outcome: 'session-gone' }
   typing.write(key)
   const until = deps.now() + Math.max(0, opts.placeholderWaitMs)
@@ -184,7 +186,10 @@ export async function pasteClaudeClipboard(key: string, sentence: string | null,
     if (!typing.live()) return { outcome: 'session-gone' }
     let shown: number | null = null
     try { shown = await deps.placeholders() } catch { shown = null }
-    if (shown !== null && shown > before) break
+    if (shown !== null) {
+      if (before === null) before = shown
+      else if (shown > before) break
+    }
     if (deps.now() >= until) return { outcome: 'no-placeholder' }
   }
   if (sentence === null) return { outcome: 'placeholder' }

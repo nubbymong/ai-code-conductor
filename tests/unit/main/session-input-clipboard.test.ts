@@ -17,9 +17,13 @@
 //  - Only into the run the press was taken for: one replaced meanwhile gets
 //    nothing more.
 //  - One at a time with the prompt buttons and images (the session's chain).
+//  - A prompt that cannot be read before the key: the first count read after
+//    it is the start (review round 1, R1-6), so a picture already at the
+//    prompt is not taken for the new one.
 // Red on 0c54a1c6: no such door. Mutants this must catch: the key split over
 // two writes; the key sent inside a bracketed paste; the sentence typed with
-// no placeholder.
+// no placeholder. Red on 0fce95b6 (R1-6): a failed read before the key
+// counted as no picture, so an earlier "[Image #1]" sent the sentence.
 import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({ infos: [] as string[], placeholders: new Map<string, number[]>(), asks: [] as Array<{ sessionId: string; mode: string }> }))
@@ -126,6 +130,22 @@ describe('a Claude Code session on this computer', () => {
     h.placeholders.set(id2, [-1])
     expect(await settle(input.pasteFromClipboard(id2, ESC_V, SENTENCE))).toEqual({ outcome: 'no-placeholder' })
     expect(datas(run2)).toEqual([ESC_V])
+  })
+
+  it('review round 1 (R1-6): a prompt that cannot be read before the key: the first good read is the start, so an earlier picture is not taken for the new one', async () => {
+    // The prompt already holds "[Image #1]" and only the read before the key
+    // fails: a count of 1 afterwards is that earlier picture, not this one.
+    const id = fresh()
+    const run = startRun(id)
+    h.placeholders.set(id, [-1, 1])
+    expect(await settle(input.pasteFromClipboard(id, ESC_V, SENTENCE))).toEqual({ outcome: 'no-placeholder' })
+    expect(datas(run)).toEqual([ESC_V])
+    // A new placeholder after that first good read is the picture: sent.
+    const id2 = fresh()
+    const run2 = startRun(id2)
+    h.placeholders.set(id2, [-1, 1, 1, 2])
+    expect(await settle(input.pasteFromClipboard(id2, ESC_V, SENTENCE))).toEqual({ outcome: 'sent' })
+    expect(datas(run2)).toEqual([ESC_V, ` ${SENTENCE}`, '\r'])
   })
 
   it('no path, no bracketed paste and no take-back in any write', async () => {
