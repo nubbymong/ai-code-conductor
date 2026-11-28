@@ -82,6 +82,38 @@ export function takeSnapPicture(file: string): Electron.NativeImage | null {
   return picture
 }
 
+/** ADR-032 (plan 2.1.5): a saved Snap picture's file, by the one-shot token
+ *  the capture answers the renderer with (never the path). The renderer hands
+ *  the token back on the paste channel, so the capture's answer does not wait
+ *  for the paste. The last few only, each for SNAP_TOKEN_MS. */
+const snapTokens = new Map<string, { file: string; at: number }>()
+const SNAP_TOKENS_MAX = 8
+export const SNAP_TOKEN_MS = 120_000
+
+/** A token for the picture saved as `file`. */
+export function keepSnapForPaste(file: string): string {
+  const token = randomBytes(16).toString('hex')
+  snapTokens.set(token, { file, at: Date.now() })
+  while (snapTokens.size > SNAP_TOKENS_MAX) {
+    const oldest = snapTokens.keys().next().value
+    if (oldest === undefined) break
+    snapTokens.delete(oldest)
+  }
+  return token
+}
+
+/** The picture a token names, once: its file and its bitmap (kept at the
+ *  capture, else read back from the file); null for a token that is unknown,
+ *  used or older than SNAP_TOKEN_MS. */
+export function takeSnapForPaste(token: string): { file: string; picture: Electron.NativeImage } | null {
+  const kept = typeof token === 'string' ? snapTokens.get(token) : undefined
+  if (!kept) return null
+  snapTokens.delete(token)
+  if (Date.now() - kept.at > SNAP_TOKEN_MS) return null
+  const picture = takeSnapPicture(kept.file) ?? nativeImage.createFromPath(kept.file)
+  return picture.isEmpty() ? null : { file: kept.file, picture }
+}
+
 /**
  * The previous Snap's capture of a rectangle region of the screen: Snap on
  * macOS and Linux; on Windows a setting away (the new Snap is the default)

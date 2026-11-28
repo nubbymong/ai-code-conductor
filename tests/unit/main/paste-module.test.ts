@@ -80,6 +80,7 @@ beforeEach(() => {
   pathRoute = false
   keyCtx = []
   accountDir = null
+  snaps.clear()
   const spy = (rule: typeof CLAUDE_CLIPBOARD_PASTE) => ({ ...rule, key: (ctx: { platform: NodeJS.Platform; accountDir: string | null }) => { keyCtx.push(ctx); return rule.key(ctx) } })
   paste.setPasteDeps({
     platform: 'win32',
@@ -95,8 +96,13 @@ beforeEach(() => {
     savePicture: async () => { saves++; return saved },
     door: async (sessionId, key, sentence) => { door.push({ sessionId, key, sentence }); return doorAnswer as never },
     pathRoute: () => pathRoute,
+    takeSnap: (token: string) => { const k = snaps.get(token) ?? null; snaps.delete(token); return k },
   } as never)
 })
+
+/** Snap tokens main keeps (screenshot-capture's, faked): one-shot. */
+const snaps = new Map<string, { file: string; picture: NativeImage }>()
+const SNAP_TOKEN = '0123456789abcdef0123456789abcdef'
 
 const press = (chord: 'image' | 'text', focused: boolean) => paste.pasteImageKey({ sessionId: 's1', chord, focused })
 
@@ -300,6 +306,42 @@ describe('Snap\'s picture (2.1.5)', () => {
     expect(paste.pathRouteLineOf('s1')).toBe('composer')
     where = 'ssh'
     expect(paste.pathRouteLineOf('s1')).toBeNull()
+  })
+})
+
+describe('Snap\'s press on the paste channel, by the token its capture answered (2.1.5)', () => {
+  it('the token\'s picture onto the clipboard, then the key and the item\'s own sentence; the token is one-shot', async () => {
+    const pic = picture()
+    snaps.set(SNAP_TOKEN, { file: SNAP_FILE, picture: pic })
+    const r = await paste.pasteImageKey({ sessionId: 's1', chord: 'snap', focused: false, snap: { token: SNAP_TOKEN, item: 'window' } })
+    expect(r).toEqual({ outcome: 'sent' })
+    expect(written).toEqual([pic])
+    expect(door).toEqual([{ sessionId: 's1', key: ESC_V, sentence: SNAP_WINDOW_SENTENCE }])
+    expect(await paste.pasteImageKey({ sessionId: 's1', chord: 'snap', focused: false, snap: { token: SNAP_TOKEN, item: 'window' } })).toMatchObject({ reason: 'no-picture' })
+    expect(door).toHaveLength(1)
+  })
+
+  it('Rectangle\'s sentence for a rectangle; an unknown token pastes nothing', async () => {
+    snaps.set(SNAP_TOKEN, { file: SNAP_FILE, picture: picture() })
+    await paste.pasteImageKey({ sessionId: 's1', chord: 'snap', focused: false, snap: { token: SNAP_TOKEN, item: 'rectangle' } })
+    expect(door[0].sentence).toBe(SNAP_RECTANGLE_SENTENCE)
+    expect(await paste.pasteImageKey({ sessionId: 's1', chord: 'snap', focused: false, snap: { token: 'f'.repeat(32), item: 'rectangle' } })).toMatchObject({ reason: 'no-picture' })
+    expect(door).toHaveLength(1)
+  })
+
+  it('a malformed Snap press (no token, a token that is not one, another item, focused, or a token on another chord) is refused', async () => {
+    snaps.set(SNAP_TOKEN, { file: SNAP_FILE, picture: picture() })
+    for (const bad of [
+      { sessionId: 's1', chord: 'snap', focused: false },
+      { sessionId: 's1', chord: 'snap', focused: false, snap: { token: 'C:\\res\\x.jpg', item: 'rectangle' } },
+      { sessionId: 's1', chord: 'snap', focused: false, snap: { token: SNAP_TOKEN, item: 'screen' } },
+      { sessionId: 's1', chord: 'snap', focused: true, snap: { token: SNAP_TOKEN, item: 'rectangle' } },
+      { sessionId: 's1', chord: 'image', focused: false, snap: { token: SNAP_TOKEN, item: 'rectangle' } },
+    ]) {
+      expect(await paste.pasteImageKey(bad as never), JSON.stringify(bad)).toMatchObject({ reason: 'session-gone' })
+    }
+    expect(door).toEqual([])
+    expect(snaps.has(SNAP_TOKEN)).toBe(true)
   })
 })
 

@@ -23,7 +23,7 @@ import { usePasteHintStore } from '../stores/pasteHintStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { hasSpawned } from '../ptyTracker'
 import { PARTNER_PTY_SUFFIX } from '../../shared/multi-spawn-rule'
-import { PASTE_SENTENCE, type PasteKeyResult } from '../../shared/clipboard-paste'
+import { PASTE_SENTENCE, type PasteKeyResult, type SnapItem } from '../../shared/clipboard-paste'
 import { sendFetchRequestFor, pasteImageByPathRoute } from './imageTransfer'
 import type { Session } from '../stores/sessionStore'
 
@@ -102,6 +102,22 @@ export async function reportImagePaste(sessionId: string, chord: 'image' | 'text
     return chord === 'text'
   }
   return applyPasteResult(sessionId, result, { focused, textChord: chord === 'text', sentence: PASTE_SENTENCE })
+}
+
+/** Snap's picture (plan 2.1.5): the token its capture answered, reported to
+ *  main on the paste channel once the capture has ended (the Snap button is
+ *  usable again meanwhile), and main's answer applied with Snap's sentence
+ *  (an old SSH path's fetch request). */
+export async function reportSnapPaste(sessionId: string, token: string, item: SnapItem, sentence: string): Promise<void> {
+  const api = window.electronAPI?.paste
+  if (typeof api?.imageKey !== 'function') return
+  let result: PasteKeyResult
+  try {
+    result = await api.imageKey({ sessionId, chord: 'snap', focused: false, snap: { token, item } })
+  } catch {
+    return
+  }
+  applyPasteResult(sessionId, result, { focused: false, textChord: false, sentence })
 }
 
 /** Alt+V with the focus outside the terminal, for the active session. */

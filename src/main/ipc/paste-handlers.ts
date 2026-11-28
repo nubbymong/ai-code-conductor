@@ -3,8 +3,10 @@
 // records.
 //
 // paste:imageKey carries "the image paste key, or the text paste chord with
-// no text on the clipboard, was pressed in session S, focused or not". It
-// carries no clipboard content and no path: main reads the clipboard itself
+// no text on the clipboard, was pressed in session S, focused or not", or
+// "Snap's capture answered this token for session S" (the token names the
+// picture main kept; plan 2.1.5). It carries no clipboard content and no
+// path: main reads the clipboard itself
 // (src/main/paste), and decides from its own records where the session runs.
 // The app window's main frame only. A press for a partner terminal's id is
 // refused: the renderer sends Alt+V to a partner shell as a key.
@@ -19,6 +21,7 @@ import { getSshFlow, isSessionLiveOrStarting } from '../pty-manager'
 import { isRemoteHelperTab } from '../remote-helper'
 import { getClaudeProfileId } from '../claude-account-identity'
 import { getProfileConfigDir } from '../account-profiles'
+import { takeSnapForPaste } from '../screenshot-capture'
 
 /** Where a session's CLI runs, from the remote helper's record of the tabs
  *  it started and the PTY manager's record of SSH flows; null when the
@@ -39,7 +42,7 @@ export function sessionAccountDir(sessionId: string): string | null {
 }
 
 export function registerPasteHandlers(getWindow: () => BrowserWindow | null): void {
-  setPasteDeps({ where: sessionWhere, savePicture: saveClipboardImage, accountDir: sessionAccountDir })
+  setPasteDeps({ where: sessionWhere, savePicture: saveClipboardImage, accountDir: sessionAccountDir, takeSnap: takeSnapForPaste })
   const fromApp = appWindowSender(getWindow)
   ipcMain.handle(IPC.PASTE_IMAGE_KEY, async (e, press: unknown): Promise<PasteKeyResult> => {
     if (!fromApp(e)) return notPasted('session-gone')

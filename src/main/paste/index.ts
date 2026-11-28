@@ -46,7 +46,7 @@ import { basename } from 'path'
 import type { ProviderId } from '../../shared/types'
 import type { ClipboardPasteRule } from '../providers/types'
 import { tryGetProvider } from '../providers'
-import { notPasted, PASTE_SENTENCE, type PasteKeyPress, type PasteKeyResult } from '../../shared/clipboard-paste'
+import { notPasted, PASTE_SENTENCE, SNAP_RECTANGLE_SENTENCE, SNAP_WINDOW_SENTENCE, type PasteKeyPress, type PasteKeyResult } from '../../shared/clipboard-paste'
 import { pasteFromClipboard, providerOfSession, type ClipboardPasteDoorResult } from '../session-input'
 import { readClipboardImageWithRetry } from '../clipboard-image'
 import { readClipboardFilePaths, pickPasteableImage, type PasteableImage } from '../clipboard-file'
@@ -102,6 +102,9 @@ export interface PasteDeps {
   door(sessionId: string, key: string, sentence: string | null): Promise<ClipboardPasteDoorResult>
   /** The test switch. */
   pathRoute(): boolean
+  /** The picture a Snap token names, once (screenshot-capture
+   *  takeSnapForPaste): its file and bitmap, or null. */
+  takeSnap(token: string): { file: string; picture: NativeImage } | null
 }
 
 const realDeps = (): PasteDeps => ({
@@ -128,6 +131,7 @@ const realDeps = (): PasteDeps => ({
   savePicture: async () => ({ error: 'no-image' }),
   door: (sessionId, key, sentence) => pasteFromClipboard(sessionId, key, sentence),
   pathRoute: () => pathRouteOn(),
+  takeSnap: () => null,
 })
 
 let deps: PasteDeps = realDeps()
@@ -193,8 +197,11 @@ async function sendKey(sessionId: string, rule: ClipboardPasteRule, sentence: st
 function validPress(press: unknown): press is PasteKeyPress {
   if (!press || typeof press !== 'object') return false
   const p = press as Record<string, unknown>
-  return typeof p.sessionId === 'string' && p.sessionId.length > 0 && p.sessionId.length <= 200
-    && (p.chord === 'image' || p.chord === 'text') && typeof p.focused === 'boolean'
+  if (typeof p.sessionId !== 'string' || p.sessionId.length === 0 || p.sessionId.length > 200 || typeof p.focused !== 'boolean') return false
+  if (p.chord === 'image' || p.chord === 'text') return p.snap === undefined
+  if (p.chord !== 'snap' || p.focused) return false
+  const snap = p.snap as Record<string, unknown> | undefined
+  return !!snap && typeof snap.token === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(snap.token) && (snap.item === 'rectangle' || snap.item === 'window')
 }
 
 /** The old SSH path's request: the picture saved, its file named. */
@@ -218,6 +225,13 @@ function logged(sessionId: string, what: string, result: PasteKeyResult): PasteK
 export async function pasteImageKey(press: PasteKeyPress): Promise<PasteKeyResult> {
   if (!validPress(press)) return notPasted('session-gone')
   const { sessionId, chord, focused } = press
+  // Snap (plan 2.1.5): the picture its capture kept, by the token it answered.
+  if (chord === 'snap' && press.snap) {
+    let kept: { file: string; picture: NativeImage } | null = null
+    try { kept = deps.takeSnap(press.snap.token) } catch { kept = null }
+    if (!kept) return logged(sessionId, 'Snap', notPasted('no-picture'))
+    return pasteSnapPicture(sessionId, kept.picture, kept.file, press.snap.item === 'window' ? SNAP_WINDOW_SENTENCE : SNAP_RECTANGLE_SENTENCE)
+  }
   const what = `${chord === 'image' ? 'the image paste key' : 'the text paste chord'} ${focused ? 'in the terminal' : 'from outside the terminal'}`
   try {
     const where = deps.where(sessionId)

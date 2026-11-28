@@ -21,13 +21,19 @@ export interface PasteKeyPress {
    *  paste chord (Ctrl+V, Cmd+V) pressed while the clipboard held no text,
    *  so main pastes a picture only when the clipboard holds one (ADR-032
    *  decision 4; plan Q2). */
-  chord: 'image' | 'text'
+  chord: 'image' | 'text' | 'snap'
   /** Whether the session's terminal had the keyboard focus. A press in the
    *  terminal types nothing after the key (the user is writing); a press
    *  from outside it types the sentence and Enter once the CLI shows its
-   *  placeholder (ADR-032 decision 3). */
+   *  placeholder (ADR-032 decision 3). Snap is always from outside. */
   focused: boolean
+  /** Snap only (plan 2.1.5): the token Snap's capture answered for the
+   *  picture main keeps (never a path), and which item took it. */
+  snap?: { token: string; item: SnapItem }
 }
+
+/** Which of Snap's two items took a picture (its sentence). */
+export type SnapItem = 'rectangle' | 'window'
 
 /** Why a picture was not pasted. */
 export type PasteNotPastedReason =
@@ -68,11 +74,12 @@ export type PasteKeyResult =
    *  renderer runs beta.20's path flow, by the session's own image line. */
   | { outcome: 'path-route'; line: 'enter' | 'composer' | null }
 
-/** What Snap's capture answers once it has a picture for a session: the
- *  paste's own answer. (The path route answers the saved file's path, a
- *  string, as beta.20 did.) */
+/** What Snap's capture answers once it has a picture (plan 2.1.5): a token
+ *  for the picture main keeps, never its path. The renderer then reports the
+ *  Snap on the one paste channel with that token (chord 'snap'), so the Snap
+ *  button is usable again as soon as the capture ends, while the paste runs. */
 export interface SnapPasteAnswer {
-  snapped: PasteKeyResult
+  snapToken: string
 }
 
 /** Snap's answer on the path route behind the test switch only (never in a
@@ -89,11 +96,11 @@ export function isSnapPathRouteAnswer(answer: unknown): answer is SnapPathRouteA
   return !!route && typeof route === 'object' && typeof (route as { file?: unknown }).file === 'string'
 }
 
-/** Whether a capture answer is Snap's paste answer. */
+/** Whether a capture answer is Snap's token for its picture. */
 export function isSnapPasteAnswer(answer: unknown): answer is SnapPasteAnswer {
   if (!answer || typeof answer !== 'object') return false
-  const snapped = (answer as { snapped?: unknown }).snapped
-  return !!snapped && typeof snapped === 'object' && typeof (snapped as { outcome?: unknown }).outcome === 'string'
+  const token = (answer as { snapToken?: unknown }).snapToken
+  return typeof token === 'string' && /^[A-Za-z0-9_-]{8,64}$/.test(token)
 }
 
 /** The sentence a press from outside the terminal sends after the picture. */

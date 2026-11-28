@@ -6,6 +6,7 @@ import {
   listWindows,
   cleanupOldScreenshots,
   saveSnapPicture,
+  keepSnapForPaste,
 } from '../screenshot-capture'
 import { readConfig } from '../config-manager'
 import { snapEngineFor } from '../../shared/snap-engine'
@@ -27,51 +28,45 @@ function savedSnapChoice(): unknown {
   }
 }
 
-/** Which of Snap's two items took the picture (its sentence). */
-export type SnapItem = 'rectangle' | 'window'
-
 /**
- * ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.5): what happens to a saved Snap
- * picture. The path route behind the test switch answers the saved file and
- * the session's image line, for 2.1.3-beta.20's path flow (`pathRoute`);
- * every other press hands the picture to
- * the paste module, which writes it to the clipboard and presses the CLI's
- * own paste key, and answers what it did (`snapped`), with no path.
+ * ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.5): what a saved Snap picture's
+ * capture answers. The path route behind the test switch answers the saved
+ * file and the session's image line, for 2.1.3-beta.20's path flow
+ * (`pathRoute`). Every other press answers a one-shot token for the picture
+ * main keeps, never its path (`snapToken`): the renderer hands the token to
+ * the paste module on the paste channel (paste:imageKey, chord 'snap'),
+ * which writes the picture to the clipboard and presses the CLI's own paste
+ * key. So the capture ends, and the Snap button is usable again, while the
+ * paste runs.
  */
 export interface SnapPaste {
   pathRoute(): boolean
   /** The path route's answer: the file and the session's image line. */
   pathRouteAnswer(sessionId: string, file: string): Promise<SnapPathRouteAnswer>
-  paste(sessionId: string, file: string, item: SnapItem): Promise<SnapPasteAnswer>
+  /** A token for the saved picture (screenshot-capture keepSnapForPaste). */
+  keep(file: string): string
 }
 
-/** The real hand-off, loaded at the first press (the paste module reaches
- *  the session input module and the provider registry). */
+/** The real hand-off (the paste module is loaded at the first path-route
+ *  press only: it reaches the session input module and the registry). */
 const realSnapPaste: SnapPaste = {
   pathRoute: () => pathRouteOn(),
   pathRouteAnswer: async (sessionId, file) => {
     const { pathRouteLineOf } = await import('../paste')
     return { pathRoute: { file, line: pathRouteLineOf(sessionId) } }
   },
-  paste: async (sessionId, file, item) => {
-    const [{ pasteSnapPicture }, { takeSnapPicture }, { nativeImage }, words] = await Promise.all([
-      import('../paste'), import('../screenshot-capture'), import('electron'), import('../../shared/clipboard-paste'),
-    ])
-    const picture = takeSnapPicture(file) ?? nativeImage.createFromPath(file)
-    const sentence = item === 'window' ? words.SNAP_WINDOW_SENTENCE : words.SNAP_RECTANGLE_SENTENCE
-    return { snapped: await pasteSnapPicture(sessionId, picture, file, sentence) }
-  },
+  keep: (file) => keepSnapForPaste(file),
 }
 
 /** `platform` and `snapPaste` are parameters for tests; the app passes none.
  *  Since 2.1.3-beta.21 (ADR-032) each capture names the session it is for;
  *  a capture that names none is not made. */
 export function registerScreenshotHandlers(getWindow: () => BrowserWindow | null, platform: string = process.platform, snapPaste: SnapPaste = realSnapPaste): void {
-  /** A saved picture's answer: its path on the path route only, else the paste's. */
-  const handOff = async (file: string | null, sessionId: string, item: SnapItem): Promise<SnapPathRouteAnswer | SnapPasteAnswer | null> => {
+  /** A saved picture's answer: its path on the path route only, else its token. */
+  const handOff = async (file: string | null, sessionId: string): Promise<SnapPathRouteAnswer | SnapPasteAnswer | null> => {
     if (typeof file !== 'string' || !file) return null
     if (snapPaste.pathRoute()) return snapPaste.pathRouteAnswer(sessionId, file)
-    return snapPaste.paste(sessionId, file, item)
+    return { snapToken: snapPaste.keep(file) }
   }
 
   ipcMain.handle('screenshot:captureRectangle', async (_event, sessionId: unknown) => {
@@ -84,7 +79,7 @@ export function registerScreenshotHandlers(getWindow: () => BrowserWindow | null
     const useNew = snapEngineFor(platform, savedSnapChoice()) === 'new'
     const answer = await captureRectangle(win, undefined, useNew ? () => snapOnWindows(saveSnapPicture) : undefined)
     if (typeof answer !== 'string') return answer
-    return handOff(answer, sessionId as string, 'rectangle')
+    return handOff(answer, sessionId as string)
   })
 
   ipcMain.handle('screenshot:captureWindow', async (_event, sourceId: string, sessionId: unknown) => {
@@ -94,7 +89,7 @@ export function registerScreenshotHandlers(getWindow: () => BrowserWindow | null
     } catch (err) {
       throw new Error(`Invalid parameters: ${err instanceof Error ? err.message : String(err)}`)
     }
-    return handOff(await captureWindow(sourceId), sessionId as string, 'window')
+    return handOff(await captureWindow(sourceId), sessionId as string)
   })
 
   ipcMain.handle('screenshot:listWindows', async () => {

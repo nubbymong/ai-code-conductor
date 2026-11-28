@@ -39,7 +39,7 @@ const { registerScreenshotHandlers } = await import('../../../../src/main/ipc/sc
 const { snapEngineFor, savedSnapEngine, SNAP_ENGINE_DEFAULT_WINDOWS } = await import('../../../../src/shared/snap-engine')
 
 const win = { isDestroyed: () => false }
-const snapPaste = { pathRoute: () => false, pathRouteAnswer: vi.fn(), paste: vi.fn(async () => ({ snapped: { outcome: 'sent' as const } })) }
+const snapPaste = { pathRoute: () => false, pathRouteAnswer: vi.fn(), keep: vi.fn(() => 'token-0123456789') }
 
 /** Press Snap, Rectangle once on `platform`, and say whether the new engine was handed over. */
 async function press(platform: string): Promise<boolean> {

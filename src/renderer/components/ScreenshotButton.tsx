@@ -3,10 +3,10 @@ import { useMagicButtonStore } from '../stores/magicButtonStore'
 import WindowPickerModal from './WindowPickerModal'
 import { ReservedLabel } from './command-bar/chips'
 import { sendImageToSession } from '../utils/imageTransfer'
-import { applyPasteResult } from '../utils/imagePaste'
+import { reportSnapPaste } from '../utils/imagePaste'
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { SNAP_NO_DESKTOP_TEXT, isSnapNotCaptured } from '../../shared/snap-engine'
-import { isSnapPasteAnswer, isSnapPathRouteAnswer, SNAP_RECTANGLE_SENTENCE, SNAP_WINDOW_SENTENCE } from '../../shared/clipboard-paste'
+import { isSnapPasteAnswer, isSnapPathRouteAnswer, SNAP_RECTANGLE_SENTENCE, SNAP_WINDOW_SENTENCE, type SnapItem } from '../../shared/clipboard-paste'
 
 /** How long the line a press that captured nothing stays up. */
 const SNAP_NOTE_MS = 6000
@@ -24,11 +24,14 @@ interface Props {
   sessionType: 'local' | 'ssh'
 }
 
-/** A capture's answer applied: the paste's outcome (its hint, or the old SSH
- *  path's request), or on the path route only 2.1.3-beta.20's flow. */
-function applySnapAnswer(sessionId: string, answer: unknown, sentence: string, sessionType: 'local' | 'ssh'): boolean {
+/** A capture's answer applied: its token handed to the paste (not awaited:
+ *  the capture has ended and the button is usable again while the paste
+ *  runs; its hint, or the old SSH path's request, follows), or on the path
+ *  route only 2.1.3-beta.20's flow. */
+function applySnapAnswer(sessionId: string, answer: unknown, item: SnapItem, sessionType: 'local' | 'ssh'): boolean {
+  const sentence = item === 'window' ? SNAP_WINDOW_SENTENCE : SNAP_RECTANGLE_SENTENCE
   if (isSnapPasteAnswer(answer)) {
-    applyPasteResult(sessionId, answer.snapped, { focused: false, textChord: false, sentence })
+    void reportSnapPaste(sessionId, answer.snapToken, item, sentence)
     return true
   }
   if (isSnapPathRouteAnswer(answer)) {
@@ -98,7 +101,7 @@ export default function ScreenshotButton({ sessionId, sessionType }: Props) {
       // close is drawn first, or the menu can be in the picture.
       await afterTwoFrames()
       const answer = await window.electronAPI.screenshot.captureRectangle(sessionId)
-      if (applySnapAnswer(sessionId, answer, SNAP_RECTANGLE_SENTENCE, sessionType)) {
+      if (applySnapAnswer(sessionId, answer, 'rectangle', sessionType)) {
         // the paste's own answer, applied
       } else if (isSnapNotCaptured(answer)) {
         // 2.1.3-beta.19 fix round: nothing opened, so say why, above the bar.
@@ -114,7 +117,7 @@ export default function ScreenshotButton({ sessionId, sessionType }: Props) {
     setCapturing(true)
     try {
       const answer = await window.electronAPI.screenshot.captureWindow(sourceId, sessionId)
-      applySnapAnswer(sessionId, answer, SNAP_WINDOW_SENTENCE, sessionType)
+      applySnapAnswer(sessionId, answer, 'window', sessionType)
     } finally {
       setCapturing(false)
     }
