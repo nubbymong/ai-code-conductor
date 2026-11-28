@@ -475,8 +475,17 @@ pub fn run(nonce: &str, timeout: Duration) -> u8 {
         let c = Arc::clone(&copied);
         let _ = thread::Builder::new().spawn(move || copy_output(out, &c, &tx));
     }
-    if let Some(err) = child.stderr.take() {
-        let _ = thread::Builder::new().spawn(move || copy_errors(err));
+    // The copy of its errors says when it is done, so none it read is lost
+    // when this mode exits.
+    let (errors_tx, errors_done) = mpsc::channel::<()>();
+    match child.stderr.take() {
+        Some(err) => {
+            let _ = thread::Builder::new().spawn(move || {
+                copy_errors(err);
+                let _ = errors_tx.send(());
+            });
+        }
+        None => drop(errors_tx),
     }
     {
         let tx = events_tx.clone();
@@ -528,6 +537,8 @@ pub fn run(nonce: &str, timeout: Duration) -> u8 {
     if closed {
         return said(EXIT_NOT_RUN, "the exec closed before the program ended, so its session was ended");
     }
+    // And what it wrote on standard error, within the same bound.
+    let _ = errors_done.recv_timeout(DRAIN_WAIT);
     // Sealed first, so nothing the copy still holds comes after the result line.
     let mut c = match copied.lock() {
         Ok(c) => c,
