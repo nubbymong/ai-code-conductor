@@ -140,7 +140,8 @@ let inUse = 0
 let hostDir = ''
 /** The run's own folder here, under the system's temporary folder, for the
  *  fixture made the same: made when the file loads, so afterAll (which runs
- *  even when beforeAll fails) removes it on every path. */
+ *  even when beforeAll fails) removes it on every run in which a test of this
+ *  file runs (a run that filters out all of its tests runs no hooks). */
 const localDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aicc-pv-'))
 /** Which probes passed. */
 const passed = { pv1: false, pv2: false }
