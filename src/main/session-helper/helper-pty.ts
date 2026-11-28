@@ -87,7 +87,7 @@
  */
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { StringDecoder } from 'string_decoder'
-import type { HolderConnection } from './connection'
+import { HolderError, type HolderConnection } from './connection'
 import { LAUNCH_LIMITS, type HolderRecord, type LaunchSpec, type ScreenRows } from './protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
@@ -488,6 +488,21 @@ export class HelperPty implements IPty {
       if (this.inner || this.exited || !conn || conn.isClosed || !conn.screen || !conn.title) return Promise.reject(new Error('no connection reads its holder\'s screen now'))
       return conn.readScreen()
     }
+  }
+
+  /**
+   * 2.1.3-beta.21 (ADR-032; section 15, capability `paste`): one picture into
+   * the session's own `paste/` folder on its holder's machine
+   * (HolderConnection.putFile), on the connection in use now, while it is
+   * attached. Only a helper tab on another machine's connection acks `paste`
+   * (remote-helper/session.ts), so on any other the connection refuses it
+   * (`unknown-type`). Rejects `not-connected` on the usual way and while no
+   * connection is attached.
+   */
+  putFile(name: string, bytes: Buffer): Promise<{ sha256: string }> {
+    const conn = this.conn
+    if (this.inner || this.exited || !this.attached || !conn || conn.isClosed) return Promise.reject(new HolderError('not-connected', 'no connection is attached to the holder now'))
+    return conn.putFile(name, bytes)
   }
 
   write(data: string | Buffer): void {
