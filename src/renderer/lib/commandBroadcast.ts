@@ -151,7 +151,8 @@ const HAS_ARGUMENTS = 'Only a prompt with no arguments can go to every open sess
 
 /** A prompt for the agent. An old record with no stored kind is one unless
  *  it aims at the partner shell or carries a secret, as layout.ts's
- *  effectiveKind reads a Global record, and any record in an agent session. */
+ *  effectiveKind reads it on a Global button, or on any button in an agent
+ *  session. */
 function isAgentPrompt(cmd: BroadcastFields): boolean {
   const prompt = cmd.kind ? cmd.kind === 'prompt' : !cmd.hasSecretArg
   return prompt && cmd.target !== 'partner'
