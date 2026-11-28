@@ -346,7 +346,7 @@ pub struct Upload {
     file: Option<fs::File>,
     dir: PathBuf,
     part: PathBuf,
-    /// When the last chunk came (the `file.put`, before the first).
+    /// When the last chunk with a byte in it came (the `file.put`, before the first).
     last: Instant,
     /// Set once the picture is in place: its partial file is gone by then.
     stored: bool,
@@ -398,13 +398,17 @@ impl Upload {
     /// One chunk of the picture, in order. True once all of its `size` bytes
     /// are in. A byte past `size` is `too-large`, and a chunk that cannot be
     /// written `io`: either way the upload is over, and its partial file goes
-    /// with it when it is dropped.
+    /// with it when it is dropped. A chunk with no byte in it changes
+    /// nothing: the next one is due no later for it, so frames with no
+    /// payload never keep an upload open.
     pub fn take(&mut self, bytes: &[u8]) -> Result<bool, Refusal> {
         let re = Some(self.id);
         if bytes.len() as u64 > self.size - self.got {
             return refuse(CODE_TOO_LARGE, re, "a byte past size: the picture was not kept");
         }
-        self.last = Instant::now();
+        if !bytes.is_empty() {
+            self.last = Instant::now();
+        }
         if let Some(file) = self.file.as_mut() {
             if let Err(e) = file.write_all(bytes) {
                 return Err(Refusal { code: CODE_IO, re, text: format!("the picture could not be written: {e}") });
@@ -602,6 +606,14 @@ mod tests {
     }
 
     #[test]
+    fn the_picture_folder_is_paste_in_the_session_folder_beside_the_store() {
+        // Pinned here without folder_of itself: every other test here takes
+        // its folder from it.
+        assert_eq!(folder_of(Path::new("/a/store"), "s"), Some(PathBuf::from("/a/sessions/s/paste")));
+        assert_eq!(folder_of(Path::new("/"), "s"), None);
+    }
+
+    #[test]
     fn a_picture_name_is_paste_a_number_and_png_or_jpg() {
         assert_eq!(picture_name("paste-1.png"), Some((1, "image/png")));
         assert_eq!(picture_name("paste-999999999.jpg"), Some((999_999_999, "image/jpeg")));
@@ -739,6 +751,12 @@ mod tests {
         // Half way, then dropped (a closed connection, a detach, a timeout).
         let mut up = Upload::begin(put_of("paste-3.png", &bytes), &dir, slot.take().unwrap()).unwrap();
         assert!(!up.take(&bytes[..10]).unwrap());
+        // A chunk with no byte in it is taken, and the next chunk is due no
+        // later for it: empty frames never keep an upload open.
+        let due = up.due();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!up.take(&[]).unwrap());
+        assert_eq!(up.due(), due);
         assert_eq!(names(&dir), vec![".part-3"]);
         drop(up);
         assert_eq!(names(&dir), Vec::<String>::new());
