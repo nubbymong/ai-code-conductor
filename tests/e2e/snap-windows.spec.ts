@@ -1773,6 +1773,8 @@ const CLAUDE_FIRST_SCREENS: Array<{ re: RegExp; keys: string[] }> = [
   { re: /use this API key/i, keys: ['\u001b[A', '\r'] },
   { re: /trust (the files in )?this folder/i, keys: ['\r'] },
   { re: /Press Enter to continue/i, keys: ['\r'] },
+  // A picker not recorded yet: its own default, as Enter takes it.
+  { re: /Enter to (?:confirm|select|continue)/i, keys: ['\r'] },
 ]
 let claudeSid = ''
 /** Claude Code at its prompt, at rest (no turn running), on two reads. */
@@ -1799,25 +1801,38 @@ async function openClaudePasteTab(projectDir: string, label: string): Promise<vo
   await expect(snapButton()).toBeVisible({ timeout: TAB_MS })
   claudeSid = await activeSessionId(page)
   const answered: string[] = []
+  const shots: Array<{ atMs: number; screen: string[] }> = []
+  const started = Date.now()
+  let nextShot = 0
   const deadline = Date.now() + CODEX_START_MS
+  let atRest = false
   try {
     while (Date.now() < deadline) {
       const text = await terminalText(page)
-      const first = CLAUDE_FIRST_SCREENS.find((s) => s.re.test(text) && answered.filter((a) => a === s.re.source).length < 2)
+      if (Date.now() >= nextShot) { shots.push({ atMs: Date.now() - started, screen: text.split('\n').filter((l) => l.trim()).slice(-30) }); nextShot = Date.now() + 5_000 }
+      const first = CLAUDE_FIRST_SCREENS.find((s) => s.re.test(text) && answered.filter((a) => a === s.re.source).length < 3)
       if (first && !CLAUDE_READY_RE.test(text)) {
         answered.push(first.re.source)
         for (const k of first.keys) { await ptyWrite(page, claudeSid, k); await sleep(300) }
         await sleep(700)
         continue
       }
-      if (await claudeAtRest()) return
+      if (await claudeAtRest()) { atRest = true; return }
       await sleep(250)
     }
-    throw new Error(`no Claude Code prompt within ${CODEX_START_MS} ms`)
+    throw new Error(`no Claude Code prompt within ${CODEX_START_MS} ms; the screen:\n${(await terminalText(page).catch(() => 'unread')).split('\n').filter((l) => l.trim()).slice(-25).join('\n')}`)
   } finally {
-    readings.claudeFirstScreens = answered
-    readings.claudeScreenAtStart = (await terminalText(page).catch((e: Error) => `unread: ${e.message}`)).split('\n').filter((l) => l.trim())
-    readings.claudeMainLines = mainLines.filter((l) => /claude|paste|launch/i.test(l)).slice(-60)
+    const start = {
+      atRest,
+      startMs: Date.now() - started,
+      answered,
+      shots,
+      screenAtEnd: (await terminalText(page).catch((e: Error) => `unread: ${e.message}`)).split('\n').filter((l) => l.trim()),
+      requests: standInEvents.filter((e) => e.ev === 'request').map(({ t, path: p, kind, model, tools, stream }) => ({ t, path: p, kind, model, tools, stream })),
+      mainLines: mainLines.filter((l) => /claude|paste|launch|pty|spawn|refus/i.test(l)).slice(-80),
+    }
+    readings.claudeStart = start
+    savePaste(`${label.replace(/\s+/g, '-').toLowerCase()}-start`, start)
   }
 }
 
