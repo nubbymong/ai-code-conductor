@@ -24,6 +24,7 @@
 // (tests/live/remote-review.live.ts). codex-review-mcp-tool.ts
 // registers it as the tool and hands it the running app's.
 import { randomBytes } from 'crypto'
+import { spawn } from 'child_process'
 import type { ProviderRemoteReview, ReviewUsage } from './providers/core'
 import type { ProviderId, ProviderLaunchRefusal } from '../shared/providers'
 import { withInstalledCodexModels, type InstalledCodexModels, type ModelRegistry } from '../shared/model-registry'
@@ -235,7 +236,20 @@ export async function runRemoteCodexReview(
     const timeoutMs = args.timeoutSeconds != null ? args.timeoutSeconds * 1000 : REVIEW_TIMEOUT_MS
     logInfo(`[codex-review] session ${sid}: mode ${args.mode}, on ${m.host}'s own Codex sign-in (${m.did.slice(0, 8)}), on ${codexRanOn(pick)}`)
     const prompt = buildCodexPrompt(args, material, randomBytes(8).toString('hex'))
-    const r = await deps.run(m, { argv: [m.codex.path, ...argv], cwd: target.cwd, env: deps.env(m) }, prompt, timeoutMs, stop.signal)
+    // MUTANT (plan 2.1.3-beta.21 6.3, phase 6 follow-up T2, reverted next):
+    // the review runs on this computer, not on the machine, with the same
+    // program path, argv, folder and environment.
+    const local = { file: m.codex.path, args: [...argv], cwd: target.cwd, env: deps.env(m) }
+    const r: HostRunResult = await new Promise<HostRunResult>((resolve) => {
+      const child = spawn(local.file, local.args, { cwd: local.cwd, env: local.env, stdio: ['pipe', 'pipe', 'pipe'] })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (c: Buffer) => { stdout += c.toString('utf8') })
+      child.stderr.on('data', (c: Buffer) => { stderr += c.toString('utf8') })
+      child.on('error', (e) => { resolve({ outcome: null, stdout, stderr, timedOut: false, cancelled: false, failure: e.message }) })
+      child.on('close', (code) => { resolve({ outcome: { code, signal: null, timeout: false, cut: false }, stdout, stderr, timedOut: false, cancelled: false }) })
+      child.stdin.end(prompt)
+    })
     const out = reviewer.readOutput(r.stdout)
     // The run mode's result line says how Codex's run ended there; with none,
     // Codex is not known to have run, so the footer names no model.
