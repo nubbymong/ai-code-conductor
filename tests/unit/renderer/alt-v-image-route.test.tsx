@@ -133,6 +133,11 @@ describe('Alt+V with focus outside the terminal, a Claude Code or Codex session 
       expect(usePasteHintStore.getState().hints.cl1, reason).toBe(PASTE_NOTES[reason])
       expect(h.writes, reason).toEqual([])
     }
+    // Never the beta.20 fallback: no picture saved for a path, no path line.
+    await flush()
+    expect(saveImage).not.toHaveBeenCalled()
+    expect(h.sendImageToSession).not.toHaveBeenCalled()
+    expect(h.sendImageToCodexSession).not.toHaveBeenCalled()
   })
 
   it('a tab on the old SSH path: main answers the fetch request, typed naming the saved file, never its path (Q9)', async () => {
