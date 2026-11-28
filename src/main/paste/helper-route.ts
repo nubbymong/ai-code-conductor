@@ -190,8 +190,6 @@ export function helperPasteRoute(deps: HelperRouteDeps): RemotePasteRoute {
   }
 
   const press = async (sessionId: string, p: PasteKeyPress): Promise<PasteKeyResult> => {
-    // Plan s4: the remote route from a macOS or Linux app comes in 2.1.3-beta.23.
-    if (deps.platform !== 'win32') return notPasted('not-available')
     const tab = deps.tab(sessionId)
     if (!tab) return notPasted('session-gone')
     let picture: RoutePicture | null = null
@@ -204,6 +202,11 @@ export function helperPasteRoute(deps: HelperRouteDeps): RemotePasteRoute {
       if ('error' in copied) return notPasted(copied.error === 'too-large' ? 'too-large' : 'no-picture')
       picture = copied.picture
     }
+    // Plan s4: the remote route from a macOS or Linux app comes in
+    // 2.1.3-beta.23. After the tab and the clipboard reads, so a press with
+    // nothing to paste, or into a tab that is gone, answers as it does on
+    // Windows (phase 5 review 2, R2-1).
+    if (deps.platform !== 'win32') return notPasted('not-available')
     if (!tab.standIn) return notPasted('not-available')
     const taken = picture
     return inTurn(sessionId, () => send(sessionId, tab, taken, p.focused ? null : PASTE_SENTENCE))
