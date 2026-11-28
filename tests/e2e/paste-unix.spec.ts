@@ -77,6 +77,19 @@
  *     which PL1 read does not serve Claude Code there): Claude Code gets no
  *     key and the paste hint names both programs; Codex pastes as before.
  * A red press is diagnosed from its readings, never retried.
+ *   READ, readings run 46141950185 (c0b48d82), every press green. macOS:
+ *     Codex and Claude Code each took Option+V in the terminal (59 and
+ *     121 ms to "[Image #N]", nothing typed after it), Option+V from outside
+ *     it (335 and 61 ms, then the sentence and Enter), Cmd+V with only a
+ *     picture (452 and 492 ms) and a copied PNG file (774 and 503 ms; for
+ *     Claude Code the app's own write then showed «class PNGf» and TIFF
+ *     picture), every turn carrying the picture by its pixels. Linux, X11
+ *     under Xvfb: Codex the same three ways with neither program and with
+ *     xclip (56 to 428 ms), Claude Code with xclip (59 to 497 ms); with
+ *     neither, and with wl-paste alone, Claude Code got no key and the hint
+ *     named both programs. Readings run 46141007842 before it had the same
+ *     presses reach both CLIs and was red on the harness only (the after-key
+ *     check, and the Linux teardown; see closeAll).
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
 import { spawnSync } from 'child_process'
