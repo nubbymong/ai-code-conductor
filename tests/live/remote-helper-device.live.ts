@@ -101,7 +101,7 @@ import { RemoteMachines, type MachineStore, type RemoteMachineRecord } from '../
 import { nodeSshRunner, execArgv, sshEnv, newNonce, readScriptResult, runScript, afterHashLine, openScriptStream, type SshRunner, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
 import { RemoteHelperPty, remoteHelperCommands, remoteLaunchSpec, remoteSessionId } from '../../src/main/remote-helper/session'
 import { HolderConnection } from '../../src/main/session-helper/connection'
-import { PASTE_CHANNEL, PASTE_CHUNK_WAIT_MS, PASTE_PICTURE_MAX, encodeRawFrame, readRecord } from '../../src/main/session-helper/protocol'
+import { PASTE_CHANNEL, PASTE_CHUNK_WAIT_MS, PASTE_PICTURE_MAX, PASTE_SESSION_MAX, encodeRawFrame, readRecord } from '../../src/main/session-helper/protocol'
 import { remoteLaunchOf, type RemoteSignalDeps } from '../../src/main/remote-helper'
 import { CLAUDE_REMOTE_ACCOUNTS, claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
 import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
@@ -1396,7 +1396,8 @@ describe('remote helper on a real Linux host', () => {
   // into its session folder on the host by file.put, is read back there by
   // its hash (the folder 0700, the file 0600), replaces the one before it, and
   // is gone after the tab's end. PH1, on a link of the test's own to a holder
-  // of its own: the caps and the refused names come before a byte, a bad hash
+  // of its own: the caps (the session's 100 MiB, read from the host's own
+  // folder, included) and the refused names come before a byte, a bad hash
   // and a stalled upload (the build the installers carry, 30 s) leave
   // nothing, and the holder's end removes the folder.
   it('a picture into a tab\'s session folder on the host by file.put: read back by its hash and gone after the end; the caps, a bad hash and a stalled upload leave nothing (2.1.3-beta.21, probe PH1)', async () => {
@@ -1471,6 +1472,19 @@ describe('remote helper on a real Linux host', () => {
       expect(stored.sha256).toBe(sha(data))
       expect(sshRun(`sha256sum "${ph1Pictures}/paste-1.png" | cut -d' ' -f1`).out.trim()).toBe(sha(data))
       ph1.roundTrip = stored.sha256
+      // The session's 100 MiB, which the holder reads from its own folder on
+      // the host: a sparse file there makes what it holds, with one more
+      // picture of this size, one byte over. Refused before a byte, with no
+      // partial file and no picture left; then the file goes.
+      expect(ls()).toEqual(['paste-1.png'])
+      const filler = PASTE_SESSION_MAX - 2 * data.length + 1
+      expect(sshRun(`truncate -s ${filler} "${ph1Pictures}/paste-9.png" && echo made`).out.trim()).toBe('made')
+      await expect(conn.request({ t: 'file.put', name: 'paste-4.png', size: data.length, sha256: sha(data) })).rejects.toMatchObject({ code: 'too-large' })
+      const atCap = ls()
+      expect(atCap).toEqual(['paste-1.png', 'paste-9.png'])
+      expect(sshRun(`rm -f -- "${ph1Pictures}/paste-9.png" && echo gone`).out.trim()).toBe('gone')
+      ph1.sessionCap = { filler, refused: 'too-large', left: atCap }
+      expect(ls()).toEqual(['paste-1.png'])
       // A bad hash: refused after the last byte, nothing new kept.
       const bad = conn.request({ t: 'file.put', name: 'paste-2.png', size: data.length, sha256: '0'.repeat(64) })
       for (let at = 0; at < data.length; at += 65536) opened.stream.write(encodeRawFrame(data.subarray(at, at + 65536), PASTE_CHANNEL))
