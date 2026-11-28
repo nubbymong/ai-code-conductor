@@ -23,10 +23,33 @@
 // a copied file list, so the app writes a copied image file as a picture for
 // it. macOS: osascript, `«class PNGf»`. Linux: wl-paste or xclip; a copied
 // image file is not read on Linux (src/main/clipboard-file.ts), as before.
+// With neither program installed on Linux, Claude Code's own paste cannot
+// read the picture, so the app sends no key and the hint names the two
+// (plan 2.1.3-beta.21 phase 3, 3.1; claudeClipboardToolMissing below).
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import * as os from 'os'
 import type { ClipboardPasteRule, PasteKey } from '../types'
+import { findOnPosixPath } from '../../login-shell'
+
+/** The programs Claude Code reads the clipboard with on Linux. */
+export const CLAUDE_LINUX_CLIPBOARD_TOOLS = ['xclip', 'wl-paste'] as const
+/** The system's own program folders, searched after PATH's: a session's
+ *  login shell names them even when the app's own PATH does not. */
+const SYSTEM_PROGRAM_FOLDERS = ['/usr/local/bin', '/usr/bin', '/bin']
+
+/**
+ * Whether neither program Claude Code reads the clipboard with on Linux is
+ * installed: neither `xclip` nor `wl-paste` in PATH's absolute folders or the
+ * system's, as a file this user may run. Never on Windows or macOS, where
+ * Claude Code reads the clipboard with a program the system ships
+ * (PowerShell, osascript).
+ */
+export function claudeClipboardToolMissing(platform: NodeJS.Platform, pathValue: string, runnable?: (p: string) => boolean): boolean {
+  if (platform !== 'linux') return false
+  const folders = [pathValue, ...SYSTEM_PROGRAM_FOLDERS].join(':')
+  return CLAUDE_LINUX_CLIPBOARD_TOOLS.every((name) => findOnPosixPath(name, folders, runnable) === null)
+}
 
 /** Claude Code's action name for its image paste. */
 export const CLAUDE_IMAGE_PASTE_ACTION = 'chat:imagePaste'
@@ -172,6 +195,10 @@ export const CLAUDE_CLIPBOARD_PASTE: ClipboardPasteRule = {
   // copied file is not read on Linux by anyone.
   readsCopiedFile: () => false,
   formats: (platform) => (platform === 'win32' ? ['CF_DIB', 'PNG'] : platform === 'darwin' ? ['public.png'] : ['image/png']),
+  // The app's own PATH and the system folders: a local session's login
+  // shell (login-shell.ts) builds its PATH from the user's profile, which
+  // names the system folders too.
+  clipboardToolMissing: (platform) => claudeClipboardToolMissing(platform, process.env.PATH ?? ''),
   // The path route behind the test switch only (plan Q5; deleted in
   // 2.1.3-beta.22): what the renderer types when main did not paste the path.
   pathRouteLine: 'enter',

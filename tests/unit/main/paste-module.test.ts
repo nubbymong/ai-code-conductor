@@ -90,7 +90,9 @@ beforeEach(() => {
   accountDir = null
   snaps.clear()
   snapTakes = []
-  const spy = (rule: typeof CLAUDE_CLIPBOARD_PASTE) => ({ ...rule, key: (ctx: { platform: NodeJS.Platform; accountDir: string | null }) => { keyCtx.push(ctx); return rule.key(ctx) } })
+  // The Linux clipboard tool check reads this computer's PATH; it has its
+  // own test (paste-linux-clipboard-tool.test.ts), so it is answered here.
+  const spy = (rule: typeof CLAUDE_CLIPBOARD_PASTE) => ({ ...rule, clipboardToolMissing: () => false, key: (ctx: { platform: NodeJS.Platform; accountDir: string | null }) => { keyCtx.push(ctx); return rule.key(ctx) } })
   paste.setPasteDeps({
     platform: 'win32',
     where: () => where,
