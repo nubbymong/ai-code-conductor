@@ -16,7 +16,7 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   with the `did` and app install id; `helper/<version>-<hash12>/aicc-helper`
   (first 12 hex of its SHA-256; never on `PATH`); `sessions/<sid>/` (0700: spec,
   provider files, socket `s`, `seq`, a bounded spool, the helper log, `holder`
-  from R9, `paste/`); `backup/`; and `edits` (section 8). Nothing is written,
+  from R9, `paste/`; from 2.1.3-beta.21 `bin/`, the clipboard stand-in's two scripts, 0700, section 15); `backup/`; and `edits` (section 8). Nothing is written,
   run or deleted in a `did` folder whose marker lacks this install's ids; the
   app never removes another install's folder, it only lists it (section 8).
 - **Step 1 as built (2.1.3-beta.17).** Under `~/.aicc/<did>/`: `owner`,
@@ -245,7 +245,7 @@ item's alphabet (no space, quote, backslash or metacharacter) is checked first.
 | fixed text | the sub-commands and flags below, and the fixed scripts (sections 13, 14) run as `/bin/sh -c '<script>'` |
 | `did`, `sid`; nonce | section 1; 32 lower-case hex characters, new for every exec |
 | helper folder; expected hash | `^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?-[0-9a-f]{12}$`; 64 hex. Both only from the app's manifest, never from host data |
-| numbers; image name; engine and container (R11) | protocol version, offset, size: decimal integers in range; `paste-<n>.<ext>`; `docker` or `podman`; a container name (for inspect only) `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`, then the id inspect returned, 64 hex |
+| numbers; image name; engine and container (R11) | protocol version, offset, size: decimal integers in range; `paste-<n>.<ext>` (the R2 upload's, not built; ADR-032's `file.put` carries the name in-band); `docker` or `podman`; a container name (for inspect only) `^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`, then the id inspect returned, 64 hex |
 
 No value a host reported (home, tool or CLI path) is put on a command line:
 scripts build paths from `$HOME` and find their tools themselves. Script text
@@ -291,7 +291,7 @@ prints `AICC-RESULT helpers <n>` before `swept <n>`. `sessions` never removes a
 helper folder.
 
 **The one-shot run mode** (ADR-030 protocol change 6, from 2.1.3-beta.21;
-aicc_planning#446; **pending probe PV1**, the plan's). A `codex_review` from a
+aicc_planning#446; **pending probe PV1** of the 2.1.3-beta.21 plan, phase 6). A `codex_review` from a
 Claude Code helper tab runs on that tab's machine: the app starts, through the
 launcher, `run --nonce <n> --timeout <seconds>` on one `ssh -T` exec, beside
 the tab's own connection. `--timeout` is the review's own timeout, 30 to 900
@@ -311,12 +311,17 @@ the host, and `env` the host account's variables as a helper tab's launch has
 them (`src/main/remote-helper/session.ts:139`). The program leads a new
 session and process group, and its standard input is closed after the prompt.
 Its standard output is copied to the run mode's, byte for byte, at most 4 MiB;
-its standard error to the run mode's, at most 64 KiB. Then the run mode prints
-one line, `AICC-RESULT <nonce> {"code":<n>|null,"signal":<n>|null,"timeout":<bool>,"cut":<bool>}`,
-and exits 0. The app reads the program's output between the launcher's
-`AICC-HASH` line and that result line as data (JSON events), never as marked
-lines, and reads the exec with a standard output cap above the run mode's (the
-4 MiB, the preamble, the hash line and the result line), not
+its standard error to the run mode's, at most 64 KiB. If the copied output did
+not end with a line end (a cut, or a last write with no newline), the run mode
+writes one before the result line, so the result line is always the last line
+it writes. Then the run mode prints one line,
+`AICC-RESULT <nonce> {"code":<n>|null,"signal":<n>|null,"timeout":<bool>,"cut":<bool>}`,
+and exits 0. The app takes the last line of the exec's standard output as the
+result line, and treats an exec whose last line is not `AICC-RESULT` with this
+exec's nonce and that object as failed. It reads everything between the
+launcher's `AICC-HASH` line and that last line as the program's output, as
+data (JSON events), never as marked lines, and reads the exec with a standard output cap above the run mode's (the
+4 MiB, an added line end, the preamble, the hash line and the result line), not
 `EXEC_STDOUT_MAX`'s 2 MiB (`src/main/remote-helper/ssh-exec.ts:165`). The run
 mode ends the program's whole group (hangup, then kill after 2 s, as a holder
 ends a tree, section 15) when the program exits, when `--timeout` seconds have
@@ -511,9 +516,11 @@ inside that value (or inserts that key), writes a new file with the same mode,
 and renames it over the old one only if that is unchanged just before (else
 `io`; a writer in that last moment can still lose one update). A golden-file
 test covers fake secrets, integers past 2^53, unicode escapes, key order, CRLF,
-no final newline and a concurrent writer. The old value goes to `edits`. Probe
-P4 confirms file and key (a CLI flag, if one exists, replaces the row); a new
-row needs its own adversarial pass.
+no final newline and a concurrent writer. The old value goes to `edits`.
+ADR-029's probe P4 was named here to confirm file and key (its second half,
+the folder-trust record); ADR-032 withdraws P4, and no probe has taken that
+half over yet. A CLI flag, if one exists, replaces the row; a new row needs
+its own adversarial pass.
 
 | Error code | Meaning | Closes |
 | --- | --- | --- |
