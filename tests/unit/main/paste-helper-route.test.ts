@@ -35,7 +35,12 @@
 // on this computer's clipboard; a tab whose stand-in is not ready sent to, by
 // a press or by Snap; the app-platform check dropped; a second picture sent
 // before the first's key is through.
+// Red on 7e068f5e on macOS and Linux only: the saved pictures' paths here
+// were Windows-shaped, which the module's basename there does not split, so
+// the request named the whole path; they are now built in the shape of the
+// OS the test runs on, as main's own saved paths are.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { join, parse } from 'node:path'
 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('../../../src/main/session-input', () => ({ pasteFromClipboard: vi.fn(), providerOfSession: () => null, isPasteKeyBytes: () => true }))
@@ -55,6 +60,13 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3
 const JPG = Buffer.from([0xff, 0xd8, 0xff, 9, 9])
 const FILE_PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 7, 7])
 const picture = (png = PNG, jpg = JPG) => ({ isEmpty: () => png.length === 0, toPNG: () => png, toJPEG: () => jpg }) as unknown as NativeImage
+/**
+ * The shared screenshots folder, in this OS's own shape (`<drive>\res\screenshots`
+ * on Windows, `/res/screenshots` on macOS and Linux): main saves its pictures
+ * at paths of the OS it runs on, so the module's basename meets that shape
+ * here too.
+ */
+const SHOTS = join(parse(process.cwd()).root, 'res', 'screenshots')
 
 let tab: { standIn: boolean; key: PasteKey | undefined; put: (b: Buffer, k: 'png' | 'jpg') => Promise<{ name: string; sha256: string }> } | null
 let puts: Array<{ bytes: Buffer; kind: string }>
@@ -342,7 +354,7 @@ describe('through the paste module\'s seam', () => {
   })
 
   it('a helper tab\'s press and Snap reach the route', async () => {
-    paste.setPasteDeps({ where: () => 'helper', takeSnap: () => ({ file: 'C:\\res\\screenshots\\snap-1.jpg', picture: picture() }) } as never)
+    paste.setPasteDeps({ where: () => 'helper', takeSnap: () => ({ file: join(SHOTS, 'snap-1.jpg'), picture: picture() }) } as never)
     expect(await paste.pasteImageKey({ sessionId: 'h1', chord: 'image', focused: false })).toEqual({ outcome: 'sent' })
     expect(await paste.pasteImageKey({ sessionId: 'h1', chord: 'snap', focused: false, snap: { token: '0123456789abcdef', item: 'window' } })).toEqual({ outcome: 'sent' })
     expect(door.map((d) => d.sentence)).toEqual([PASTE_SENTENCE, SNAP_WINDOW_SENTENCE])
@@ -352,7 +364,7 @@ describe('through the paste module\'s seam', () => {
 
   it('a tab on the old SSH path is unchanged (Q9): today\'s request by file name, and the route is not asked', async () => {
     let saves = 0
-    paste.setPasteDeps({ where: () => 'ssh', savePicture: async () => { saves++; return { path: 'C:\\res\\screenshots\\clipboard-1-abcd.jpg' } } } as never)
+    paste.setPasteDeps({ where: () => 'ssh', savePicture: async () => { saves++; return { path: join(SHOTS, 'clipboard-1-abcd.jpg') } } } as never)
     expect(await paste.pasteImageKey({ sessionId: 's1', chord: 'image', focused: false })).toEqual({ outcome: 'fetch', filename: 'clipboard-1-abcd.jpg' })
     expect(await paste.pasteImageKey({ sessionId: 's1', chord: 'image', focused: true })).toEqual({ outcome: 'not-pasted', reason: 'no-picture', note: PASTE_NOTES['no-picture'] })
     expect(saves).toBe(1)

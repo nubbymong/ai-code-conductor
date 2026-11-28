@@ -10,6 +10,10 @@
 // Mutants this must catch: the route not registered (the helper tab then got
 // the old path's request, as before phase 5); the route told Windows
 // whatever the app runs on.
+// Red on 7e068f5e on macOS and Linux only: the saved picture's path here was
+// Windows-shaped, which the module's basename there does not split, so the
+// request named the whole path; it is now built in the shape of the OS the
+// test runs on, as main's own saved paths are.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -27,6 +31,13 @@ const h = vi.hoisted(() => ({
   saves: 0,
 }))
 const pic = (bytes: number[]) => ({ isEmpty: () => false, toPNG: () => Buffer.from(bytes), toJPEG: () => Buffer.from([0xff, 0xd8, 0xff]) })
+/**
+ * The shared screenshots folder, in this OS's own shape (`<drive>\res\screenshots`
+ * on Windows, `/res/screenshots` on macOS and Linux): main saves its pictures
+ * at paths of the OS it runs on, so the module's basename meets that shape
+ * here too.
+ */
+const SHOTS = path.join(path.parse(process.cwd()).root, 'res', 'screenshots')
 
 vi.mock('electron', () => ({
   ipcMain: { handle: (ch: string, fn: (e: unknown, ...a: unknown[]) => unknown) => { h.handlers.set(ch, fn) } },
@@ -47,7 +58,7 @@ vi.mock('../../../src/main/session-input', () => ({
 vi.mock('../../../src/main/clipboard-image', () => ({ readClipboardImageWithRetry: async () => h.clipboard }))
 vi.mock('../../../src/main/clipboard-file', async (orig) => ({ ...(await orig<typeof import('../../../src/main/clipboard-file')>()), readClipboardFilePaths: async () => h.files }))
 vi.mock('../../../src/main/paste/clipboard-writer', () => ({ writeClipboardPicture: async () => 'written' }))
-vi.mock('../../../src/main/ipc/clipboard-handlers', () => ({ saveClipboardImage: async () => { h.saves++; return { path: 'C:\\res\\screenshots\\clipboard-9-abcd.jpg' } } }))
+vi.mock('../../../src/main/ipc/clipboard-handlers', () => ({ saveClipboardImage: async () => { h.saves++; return { path: path.join(SHOTS, 'clipboard-9-abcd.jpg') } } }))
 vi.mock('../../../src/main/claude-account-identity', () => ({ getClaudeProfileId: () => null }))
 vi.mock('../../../src/main/account-profiles', () => ({ getProfileConfigDir: () => null }))
 vi.mock('../../../src/main/screenshot-capture', () => ({ takeSnapForPaste: () => null }))
