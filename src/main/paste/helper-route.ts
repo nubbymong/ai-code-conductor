@@ -30,9 +30,9 @@
 // did not ask, the host is not Linux, or the stand-in was not written there:
 // the plan's s5 fallback until probe PR1 passes on a host) answers "not
 // available yet", and so does a launch that gave no key; nothing is sent and
-// nothing typed. That covers a Codex helper tab (plan Q7: Codex remote
-// sessions come in 2.1.3-beta.24, after probe PR2): its launch asks for no
-// stand-in. A tab on the old SSH path never reaches this route (plan Q9: the
+// nothing typed. That covers a helper tab of a CLI whose remote launch asks
+// for no stand-in (plan Q7: the second CLI's remote sessions come in
+// 2.1.3-beta.24, after probe PR2). A tab on the old SSH path never reaches this route (plan Q9: the
 // paste module keeps today's fetch request for it).
 //
 // Pure of Electron (its picture is the few calls of a NativeImage it uses),

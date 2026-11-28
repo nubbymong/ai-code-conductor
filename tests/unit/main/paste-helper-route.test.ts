@@ -13,7 +13,7 @@
 //  - Snap: the picture also stays on this computer's clipboard (Q1), then
 //    the same route with Snap's sentence.
 //  - The stand-in not ready on the host (the s5 fallback until probe PR1),
-//    and a Codex helper tab (Q7): "not available yet", nothing sent, nothing
+//    and a helper tab of the second CLI (Q7: no stand-in, no key): "not available yet", nothing sent, nothing
 //    typed, never a path.
 //  - file.put's refusals, each with its own hint; a picture over 20 MiB as a
 //    PNG goes as a JPEG; over that too, "too large".
@@ -182,8 +182,8 @@ describe('not available yet, never a path', () => {
     expect(door).toEqual([])
   })
 
-  it('a Codex helper tab (Q7): its launch has no stand-in and no key, so not available yet; Snap leaves the picture on this computer\'s clipboard only', async () => {
-    tab = { standIn: false, key: undefined, put: async () => { throw new Error('nothing is sent to a Codex tab') } }
+  it('a helper tab of the second CLI (Q7): its launch has no stand-in and no key, so not available yet; Snap leaves the picture on this computer\'s clipboard only', async () => {
+    tab = { standIn: false, key: undefined, put: async () => { throw new Error('nothing is sent to that tab') } }
     expect(await press('image', false)).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
     expect(await snap()).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
     expect(written).toHaveLength(1)
