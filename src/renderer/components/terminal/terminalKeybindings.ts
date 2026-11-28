@@ -83,8 +83,12 @@ export function installTerminalKeybindings(opts: TerminalKeybindingOptions): () 
     // ADR-032: Alt+V with this terminal focused, in a session whose CLI takes
     // the image paste, is reported to main as one press (never typed as ESC v
     // by xterm, and no path): claimed before xterm's own listener sees it.
+    // A paste chord always takes the paste branch below, even when Settings
+    // rebinds "Paste clipboard image" to it (review round 2, R2-4): text
+    // still pastes as text (ADR-008), and with no text that branch reports
+    // the text chord, so a picture still pastes.
     const image = opts.imagePaste
-    if (image && image.isImageChord(e)) {
+    if (image && image.isImageChord(e) && !isPasteChord(e)) {
       if (!opts.isActive() || hasModalOpen() || !image.terminalFocused() || !image.takes()) return
       e.stopPropagation()
       e.preventDefault()

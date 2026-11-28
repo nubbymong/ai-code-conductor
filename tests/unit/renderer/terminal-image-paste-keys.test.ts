@@ -17,9 +17,13 @@
  *    a partner pane or a tab on the old SSH path.
  *  - The Claude Code prompt's 'read' (main's placeholder read): a count of
  *    "[Image #N]" placeholders only, never the prompt's text, nothing typed.
+ *  - "Paste clipboard image" rebound in Settings to a paste chord: the paste
+ *    branch takes the chord first, so text still pastes as text (review
+ *    round 2, R2-4).
  * Red on 0c54a1c6: the installer had no image paste (Alt+V always went to
  * xterm, Ctrl+V with no text always said nothing to paste), and the prompt
- * reader had no 'read'.
+ * reader had no 'read'. Red on 713c585f: the rebound paste chord went to
+ * main as an image press, and its text was not pasted (R2-4).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { installTerminalKeybindings, type ImagePasteBinding } from '../../../src/renderer/components/terminal/terminalKeybindings'
@@ -30,7 +34,7 @@ const chord = (init: Partial<KeyboardEventInit> & { key: string }) => new Keyboa
 const isAltV = (e: KeyboardEvent) => e.altKey && !e.ctrlKey && !e.metaKey && e.key.toLowerCase() === 'v'
 const tick = async () => { for (let i = 0; i < 5; i++) await Promise.resolve() }
 
-function harness(opts: { takes?: boolean; focused?: boolean; text?: string; nothing?: boolean; modal?: boolean; noImage?: boolean } = {}) {
+function harness(opts: { takes?: boolean; focused?: boolean; text?: string; nothing?: boolean; modal?: boolean; noImage?: boolean; imageChord?: (e: KeyboardEvent) => boolean } = {}) {
   const textarea = document.createElement('textarea')
   textarea.className = 'xterm-helper-textarea'
   document.body.appendChild(textarea)
@@ -40,7 +44,7 @@ function harness(opts: { takes?: boolean; focused?: boolean; text?: string; noth
   const onNothingToPaste = vi.fn()
   const presses: Array<[string, boolean]> = []
   const image: ImagePasteBinding = {
-    isImageChord: isAltV,
+    isImageChord: opts.imageChord ?? isAltV,
     takes: () => opts.takes ?? true,
     terminalFocused: () => opts.focused ?? true,
     press: async (c, f) => { presses.push([c, f]); return opts.nothing ?? false },
@@ -117,6 +121,31 @@ describe('Ctrl+V (Q2): a picture only when the clipboard holds no text', () => {
     expect(h.term.paste).toHaveBeenCalledWith('hello')
     expect(h.presses).toEqual([])
     h.dispose()
+  })
+
+  it('review round 2 (R2-4): "Paste clipboard image" rebound to a paste chord (Ctrl+V, Ctrl+Shift+V, Cmd+V): text still pastes as text, and with no text the picture still goes as the text chord', async () => {
+    const rebinds: Array<[string, (e: KeyboardEvent) => boolean, Partial<KeyboardEventInit>]> = [
+      ['Ctrl+V', (e) => e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v', { ctrlKey: true }],
+      ['Ctrl+Shift+V', (e) => e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === 'v', { ctrlKey: true, shiftKey: true }],
+      ['Cmd+V', (e) => e.metaKey && !e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'v', { metaKey: true }],
+    ]
+    for (const [name, imageChord, mods] of rebinds) {
+      document.body.innerHTML = ''
+      const withText = harness({ text: 'hello', imageChord })
+      withText.textarea.dispatchEvent(chord({ key: 'v', ...mods }))
+      await tick()
+      expect(withText.term.paste, name).toHaveBeenCalledWith('hello')
+      expect(withText.presses, name).toEqual([])
+      expect(withText.xtermSaw, name).toEqual([])
+      withText.dispose()
+      document.body.innerHTML = ''
+      const noText = harness({ imageChord })
+      noText.textarea.dispatchEvent(chord({ key: 'v', ...mods }))
+      await tick()
+      expect(noText.term.paste, name).not.toHaveBeenCalled()
+      expect(noText.presses, name).toEqual([['text', true]])
+      noText.dispose()
+    }
   })
 
   it('no text where the CLI does not take the paste (a plain terminal, the old SSH path): nothing to paste, as before', async () => {
