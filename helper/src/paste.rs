@@ -791,12 +791,13 @@ mod tests {
         assert!(!dir.exists());
     }
 
-    /// `at` and each missing folder on the way to it, made one level at a
-    /// time and set to 0700 before the next is made in it, never left to the
-    /// umask. The lib tests share one process and its umask, and a socket
-    /// bind beside them sets it to 0177 for a moment (transport/unix.rs,
-    /// `bind_private`): a level `create_dir_all` made in that moment was
-    /// 0600, with no search bit, so the next level could not be made inside it.
+    /// Each folder on the way to `at` that is missing, `at` included, made
+    /// one level at a time and set to 0700 before the next is made in it,
+    /// never left to the umask. The lib tests share one process and its umask,
+    /// and a socket bind beside them sets it to 0177 for a moment
+    /// (transport/unix.rs, `bind_private`): a level `create_dir_all` made in
+    /// that moment was 0600, with no search bit, so the next level could not
+    /// be made inside it.
     #[cfg(unix)]
     fn folders_0700(at: &Path) {
         use std::os::unix::fs::PermissionsExt;
