@@ -580,18 +580,26 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
 }
 
 /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.3): how long the clipboard
- *  paste waits for the CLI's image placeholder after its key. Set from probe
- *  PW1 before the gate job was dispatched: PW1's worst case at 3 busy
- *  processes, for the key the app sends on Windows (ESC v), over both CLIs,
- *  times 2 (the factor fixed in PW1's header before it ran), at most 10 s.
- *  PW1, snap-e2e run 46128921672 (GitHub's Windows runner, 4 CPUs, the app's
- *  bundled ConPTY): Claude Code 2.1.332 showed "[Image #1]" 926, 914, 1030
- *  and 1250 ms after ESC v at 0, 1, 2 and 3 busy processes; Codex 0.157.1
- *  31, 32, 36 and 76 ms; every turn carried the picture by its decoded
- *  pixels. So 2 x 1250 ms. (Claude Code ignored Ctrl+V on Windows at every
- *  grade, as its table says; on a fresh, empty PowerShell module analysis
- *  cache its own read took longer than 15 s, run 46128029706.) */
-export const CLIPBOARD_PLACEHOLDER_WAIT_MS = 2_500
+ *  paste waits for the CLI's image placeholder after its key. The rule, fixed
+ *  in PW1's header before it ran: PW1's worst case at 3 busy processes, for
+ *  the key the app sends on Windows (ESC v), over both CLIs, times 2, at most
+ *  10 s. Applied to every PW1 reading (review round 1, R1-1), so 10 s, the
+ *  cap. Probe run 46128029706 (GitHub's Windows runner, 4 CPUs, the app's
+ *  bundled ConPTY, the app on a fresh, empty PowerShell module analysis
+ *  cache): Claude Code 2.1.332's own clipboard read (Windows PowerShell)
+ *  showed no placeholder within PW1's 15 s bound in 7 of 8 presses, and one
+ *  13.7 s after its key, so its worst case is over 15 s and twice that is
+ *  over the cap. On a warm cache (probe run 46128921672) it showed
+ *  "[Image #1]" 926, 914, 1030 and 1250 ms after ESC v at 0, 1, 2 and 3 busy
+ *  processes; Codex 0.157.1 31 to 76 ms there and 31 to 120 ms on the cold
+ *  cache (it reads the clipboard without PowerShell); every turn carried
+ *  the picture by its decoded pixels. (Claude Code ignored Ctrl+V on Windows
+ *  at every grade, as its table says.) The gate's presses (runs 46129823039
+ *  and 46130805592, at 2.5 s) stand: the poll stops at the placeholder, so
+ *  the longer wait changes only a press whose CLI shows none, which then
+ *  waits up to 10 s before it says so, instead of saying so while a slower
+ *  computer's CLI is still reading the picture. */
+export const CLIPBOARD_PLACEHOLDER_WAIT_MS = 10_000
 /** ADR-032: how long the Enter follows the sentence typed after the picture
  *  (the image door's own, IMAGE_ENTER_DELAY_MS). */
 export const CLIPBOARD_ENTER_DELAY_MS = IMAGE_ENTER_DELAY_MS

@@ -1552,13 +1552,21 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
 //     code before the gate is dispatched. A CLI that shows no placeholder for
 //     ESC v at 3 busy processes is diagnosed and the owner told; the path
 //     does not come back.
-//     READ (run 46128921672, a warm PowerShell cache): Claude Code 2.1.332
+//     READ, both runs that measured Claude Code. Run 46128029706 (the app on
+//     a fresh, empty PowerShell module analysis cache, beta.20's D1
+//     condition): Claude Code 2.1.332 showed no placeholder within the 15 s
+//     bound in 7 of 8 presses, and one 13.7 s after its key; Codex 0.157.1
+//     31 to 120 ms. Run 46128921672 (a warm PowerShell cache): Claude Code
 //     926, 914, 1030 and 1250 ms after ESC v at 0 to 3 busy processes, no
-//     placeholder for Ctrl+V on Windows; Codex 0.157.1 31 to 76 ms after
-//     either key; every turn carried the picture by its decoded pixels. PW2
-//     (the same run and runs 46126339163, 46127035163): one write left PNG,
-//     CF_DIBV5, CF_BITMAP and CF_DIB, and GetImage read it. So the wait is
-//     2 x 1250 ms = 2.5 s.
+//     placeholder for Ctrl+V on Windows; Codex 31 to 76 ms after either key;
+//     every turn carried the picture by its decoded pixels. PW2 (the same
+//     runs and runs 46126339163, 46127035163): one write left PNG, CF_DIBV5,
+//     CF_BITMAP and CF_DIB, and GetImage read it. The gate ran with a wait of
+//     2 x 1250 ms = 2.5 s, from the warm run alone. Review round 1 (R1-1)
+//     applied the rule to every PW1 reading: the cold run's worst case is
+//     over 15 s, twice that is over the cap, so the wait is the cap, 10 s.
+//     The gate's clipboard-route presses stand at 10 s: the poll stops at
+//     the placeholder, and every one of them showed it within 2.5 s.
 //   GATE (one job, the Windows runner, --retries=0): the load grader at 0,
 //     1, 2 and 3 busy processes (node, normal priority), each early and late
 //     (GRADES), each count running BUSY_SETTLE_MS before its press (gate run
@@ -1586,7 +1594,9 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
 //     (46040073797). A user's computer keeps that cache, so Claude Code's PW1
 //     and C4 run on the runner's own cache, warmed first by the same command
 //     (warmClaudeClipboardRead); the Codex groups keep beta.20's cold cache
-//     (Codex reads the clipboard without PowerShell).
+//     (Codex reads the clipboard without PowerShell). This condition was
+//     added after run 46128029706 measured, and it sets no wait: the app's
+//     wait follows every PW1 reading, the cold run's included (R1-1 above).
 
 const PASTE = process.env.SNAP_E2E_PASTE ?? ''
 /** The folder holding the job's Claude Code 2.1.332 (claude.exe), or ''. */

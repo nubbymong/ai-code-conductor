@@ -124,6 +124,8 @@ describe('a Claude Code session on this computer', () => {
     expect(await settle(input.pasteFromClipboard(id, ESC_V, SENTENCE))).toEqual({ outcome: 'no-placeholder' })
     expect(datas(run)).toEqual([ESC_V])
     expect(Date.now() - started).toBeGreaterThanOrEqual(input.CLIPBOARD_PLACEHOLDER_WAIT_MS)
+    // The plan's cap on the wait (2.1.3, 2.3): at most 10 s.
+    expect(input.CLIPBOARD_PLACEHOLDER_WAIT_MS).toBeLessThanOrEqual(10_000)
     // A prompt that cannot be read counts as no placeholder too.
     const id2 = fresh()
     const run2 = startRun(id2)
