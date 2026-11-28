@@ -1561,7 +1561,9 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
 //     2 x 1250 ms = 2.5 s.
 //   GATE (one job, the Windows runner, --retries=0): the load grader at 0,
 //     1, 2 and 3 busy processes (node, normal priority), each early and late
-//     (GRADES). C2 on the path route (the test switch, CCC_E2E_PATH_ROUTE=1,
+//     (GRADES), each count running BUSY_SETTLE_MS before its press (gate run
+//     46129823039 started them at the press, and every path-route press
+//     there pasted and sent, the paste meeting 61 to 75% total CPU). C2 on the path route (the test switch, CCC_E2E_PATH_ROUTE=1,
 //     in its own app and serial group): each press recorded as a reading,
 //     never asserted; then ONE assertion: at 3 busy processes at least one of
 //     its two presses reaches Codex as text (main's image rule read "the
@@ -1596,6 +1598,13 @@ const CLAUDE_TURN_MS = 20_000
 const PW1_PLACEHOLDER_BOUND_MS = 15_000
 /** The load grader, each count early and late. */
 const GRADES = [0, 1, 2, 3, 3, 2, 1, 0] as const
+/** How long each count of busy processes runs before its press, so the press
+ *  meets a steady load, not the processes' start. Gate run 46129823039
+ *  started them at the press: the paste met 61 to 75% total CPU at 3 busy
+ *  processes (94% only after it), where run 46084512071's path-route
+ *  failures met 86 to 94%. The same for every group, the clipboard route's
+ *  and Claude Code's included. */
+const BUSY_SETTLE_MS = 5_000
 const PASTE_OUT = path.join(OUT, 'paste')
 const CLAUDE_FAKE_KEY = 'sk-ant-e2e-fake-key-not-real-0000000000'
 const SYSTEM_ROOT = process.env.SystemRoot ?? 'C:\\Windows'
@@ -1894,6 +1903,7 @@ async function pw1Press(cli: 'codex' | 'claude', key: string, seed: number, grad
   const before = await placeholdersOnScreen()
   const requestsBefore = standInEvents.length
   const stop = busy(grade)
+  if (grade > 0) await sleep(BUSY_SETTLE_MS)
   const t0 = performance.now()
   try {
     await ptyWrite(ctx!.page, sid, key)
@@ -2010,6 +2020,7 @@ for (const cli of ['codex', 'claude'] as const) {
 async function gradedRectangle(i: number, grade: number, body: (p: { before: string[]; turnsBefore: number; answeredAt: number; width: number; height: number; from: Mark }) => Promise<void>): Promise<void> {
   const stop = busy(grade)
   try {
+    if (grade > 0) await sleep(BUSY_SETTLE_MS)
     const before = jpegs()
     const turnsBefore = codexTurns().length
     const { overlay, display, start, from } = await pressNew({ prefix: 'paste' })
