@@ -3,9 +3,13 @@
 // tab through the session helper reaches the remote helper's open tab
 // (remoteTabPaste) and the session input module's one door, with the
 // picture this computer's clipboard holds, or a copied image file's; a tab
-// on the old SSH path still gets today's request by file name (Q9).
-// Mutant this must catch: the route not registered (the helper tab then got
-// the old path's request, as before phase 5).
+// on the old SSH path still gets today's request by file name (Q9). The
+// route is told the app's own platform: on a macOS or Linux app it says
+// image paste is not available yet (plan s4: the remote route from there
+// comes in 2.1.3-beta.23).
+// Mutants this must catch: the route not registered (the helper tab then got
+// the old path's request, as before phase 5); the route told Windows
+// whatever the app runs on.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -52,10 +56,14 @@ vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi
 
 const { registerPasteHandlers } = await import('../../../src/main/ipc/paste-handlers')
 const { IPC } = await import('../../../src/shared/ipc-channels')
-const { PASTE_SENTENCE } = await import('../../../src/shared/clipboard-paste')
+const { PASTE_NOTES, PASTE_SENTENCE } = await import('../../../src/shared/clipboard-paste')
 
 let dir = ''
+const PLATFORM = Object.getOwnPropertyDescriptor(process, 'platform')!
+const runsOn = (p: NodeJS.Platform) => Object.defineProperty(process, 'platform', { value: p, configurable: true })
 beforeEach(() => {
+  // The Windows app, whichever machine runs the suite.
+  runsOn('win32')
   h.handlers.clear()
   h.helper = new Set(['h1'])
   h.ssh = new Set(['s1'])
@@ -68,7 +76,10 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paste-handlers-'))
   registerPasteHandlers(() => null)
 })
-afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }) })
+afterEach(() => {
+  Object.defineProperty(process, 'platform', PLATFORM)
+  fs.rmSync(dir, { recursive: true, force: true })
+})
 
 const press = (sessionId: string, focused = false) => h.handlers.get(IPC.PASTE_IMAGE_KEY)!({}, { sessionId, chord: 'image', focused })
 
@@ -89,6 +100,16 @@ describe('the paste channel registers the helper tab\'s route', () => {
     expect(h.fromFile).toEqual([file])
     expect(h.puts.map((p) => p.bytes)).toEqual([Buffer.from([0x89, 0x50, 0x4e, 0x47, 2])])
     expect(h.door).toEqual([{ id: 'h1', key: '\u0016', sentence: null }])
+  })
+
+  it('on a macOS or Linux app: not available yet, nothing sent by file.put, nothing typed', async () => {
+    for (const p of ['darwin', 'linux'] as const) {
+      runsOn(p)
+      registerPasteHandlers(() => null)
+      expect(await press('h1'), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
+    }
+    expect(h.puts).toEqual([])
+    expect(h.door).toEqual([])
   })
 
   it('a tab on the old SSH path is unchanged: today\'s request by file name, and nothing is sent by file.put', async () => {

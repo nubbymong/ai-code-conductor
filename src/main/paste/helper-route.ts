@@ -22,9 +22,17 @@
 // the picture also stays on this computer's clipboard (plan Q1), whichever
 // machine the session runs on; a press writes nothing there.
 //
+// ONE PICTURE AT A TIME PER TAB. The session keeps one current picture (the
+// stand-in serves the last one file.put stored), so a tab's sends go one
+// after another: the next picture is sent only once the last key's wait is
+// over, by when the CLI has read its picture. Another tab is not held up.
+//
 // WHAT IT NEVER DOES. No path, no file name and no host text is typed into
 // the session: file.put's reply carries a name and a hash only, and neither
-// reaches the door. What the CLI does not take is reported in the paste hint.
+// reaches the door. What the CLI does not take is reported in the paste hint;
+// a hint after the picture was sent names the session's machine, not this
+// computer's clipboard (after Alt+V of a copied file the picture is only
+// there).
 //
 // NOT AVAILABLE YET. A tab whose CLI the stand-in does not serve (its launch
 // did not ask, the host is not Linux, or the stand-in was not written there:
@@ -32,14 +40,21 @@
 // available yet", and so does a launch that gave no key; nothing is sent and
 // nothing typed. That covers a helper tab of a CLI whose remote launch asks
 // for no stand-in (plan Q7: the second CLI's remote sessions come in
-// 2.1.3-beta.24, after probe PR2). A tab on the old SSH path never reaches this route (plan Q9: the
-// paste module keeps today's fetch request for it).
+// 2.1.3-beta.24, after probe PR2), and an attach to a session kept for the
+// tab after the app restarts, whose start wrote no stand-in (the remote
+// helper's remoteTabPaste). A tab on the old SSH path never reaches this
+// route (plan Q9: the paste module keeps today's fetch request for it).
+//
+// THE WINDOWS APP ONLY, IN THIS BETA. The remote route from a macOS or Linux
+// app comes in 2.1.3-beta.23 (plan s4, with the real-Mac paste check): there
+// a press answers "not available yet", and Snap leaves its picture on this
+// computer's clipboard (Q1) and answers the same; nothing is sent or typed.
 //
 // Pure of Electron (its picture is the few calls of a NativeImage it uses),
 // so the remote-helper-e2e job runs it under plain Node against a real host
 // (tests/live/remote-paste.live.ts).
 import type { NativeImage } from 'electron'
-import { notPasted, PASTE_SENTENCE, type PasteKeyPress, type PasteKeyResult } from '../../shared/clipboard-paste'
+import { notPasted, PASTE_SENTENCE, type PasteKeyPress, type PasteKeyResult, type PasteNotPastedReason } from '../../shared/clipboard-paste'
 import type { ClipboardPasteDoorResult } from '../session-input'
 import type { PasteKey } from '../providers/types'
 import { PASTE_PICTURE_MAX } from '../session-helper/protocol'
@@ -62,6 +77,9 @@ export type RoutePicture = Pick<NativeImage, 'isEmpty' | 'toPNG' | 'toJPEG'>
 
 /** What the route reads, writes and asks; the IPC layer gives the real ones. */
 export interface HelperRouteDeps {
+  /** The platform the app runs on: the route serves the Windows app only in
+   *  this beta (plan s4: a macOS or Linux app's comes in 2.1.3-beta.23). */
+  platform: NodeJS.Platform
   /** The open helper tab of the app session, or null. */
   tab(sessionId: string): HelperTabPaste | null
   /** The picture on this computer's clipboard, or null. */
@@ -79,12 +97,31 @@ export interface HelperRouteDeps {
 /** The JPEG quality of a picture whose PNG is over file.put's 20 MiB. */
 export const HELPER_JPEG_QUALITY = 90
 
-/** The paste hint's lines this route adds (ADR-032 decision 6: reported, never typed). */
+/** The paste hint's lines this route adds (ADR-032 decision 6: reported, never
+ *  typed). The paste module's own (PASTE_NOTES) say the picture is on this
+ *  computer's clipboard, which after a helper tab's Alt+V of a copied image
+ *  file it is not: these name the session's machine instead. */
 export const HELPER_TOO_LARGE_NOTE = `Image too large to send to the session's machine (max ${PASTE_PICTURE_MAX / (1024 * 1024)} MB).`
 export const HELPER_NOT_CONNECTED_NOTE = 'This tab is not connected to its machine right now, so nothing was pasted. Try again once it is back.'
 export const HELPER_NOT_SENT_NOTE = 'The picture could not be sent to the session\'s machine, so nothing was pasted.'
+export const HELPER_NO_PLACEHOLDER_NOTE = 'The picture was sent to the session\'s machine, but the session did not show it. Press Alt+V in the session to paste it.'
+export const HELPER_NO_KEY_NOTE = 'The picture was sent to the session\'s machine. Press Claude Code\'s image paste key in the session to paste it.'
+export const HELPER_BUSY_NOTE = 'The session was busy, so nothing was pasted. Press Alt+V in the session to try again.'
 
-const noteOf = (reason: 'too-large' | 'not-written', note: string): PasteKeyResult => ({ outcome: 'not-pasted', reason, note })
+const noteOf = (reason: PasteNotPastedReason, note: string): PasteKeyResult => ({ outcome: 'not-pasted', reason, note })
+
+/** The door's answer as the press's, with this route's own hint where the
+ *  paste module's names this computer's clipboard. */
+function fromHelperDoor(result: ClipboardPasteDoorResult): PasteKeyResult {
+  const r = fromDoor(result)
+  if (r.outcome !== 'not-pasted') return r
+  switch (r.reason) {
+    case 'no-placeholder': return noteOf('no-placeholder', HELPER_NO_PLACEHOLDER_NOTE)
+    case 'no-key': return noteOf('no-key', HELPER_NO_KEY_NOTE)
+    case 'busy': return noteOf('busy', HELPER_BUSY_NOTE)
+    default: return r
+  }
+}
 
 /** The bytes file.put takes for `picture`: its PNG, or its JPEG when the PNG
  *  is over the cap; 'too-large' when both are; null when it makes neither. */
@@ -110,13 +147,24 @@ function refused(err: unknown): { result: PasteKeyResult; code: string } {
     // A holder from before 2.1.3-beta.21, which offers no `paste`.
     case 'unknown-type': return { result: notPasted('not-available'), code }
     case 'too-large': return { result: noteOf('too-large', HELPER_TOO_LARGE_NOTE), code }
-    case 'busy': return { result: notPasted('busy'), code }
+    case 'busy': return { result: noteOf('busy', HELPER_BUSY_NOTE), code }
     default: return { result: noteOf('not-written', HELPER_NOT_SENT_NOTE), code: /^[a-z-]{1,24}$/.test(code) ? code : 'error' }
   }
 }
 
 /** The helper tab's route (RemotePasteRoute). Never rejects. */
 export function helperPasteRoute(deps: HelperRouteDeps): RemotePasteRoute {
+  /** Each tab's last send, which its next one waits for. */
+  const turns = new Map<string, Promise<void>>()
+  /** `run` once the tab's earlier sends are over, whatever they answered. */
+  const inTurn = (sessionId: string, run: () => Promise<PasteKeyResult>): Promise<PasteKeyResult> => {
+    const mine = (turns.get(sessionId) ?? Promise.resolve()).then(run)
+    const over = mine.then(() => undefined, () => undefined)
+    turns.set(sessionId, over)
+    void over.then(() => { if (turns.get(sessionId) === over) turns.delete(sessionId) })
+    return mine
+  }
+
   /** The picture to the tab's machine, then its key through the door. */
   const send = async (sessionId: string, tab: HelperTabPaste, picture: RoutePicture, sentence: string | null): Promise<PasteKeyResult> => {
     const key = tab.key
@@ -133,15 +181,17 @@ export function helperPasteRoute(deps: HelperRouteDeps): RemotePasteRoute {
     }
     // The picture is in the session's paste/ folder: a key the app cannot
     // send leaves it for the CLI's own key there.
-    if (key.bytes === null) return notPasted('no-key')
+    if (key.bytes === null) return noteOf('no-key', HELPER_NO_KEY_NOTE)
     try {
-      return fromDoor(await deps.door(sessionId, key.bytes, sentence))
+      return fromHelperDoor(await deps.door(sessionId, key.bytes, sentence))
     } catch {
       return notPasted('session-gone')
     }
   }
 
   const press = async (sessionId: string, p: PasteKeyPress): Promise<PasteKeyResult> => {
+    // Plan s4: the remote route from a macOS or Linux app comes in 2.1.3-beta.23.
+    if (deps.platform !== 'win32') return notPasted('not-available')
     const tab = deps.tab(sessionId)
     if (!tab) return notPasted('session-gone')
     let picture: RoutePicture | null = null
@@ -155,7 +205,8 @@ export function helperPasteRoute(deps: HelperRouteDeps): RemotePasteRoute {
       picture = copied.picture
     }
     if (!tab.standIn) return notPasted('not-available')
-    return send(sessionId, tab, picture, p.focused ? null : PASTE_SENTENCE)
+    const taken = picture
+    return inTurn(sessionId, () => send(sessionId, tab, taken, p.focused ? null : PASTE_SENTENCE))
   }
 
   const snap = async (sessionId: string, picture: NativeImage, sentence: string): Promise<PasteKeyResult> => {
@@ -164,10 +215,12 @@ export function helperPasteRoute(deps: HelperRouteDeps): RemotePasteRoute {
       const written = await deps.write(picture)
       if (written !== 'written') deps.log?.(`[paste] ${sessionId}: Snap's picture was not left on this computer's clipboard (${written})`)
     } catch { /* the tab still gets it */ }
+    // Plan s4: the remote route from a macOS or Linux app comes in 2.1.3-beta.23.
+    if (deps.platform !== 'win32') return notPasted('not-available')
     const tab = deps.tab(sessionId)
     if (!tab) return notPasted('session-gone')
     if (!tab.standIn) return notPasted('not-available')
-    return send(sessionId, tab, picture, sentence)
+    return inTurn(sessionId, () => send(sessionId, tab, picture, sentence))
   }
 
   return {

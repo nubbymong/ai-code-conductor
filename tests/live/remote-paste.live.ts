@@ -165,7 +165,21 @@ async function screenText(): Promise<string> {
   try { return (await pty!.screenRead!()).lines.map((l) => l.text).join('\n') } catch (err) { return `(no screen read: ${(err as Error).message})` }
 }
 
-/** The route as the app registers it (src/main/ipc/paste-handlers.ts), for this tab: its door is the Claude package's own clipboard member, with the door's waits. */
+/**
+ * The app's paste route (src/main/paste/helper-route.ts) for this tab, with
+ * this check's own stand-ins for what the IPC layer gives it
+ * (src/main/ipc/paste-handlers.ts helperRouteDeps): the Windows app's
+ * platform; the tab as the remote helper's remoteTabPaste gives it, built
+ * here from the tab's own RemoteHelperPty (its pasteStandIn, imagePasteKey
+ * and putPicture), since that record is filled only by the app's PTY door;
+ * and, for the session input module's door (whose pasteFromClipboard needs
+ * the PTY manager's ports), the Claude package's own clipboard member called
+ * directly, with the door's waits and a typing whose heldScreen is the tab's
+ * screenRead, as remoteTabScreen hands it. The chain through session-input,
+ * remoteTabPaste and remoteTabScreen is covered by the unit tests
+ * (tests/unit/main/session-input-clipboard-helper-tab.test.ts,
+ * tests/unit/remote-helper/remote-paste-tab.test.ts).
+ */
 function route(onClipboard: Buffer) {
   const typing: RunScreenTyping = {
     leave: '',
@@ -176,6 +190,8 @@ function route(onClipboard: Buffer) {
     heldScreen: () => { const read = pty!.screenRead; return read ? read() : Promise.reject(new Error('the tab reads no screen now')) },
   }
   return helperPasteRoute({
+    // The route serves the Windows app in this beta (plan s4); this check stands in for it.
+    platform: 'win32',
     tab: () => ({ standIn: pty!.pasteStandIn, key: pty!.imagePasteKey, put: (bytes, kind) => pty!.putPicture(bytes, kind) }),
     readPicture: async () => asPicture(onClipboard),
     readCopiedImage: async () => ({ error: 'no-image' }),

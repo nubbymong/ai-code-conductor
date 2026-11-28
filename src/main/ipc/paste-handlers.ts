@@ -62,12 +62,14 @@ function fileSize(path: string): number | null {
 }
 
 /** 2.1.3-beta.21 (plan block 5.1): what a helper tab's paste route reads,
- *  writes and asks (src/main/paste/helper-route.ts): the remote helper's
- *  open tab, this computer's clipboard (a picture, else a copied image
- *  file's, read as the paste module reads them), its writer (Snap's picture
- *  stays there, plan Q1) and the session input module's one door. */
+ *  writes and asks (src/main/paste/helper-route.ts): the app's own platform
+ *  (the route serves the Windows app only in this beta, plan s4), the remote
+ *  helper's open tab, this computer's clipboard (a picture, else a copied
+ *  image file's, read as the paste module reads them), its writer (Snap's
+ *  picture stays there, plan Q1) and the session input module's one door. */
 export function helperRouteDeps(): HelperRouteDeps {
   return {
+    platform: process.platform,
     tab: (sessionId) => remoteTabPaste(sessionId),
     readPicture: () => readClipboardImageWithRetry(),
     readCopiedImage: async () => {

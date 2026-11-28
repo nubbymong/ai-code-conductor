@@ -13,10 +13,18 @@
 //  - Snap: the picture also stays on this computer's clipboard (Q1), then
 //    the same route with Snap's sentence.
 //  - The stand-in not ready on the host (the s5 fallback until probe PR1),
-//    and a helper tab of the second CLI (Q7: no stand-in, no key): "not available yet", nothing sent, nothing
-//    typed, never a path.
+//    for a press and for Snap, and a helper tab of the second CLI (Q7: no
+//    stand-in, no key): "not available yet", nothing sent, nothing typed,
+//    never a path.
+//  - A macOS or Linux app (plan s4: the remote route from there comes in
+//    2.1.3-beta.23): "not available yet", nothing sent, nothing typed; Snap
+//    still leaves its picture on this computer's clipboard (Q1).
 //  - file.put's refusals, each with its own hint; a picture over 20 MiB as a
-//    PNG goes as a JPEG; over that too, "too large".
+//    PNG goes as a JPEG; over that too, "too large". The hints of a picture
+//    already sent name the session's machine, not this computer's clipboard.
+//  - Two pictures into one tab straight after each other: the second is sent
+//    only once the first's key is through (the session keeps one current
+//    picture); another tab is not held up.
 //  - No path anywhere: what the door types is the key and the sentence only;
 //    no answer names a file.
 //  - Through the paste module: a helper tab's press and Snap reach the route;
@@ -24,7 +32,9 @@
 //    file name), and the route is not asked.
 // Red on e89996bb: no such route. Mutants this must catch: a path typed into
 // a helper tab; the picture not sent before the key; Snap's picture not left
-// on this computer's clipboard; a tab whose stand-in is not ready sent to.
+// on this computer's clipboard; a tab whose stand-in is not ready sent to, by
+// a press or by Snap; the app-platform check dropped; a second picture sent
+// before the first's key is through.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -55,8 +65,10 @@ let written: NativeImage[]
 let door: Array<{ sessionId: string; key: string; sentence: string | null }>
 let doorAnswer: { outcome: string }
 let order: string[]
+let platform: NodeJS.Platform
 
 beforeEach(() => {
+  platform = 'win32'
   puts = []
   putError = null
   order = []
@@ -73,6 +85,7 @@ beforeEach(() => {
 })
 
 const deps = (): Parameters<typeof route.helperPasteRoute>[0] => ({
+  platform,
   tab: () => tab,
   readPicture: async () => onClipboard,
   readCopiedImage: async () => copied,
@@ -140,16 +153,33 @@ describe('Alt+V and Ctrl+V in a helper tab: the picture by file.put, then the ke
 
   it('a binding the app cannot send: the picture is sent, no key is typed, and the hint asks for Claude Code\'s own key', async () => {
     tab!.key = { bytes: null, chord: 'ctrl+x ctrl+v', why: 'unexpressible' }
-    expect(await press('image', false)).toEqual({ outcome: 'not-pasted', reason: 'no-key', note: PASTE_NOTES['no-key'] })
+    expect(await press('image', false)).toEqual({ outcome: 'not-pasted', reason: 'no-key', note: route.HELPER_NO_KEY_NOTE })
     expect(puts).toHaveLength(1)
     expect(door).toEqual([])
   })
 
-  it('the door\'s answers: no placeholder in the wait, the sentence not sent, the session gone', async () => {
-    for (const [answer, reason] of [['no-placeholder', 'no-placeholder'], ['sentence-not-sent', 'sentence-not-sent'], ['session-gone', 'session-gone'], ['refused-key', 'no-key']] as const) {
+  it('the door\'s answers: no placeholder in the wait, busy, the sentence not sent, the session gone', async () => {
+    const cases = [
+      ['no-placeholder', 'no-placeholder', route.HELPER_NO_PLACEHOLDER_NOTE],
+      ['busy', 'busy', route.HELPER_BUSY_NOTE],
+      ['refused-key', 'no-key', route.HELPER_NO_KEY_NOTE],
+      ['sentence-not-sent', 'sentence-not-sent', PASTE_NOTES['sentence-not-sent']],
+      ['prompt-on-screen', 'prompt-on-screen', PASTE_NOTES['prompt-on-screen']],
+      ['session-gone', 'session-gone', PASTE_NOTES['session-gone']],
+    ] as const
+    for (const [answer, reason, note] of cases) {
       doorAnswer = { outcome: answer }
-      expect(await press('image', false), answer).toEqual({ outcome: 'not-pasted', reason, note: PASTE_NOTES[reason] })
+      expect(await press('image', false), answer).toEqual({ outcome: 'not-pasted', reason, note })
     }
+  })
+
+  it('a hint after a picture was sent, or not sent, never says it is on this computer\'s clipboard (after Alt+V of a copied file it is not)', () => {
+    for (const note of [route.HELPER_NO_PLACEHOLDER_NOTE, route.HELPER_NO_KEY_NOTE, route.HELPER_BUSY_NOTE, route.HELPER_NOT_CONNECTED_NOTE, route.HELPER_NOT_SENT_NOTE, route.HELPER_TOO_LARGE_NOTE]) {
+      expect(note).not.toMatch(/on the clipboard/)
+      expect(note).not.toMatch(/\u2014/)
+    }
+    expect(route.HELPER_NO_PLACEHOLDER_NOTE).toMatch(/session's machine/)
+    expect(route.HELPER_NO_KEY_NOTE).toMatch(/session's machine/)
   })
 })
 
@@ -173,11 +203,14 @@ describe('Snap into a helper tab', () => {
 })
 
 describe('not available yet, never a path', () => {
-  it('the stand-in not ready on the host (the s5 fallback until probe PR1): nothing sent, nothing typed', async () => {
+  it('the stand-in not ready on the host (the s5 fallback until probe PR1): nothing sent, nothing typed, by a press or by Snap', async () => {
     tab!.standIn = false
     expect(await press('image', false)).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
     expect(await press('image', true)).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
     expect(await press('text', true)).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
+    // Snap, with a key the tab could send: still nothing to the tab, and Q1 holds.
+    expect(await snap()).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
+    expect(written).toHaveLength(1)
     expect(puts).toEqual([])
     expect(door).toEqual([])
   })
@@ -194,6 +227,20 @@ describe('not available yet, never a path', () => {
     tab!.key = undefined
     expect(await press('image', false)).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
     expect(puts).toEqual([])
+  })
+
+  it('a macOS or Linux app (plan s4: the remote route from there comes in 2.1.3-beta.23): not available yet, nothing sent, nothing typed; Snap still leaves its picture on this computer\'s clipboard (Q1)', async () => {
+    for (const p of ['darwin', 'linux'] as const) {
+      platform = p
+      written = []
+      expect(await press('image', false), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
+      expect(await press('image', true), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
+      expect(await press('text', true), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
+      expect(await snap(), p).toEqual({ outcome: 'not-pasted', reason: 'not-available', note: PASTE_NOTES['not-available'] })
+      expect(written, p).toHaveLength(1)
+    }
+    expect(puts).toEqual([])
+    expect(door).toEqual([])
   })
 
   it('no such tab, or a door that throws: the session is gone', async () => {
@@ -222,7 +269,7 @@ describe('the picture to the machine: its size and file.put\'s refusals', () => 
       ['not-connected', { reason: 'not-written', note: route.HELPER_NOT_CONNECTED_NOTE }],
       ['unknown-type', { reason: 'not-available', note: PASTE_NOTES['not-available'] }],
       ['too-large', { reason: 'too-large', note: route.HELPER_TOO_LARGE_NOTE }],
-      ['busy', { reason: 'busy', note: PASTE_NOTES.busy }],
+      ['busy', { reason: 'busy', note: route.HELPER_BUSY_NOTE }],
       ['io', { reason: 'not-written', note: route.HELPER_NOT_SENT_NOTE }],
       ['timeout', { reason: 'not-written', note: route.HELPER_NOT_SENT_NOTE }],
     ]
@@ -239,6 +286,52 @@ describe('the picture to the machine: its size and file.put\'s refusals', () => 
     for (const r of [await press('image', false), await snap()]) {
       expect(JSON.stringify(r)).not.toMatch(/paste-\d|\/|\\|filename/)
     }
+  })
+})
+
+describe('two pictures into one tab, one straight after the other', () => {
+  it('the second is sent only once the first\'s key is through (the session keeps one current picture), and another tab is not held up', async () => {
+    let release!: () => void
+    const held = new Promise<void>((r) => { release = r })
+    const r = route.helperPasteRoute({
+      ...deps(),
+      door: async (sessionId, key, sentence) => {
+        order.push(`door ${sessionId}`)
+        door.push({ sessionId, key, sentence })
+        // The first key's placeholder wait, still going.
+        if (door.length === 1) await held
+        return { outcome: 'sent' } as never
+      },
+    })
+    const ask = (id: string) => r.paste(id, { press: { sessionId: id, chord: 'image', focused: false } })
+    onClipboard = picture(PNG)
+    const first = ask('h1')
+    onClipboard = picture(FILE_PNG)
+    const second = ask('h1')
+    await new Promise((d) => setTimeout(d, 30))
+    // The first picture's key is still waiting: the second picture is not sent over it.
+    expect(puts.map((p) => p.bytes)).toEqual([PNG])
+    // Another tab goes through meanwhile.
+    expect(await ask('h2')).toEqual({ outcome: 'sent' })
+    expect(puts.map((p) => p.bytes)).toEqual([PNG, FILE_PNG])
+    release()
+    expect(await first).toEqual({ outcome: 'sent' })
+    expect(await second).toEqual({ outcome: 'sent' })
+    expect(order).toEqual(['put', 'door h1', 'put', 'door h2', 'put', 'door h1'])
+    expect(puts.map((p) => p.bytes)).toEqual([PNG, FILE_PNG, FILE_PNG])
+    noPath()
+  })
+
+  it('a first send that fails, even by throwing out of the route\'s own log, does not stop the next', async () => {
+    let fails = 1
+    tab = { ...tab!, put: async (bytes, kind) => { order.push('put'); if (fails-- > 0) throw new Error('the link dropped'); puts.push({ bytes, kind }); return { name: 'paste-1.png', sha256: 'a'.repeat(64) } } }
+    const r = route.helperPasteRoute({ ...deps(), log: () => { throw new Error('the log is gone') } })
+    const ask = () => r.paste('h1', { press: { sessionId: 'h1', chord: 'image', focused: false } })
+    const first = ask()
+    const second = ask()
+    expect((await first).outcome).toBe('not-pasted')
+    expect(await second).toEqual({ outcome: 'sent' })
+    expect(order).toEqual(['put', 'put', 'door'])
   })
 })
 

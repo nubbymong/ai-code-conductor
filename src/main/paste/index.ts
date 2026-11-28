@@ -178,6 +178,8 @@ async function clipboardHolds(): Promise<Holds> {
   return { kind: 'none', reason: picked.error === 'too-large' ? 'too-large' : 'no-picture' }
 }
 
+// The door's answer as the press's: fromDoor, in ./door-result.ts (one mapping for this module and the helper tab's route).
+
 /** The key for `sessionId`'s CLI by its table, then the door. */
 async function sendKey(sessionId: string, rule: ClipboardPasteRule, sentence: string | null): Promise<PasteKeyResult> {
   let accountDir: string | null = null
