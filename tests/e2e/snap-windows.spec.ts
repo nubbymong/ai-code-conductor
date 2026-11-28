@@ -146,24 +146,35 @@
  * runs with a fresh, empty module analysis cache (PSModuleAnalysisCachePath,
  * coldPowerShellEnv), so every run reads that cold start, whatever an earlier
  * app on the runner left in the runner's own cache. Not raised, and not
- * answered by the fix: the first app on a runner can still wait on something
- * other than the CPU (the runner's disk, where it was sampled). Under the
- * diagnosis's harder condition
- * (thousands of generated modules as well), in 46049854244 the first app's
- * owner-only calls sat at 3 to 9% CPU for about 11 s after their first
- * cmdlet and took 13.6 s as main saw them, past the 5 s the tab waits for
- * the scripts folders, so the tab took the direct claude.cmd line; its
- * PowerShell began that line 7.4 s after it was written, its folder change
- * took 4.4 s, and the stand-in started 17.6 s after the Snap button showed.
- * Run 46046004682 (no times) did the same up to the line, then showed
- * nothing after it within TAB_MS. In 46059519266 (diagnosis, every app timed
- * and sampled, a throwaway first app) a runner process outside the app ran
- * one burst of disk work during the first app only (about one CPU and 3,000
- * to 13,000 operations a second for 8 s, C: 0 to 7% idle): that app's
- * folder change took 2.1 s and its owner-only JSON step 0.6 to 0.8 s, both
- * calls released in the same millisecond, against 36 to 50 ms and 20 to
- * 60 ms in the seven apps after it, which all passed D1 in 2.3 to 2.9 s,
- * with or without 24,000 files written just before them.
+ * answered by the fix: the first app of a job is slower than the apps after
+ * it. It meets two conditions they do not: its own cold-disk start, and a
+ * burst of disk reads by a runner process outside the app (provjobd.exe,
+ * about one CPU and 3,000 to 13,000 read operations a second for 8 to 9 s,
+ * from 2 to 6 s after the first app's launch, C: 0 to 12% idle). Under the
+ * diagnosis's harder condition (thousands of generated modules as well), in
+ * 46049854244 the first app's owner-only calls sat at 3 to 9% CPU for about
+ * 11 s after their first cmdlet and took 13.6 s as main saw them, past the
+ * 5 s the tab waits for the scripts folders, so the tab took the direct
+ * claude.cmd line; its PowerShell began that line 7.4 s after it was
+ * written, its folder change took 4.4 s, and the stand-in started 17.6 s
+ * after the Snap button showed. Run 46046004682 (no times) did the same up
+ * to the line, then showed nothing after it within TAB_MS. Without the
+ * generated modules, in 46059519266, the first app's owner-only JSON step
+ * took 0.6 to 0.8 s before provjobd's burst began, and its folder change
+ * 2.1 s as the burst began, against 20 to 60 ms and 36 to 50 ms in the seven
+ * apps after it, which all passed D1 in 2.3 to 2.9 s, with or without
+ * 24,000 files written just before them. The two conditions were separated
+ * in one job in 46092372556 (diagnosis, 16 apps, alternating): a burst like
+ * provjobd's (one process at about one CPU, several thousand I/O operations
+ * a second for 9 s, from 2 s after the launch) left D1 as it was on a warm
+ * file cache (the stand-in 2.0 to 2.6 s after the Snap button, against 1.9
+ * to 2.3 s with no load), and so did the burst with two busy processes
+ * (1.7 to 3.4 s); the standby file cache purged before the launch made it
+ * 2.9 to 3.2 s. Both together gave the first app's pattern: the owner-only
+ * calls took 12.1 to 12.4 s, nearly all of it before Windows PowerShell ran
+ * their first line, the tab took the direct line, and the stand-in started
+ * 8.2 to 8.7 s after the Snap button showed (the job's first app: 8.4 s).
+ * That is the slowest D1 read under load, about 21 s inside TAB_MS.
  * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
  * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
  * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms
