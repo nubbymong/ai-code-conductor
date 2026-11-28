@@ -23,8 +23,8 @@
  *   exactly its object, and anything else a failure; the program's output
  *   everything between the hash line and it; the exec's limit the review's
  *   own plus 30 s, its standard output cap above the run mode's; a cancel
- *   ends ssh; and a 900 s review is not cut by the relay's limit or the host
- *   read's.
+ *   ends ssh; and a 900 s review is not cut, neither by the host read's 60 s
+ *   nor by a 10 minute limit (nothing on the relay's way limits the call).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 vi.mock('../../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
@@ -35,11 +35,11 @@ import type { ChildProcess } from 'child_process'
 import { FakeSsh, parseCommand, result, type ExecCall, type FakeAnswer } from './fake-ssh'
 import { RemoteMachines, type MachineStore, type RemoteMachineRecord, gitVersionOf } from '../../../src/main/remote-helper/machines'
 import type { BundledLinuxHelper } from '../../../src/main/remote-helper/manifest'
-import { readHostReviewMaterial, runOnHost, remoteReviewLimits, hostReviewPaths, parseRunResult, REMOTE_RELAY_MAX_MS, REMOTE_RUN_EXTRA_MS, RUN_INPUT_MAX, RUN_OUTPUT_MAX, RUN_REQUEST_MAX, RUN_STDOUT_MAX, type HostReviewCtx } from '../../../src/main/remote-helper/review'
+import { readHostReviewMaterial, runOnHost, hostReviewPaths, parseRunResult, REMOTE_RUN_EXTRA_MS, RUN_INPUT_MAX, RUN_OUTPUT_MAX, RUN_REQUEST_MAX, RUN_STDOUT_MAX, type HostReviewCtx } from '../../../src/main/remote-helper/review'
 import { registerRemoteReviewSession, remoteReviewTarget, forgetRemoteReviewSession, hostFolderIsHomeOrAbove } from '../../../src/main/remote-helper/review-sessions'
 import { scriptText, scriptCommand, RUN_TIMEOUT_RE } from '../../../src/main/remote-helper/scripts'
 import { hostRunEnv } from '../../../src/main/remote-helper/session'
-import { EXEC_TIMEOUT_MS, type SshRunner } from '../../../src/main/remote-helper/ssh-exec'
+import type { SshRunner } from '../../../src/main/remote-helper/ssh-exec'
 import { setRemoteHelperDeps, remoteHelperPty, forgetRemoteHelperTab } from '../../../src/main/remote-helper'
 import { registerProvider } from '../../../src/main/providers'
 import type { SessionProvider } from '../../../src/main/providers/types'
@@ -575,16 +575,8 @@ class SlowSsh implements SshRunner {
 describe('the limits, and a stop', () => {
   afterEach(() => { vi.useRealTimers() })
 
-  it('the run\'s exec gets the review\'s own timeout and 30 s more; the relay its timeout and 90 s, at most 990 s', async () => {
+  it('the run\'s exec gets the review\'s own timeout and 30 s more', async () => {
     expect(REMOTE_RUN_EXTRA_MS).toBe(30_000)
-    expect(remoteReviewLimits(300_000)).toEqual({ readMs: EXEC_TIMEOUT_MS, runMs: 330_000, relayMs: 390_000 })
-    expect(remoteReviewLimits(900_000)).toEqual({ readMs: 60_000, runMs: 930_000, relayMs: 990_000 })
-    expect(REMOTE_RELAY_MAX_MS).toBe(990_000)
-    for (const t of [30_000, 300_000, 900_000]) {
-      const l = remoteReviewLimits(t)
-      expect(l.relayMs).toBeGreaterThan(l.runMs)
-      expect(l.relayMs).toBeGreaterThanOrEqual(l.readMs + l.runMs)
-    }
     vi.useFakeTimers()
     const ssh = new SlowSsh(null, () => '')
     let done = false

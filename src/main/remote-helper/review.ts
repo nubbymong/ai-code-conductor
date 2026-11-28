@@ -19,12 +19,12 @@
  *   standard input, its output back, then the run mode's result line, last.
  *   No shell starts it, and a stop here ends ssh, which closes the exec there,
  *   and the run mode ends the program's session.
- * - Limits (docs/remote/helper-protocol.md section 10): the host read is a
- *   one-shot exec (EXEC_TIMEOUT_MS, 60 s); the run mode's own limit is the
- *   review's timeout, and its exec gets REMOTE_RUN_EXTRA_MS (30 s) more; an
- *   MCP tool call carrying a review is allowed its timeout plus
- *   REMOTE_RELAY_EXTRA_MS (90 s), at most REMOTE_RELAY_MAX_MS (990 s), so the
- *   relay's limit stays above the run's.
+ * - Limits (docs/remote/helper-protocol.md section 10), as enforced: the host
+ *   read is a one-shot exec (EXEC_TIMEOUT_MS, 60 s); the run mode's own limit
+ *   is the review's timeout (`--timeout`), and its exec gets
+ *   REMOTE_RUN_EXTRA_MS (30 s) more. Nothing on the way to the CLI (the
+ *   relay, the holder, the app's tool stream) limits the tool call: past
+ *   these two, only the CLI's own MCP timeout does, as for a review here.
  *
  * Nothing here falls back to this computer: a review the host cannot run is
  * refused, and says why.
@@ -34,21 +34,11 @@
 import * as path from 'path'
 import { REVIEW_DIFF_MAX_BYTES, REVIEW_FILE_LINE_BYTES, parseReviewRange, type ReviewFile } from '../review-diff'
 import { REVIEW_READ_MAX, RUN_TIMEOUT_RE } from './scripts'
-import { EXEC_TIMEOUT_MS, PREAMBLE_MAX, afterHashLine, markedLines, newNonce, notStartedLogLine, readHashLine, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
+import { PREAMBLE_MAX, afterHashLine, markedLines, newNonce, notStartedLogLine, readHashLine, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
 import { machineName, refusalText, type RemoteMachineRecord } from './machines'
 
 /** The run mode's exec past the review's own timeout. */
 export const REMOTE_RUN_EXTRA_MS = 30_000
-/** An MCP tool call carrying a review, past the review's timeout: the
- *  host read's 60 s and the run's 30 s. */
-export const REMOTE_RELAY_EXTRA_MS = EXEC_TIMEOUT_MS + REMOTE_RUN_EXTRA_MS
-/** The longest a review's tool call is allowed: 900 s and 90 s. */
-export const REMOTE_RELAY_MAX_MS = 990_000
-
-/** A review's limits on a host, for its own timeout: the host read, the run's exec, and the tool call. */
-export function remoteReviewLimits(timeoutMs: number): { readMs: number; runMs: number; relayMs: number } {
-  return { readMs: EXEC_TIMEOUT_MS, runMs: timeoutMs + REMOTE_RUN_EXTRA_MS, relayMs: Math.min(timeoutMs + REMOTE_RELAY_EXTRA_MS, REMOTE_RELAY_MAX_MS) }
-}
 
 /** The run mode's request line, at most, its line end included (run.rs MAX_REQUEST_BYTES). */
 export const RUN_REQUEST_MAX = 64 * 1024

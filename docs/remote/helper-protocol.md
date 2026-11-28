@@ -583,7 +583,7 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
 | a reply; `probe`, `session.prepare`, `session.start`, `session.end` | 10 s; 30 s | `timeout` |
 | `file.put` (section 15) | 30 s between chunks; reply 10 s after the last | `timeout`, partial file removed |
 | heartbeat; helper with no frame from the app | `ping` every 15 s; 60 s | no `pong` in 45 s: link dropped; the relay exits, the holder stays |
-| an MCP tool call | the tool's limit, at most 10 min; a codex_review, its timeout plus 90 s (the host read's 60 s, `src/main/remote-helper/ssh-exec.ts:171`, and the run's 30 s), at most 990 s | `timeout` to the CLI |
+| an MCP tool call | the tool's limit, at most 10 min; a codex_review, its timeout plus 90 s (the host read's 60 s, `src/main/remote-helper/ssh-exec.ts:171`, and the run's 30 s), at most 990 s. As built in 2.1.3-beta.21, neither the relay, the holder nor the app's tool stream limits a call: a codex_review on a machine is bounded by the host read's exec (60 s), its run's exec (its timeout plus 30 s) and the CLI's own MCP timeout, as a review here is | `timeout` to the CLI |
 | `sudo.ask` waiting for the user | 120 s | askpass fails; sudo reports it |
 
 ## 11 A dropped connection
