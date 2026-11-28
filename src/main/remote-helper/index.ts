@@ -290,7 +290,8 @@ export function remoteLaunchOf(via: ProviderRemoteLaunch, m: RemoteMachineRecord
   const notRead: RemoteHostFile[] = reads.map((r) => ({ from: r.from, path: r.path, content: null }))
   const first = via.launch(launchOptions, m, helper, notRead)
   if (first.files.length > 0) sessionFilesInput(first.files)
-  const spec = remoteLaunchSpec(m, first, remoteTerminalEnv(settings, systemPrefersDark), remotePath, cols, rows)
+  // 2.1.3-beta.21: the session's own folder, whose bin/ the clipboard stand-in's scripts go in.
+  const spec = remoteLaunchSpec(m, first, remoteTerminalEnv(settings, systemPrefersDark), remotePath, cols, rows, helper.folder)
   return { provider: options.provider ?? DEFAULT_PROVIDER_ID, via, options: launchOptions, helper, reads, first, spec }
 }
 

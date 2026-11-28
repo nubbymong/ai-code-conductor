@@ -337,6 +337,14 @@ export interface RemoteLaunch {
   readonly files: ReadonlyArray<{ readonly name: string; readonly content: string }>
   readonly statusKeep: readonly string[]
   readonly hookKeep: readonly string[]
+  /** 2.1.3-beta.21 (ADR-032; docs/remote/helper-protocol.md section 15, the
+   *  clipboard stand-in): the CLI reads a picture by running `xclip` or
+   *  `wl-paste`, which it finds by PATH. Core then has the session's `files`
+   *  exec write the stand-in's two scripts into the session's `bin/` folder
+   *  and puts that folder first on the CLI's PATH (remote-helper/session.ts
+   *  remoteLaunchSpec). A field, not a variable: a provider's `env` may not
+   *  set PATH. Absent or false: neither. */
+  readonly clipStandIn?: boolean
 }
 
 /** A status line as a provider gives it for the tab's strip: StatuslineData's

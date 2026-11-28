@@ -204,9 +204,11 @@ describe('a helper tab\'s own files on its host', () => {
     expect(all).not.toContain(os.homedir())
     expect(all).not.toContain(os.tmpdir())
     expect(all).not.toContain(store)
-    // The CLI is pointed at its own folder's files, first on its line.
+    // The CLI is pointed at its own folder's files, first on its line (after
+    // the wrapper's one argument, 2.1.3-beta.21: the clipboard stand-in's
+    // bin/ folder, which the wrapper puts first on PATH and shifts off).
     const launch = holder.launch as { argv: string[] }
-    expect(launch.argv.slice(4, 9)).toEqual([MACHINE.claudePath, '--settings', `${h.folder}/settings.json`, '--mcp-config', `${h.folder}/mcp.json`])
+    expect(launch.argv.slice(4, 10)).toEqual([MACHINE.claudePath, `${h.folder}/bin`, '--settings', `${h.folder}/settings.json`, '--mcp-config', `${h.folder}/mcp.json`])
     expect(h.folder).toBe(`/home/nick/.aicc/${MACHINE.did}/sessions/${sid}`)
     // Its connection asks for the status line, hook events and tool streams.
     expect(holder.attached!.ackedCaps).toEqual(expect.arrayContaining(['core', 'local', 'hooks', 'mcp', 'status']))

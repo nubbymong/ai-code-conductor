@@ -34,6 +34,13 @@
 // remote accounts (CLAUDE_REMOTE_ACCOUNTS) name the rest: the sign-in's files
 // and fields, the folder's links into `~/.claude` (the one shared-folder list,
 // shared/account-folder.ts, and CLAUDE.md), and `claude auth logout`.
+//
+// 2.1.3-beta.21 (ADR-032): on a Linux host Claude Code reads a picture by
+// running `xclip` or `wl-paste`, found by PATH, so a session's launch asks
+// for the session helper's clipboard stand-in (`clipStandIn`): core writes
+// its two scripts into the session's bin/ folder and puts that folder first
+// on the CLI's PATH, and the picture the app sends with `file.put` is what
+// the CLI's own image paste reads. A sign-in launch reads no picture.
 import { concatHookMaps, helperHooksBlockFor, helperStatusCommand } from '../../hooks/helper-hook-commands'
 import { HELPER_HOOK_KINDS } from '../../session-helper/protocol'
 import { SHARED_DIR_NAMES } from '../../../shared/account-folder'
@@ -357,6 +364,7 @@ export const claudeRemoteLaunch: ProviderRemoteLaunch = {
     ],
     statusKeep: CLAUDE_STATUS_KEEP,
     hookKeep: CLAUDE_HOOK_KEEP,
+    clipStandIn: true,
   }),
   statusLine: claudeRemoteStatusLine,
 }

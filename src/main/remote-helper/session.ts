@@ -17,6 +17,15 @@
  * (its remote launch, providers/types.ts ProviderRemoteLaunch; 2.1.3-beta.18
  * section 2); this file names no flag or variable of a CLI.
  *
+ * The clipboard stand-in (2.1.3-beta.21; ADR-032; docs/remote/helper-protocol.md
+ * section 15): a launch that asks for it (its `clipStandIn`) has the
+ * session's `files` exec write the stand-in's two scripts, `xclip` and
+ * `wl-paste`, into the session's `bin/` folder there, and that folder goes
+ * first on the CLI's PATH: inside the `-c` wrapper, after the rc files, for a
+ * login shell of the sh family (CLIP_STAND_IN_WRAPPER), else in front of the
+ * host account's PATH. The CLI's own image paste then reads the picture the
+ * app sent the session; nothing of this computer is named there.
+ *
  * Its own files (2.1.3-beta.18 section 3.2): before the hold, one exec reads
  * the host files the provider names (its hostReads: for Claude Code, the
  * settings files whose hooks the session keeps), as data, and beside it
@@ -139,6 +148,40 @@ const hostAccountEnv = (m: RemoteMachineRecord): Record<string, string> => ({
   HOME: m.home, USER: m.user, LOGNAME: m.user, SHELL: m.shell, PATH: m.path,
 })
 
+/** The login shell's `-c` text that starts the CLI (ADR-030 D8): the program
+ *  is `$0`, its arguments follow. */
+export const PLAIN_WRAPPER = 'exec "$0" "$@"'
+
+/**
+ * 2.1.3-beta.21 (ADR-032; docs/remote/helper-protocol.md section 15, the
+ * clipboard stand-in): the `-c` text for a launch whose CLI reads a picture
+ * through the stand-in. After the rc files it puts the session's bin/ folder
+ * first on PATH, then starts the program as PLAIN_WRAPPER does. The folder is
+ * the first argument after the program (`$1`, shifted off before the exec),
+ * so no host path is in the text; an empty PATH gets the folder alone, never
+ * a trailing colon, which would put the working folder on PATH.
+ */
+export const CLIP_STAND_IN_WRAPPER = 'PATH="$1${PATH:+:$PATH}"; export PATH; shift; exec "$0" "$@"'
+
+/** What the stand-in's folder may not hold: PATH's separator, a control
+ *  character, and the two characters the `files` script never writes into a
+ *  script (a single quote and a backslash; scripts.ts CLIP_STAND_IN). */
+const STAND_IN_UNSAFE_RE = /[:'\\\u0000-\u001f\u007f]/
+
+/**
+ * The clipboard stand-in's folder for a launch, `<session folder>/bin`, when
+ * the launch asks for the stand-in and the folder can go on PATH and into the
+ * stand-in's scripts; null otherwise: then no bin/ is written and PATH is the
+ * host account's. `sessionFolder`: the session's own folder on the host
+ * (RemoteHelperCommands' `folder`).
+ */
+export function clipStandInFolder(cli: Pick<RemoteLaunch, 'clipStandIn'>, sessionFolder: string | undefined): string | null {
+  if (cli.clipStandIn !== true || typeof sessionFolder !== 'string') return null
+  const folder = sessionFolder.replace(/\/+$/, '')
+  if (!folder.startsWith('/') || STAND_IN_UNSAFE_RE.test(folder)) return null
+  return `${folder}/bin`
+}
+
 /** The session helper's commands for session `sid` on machine `m`, by the
  *  layout the scripts keep there (scripts.ts: `~/.aicc/<did>/helper/<folder>/aicc-helper`,
  *  `~/.aicc/<did>/store` and, for the session's own files,
@@ -173,13 +216,26 @@ export interface RemoteLaunchPlan {
  * variables, LANG and TERM first and the terminal's own (`terminalEnv`: its
  * light or dark scheme) last. Throws when `cli.env` names a variable this
  * sets itself: the provider's launch never replaces one.
+ *
+ * 2.1.3-beta.21: a launch that asks for the clipboard stand-in
+ * (`cli.clipStandIn`, with `sessionFolder` the session's own folder on the
+ * host) gets that folder's bin/ first on PATH: inside the `-c` wrapper, after
+ * the rc files (CLIP_STAND_IN_WRAPPER, the folder its first argument after
+ * the program), for a login shell of the sh family; for one outside it, which
+ * runs no rc file here, in front of the host account's PATH.
  */
-export function remoteLaunchSpec(m: RemoteMachineRecord, cli: Pick<RemoteLaunch, 'program' | 'args' | 'env'>, terminalEnv: Readonly<Record<string, string>>, remotePath: string | undefined, cols: number, rows: number): LaunchSpec {
-  const argv = m.shellIsSh ? [m.shell, '-il', '-c', 'exec "$0" "$@"', cli.program, ...cli.args] : [cli.program, ...cli.args]
+export function remoteLaunchSpec(m: RemoteMachineRecord, cli: Pick<RemoteLaunch, 'program' | 'args' | 'env' | 'clipStandIn'>, terminalEnv: Readonly<Record<string, string>>, remotePath: string | undefined, cols: number, rows: number, sessionFolder?: string): LaunchSpec {
+  const bin = clipStandInFolder(cli, sessionFolder)
+  const argv = !m.shellIsSh
+    ? [cli.program, ...cli.args]
+    : bin
+      ? [m.shell, '-il', '-c', CLIP_STAND_IN_WRAPPER, cli.program, bin, ...cli.args]
+      : [m.shell, '-il', '-c', PLAIN_WRAPPER, cli.program, ...cli.args]
   const own: Record<string, string> = {
     ...hostAccountEnv(m),
     LANG: m.lang ?? 'C.UTF-8', TERM: 'xterm-256color', COLORTERM: 'truecolor',
   }
+  if (bin && !m.shellIsSh) own.PATH = m.path ? `${bin}:${m.path}` : bin
   const taken = new Set([...Object.keys(own), ...Object.keys(terminalEnv)].map((k) => k.toUpperCase()))
   for (const k of Object.keys(cli.env)) {
     if (taken.has(k.toUpperCase())) throw new Error(`the provider's launch sets ${k}, which the session helper's launch sets itself`)
@@ -318,6 +374,11 @@ export class RemoteDriver implements HelperPtyDriver {
   private readonly signals: RemoteSignals | undefined
   /** Set once the session's files were sent to the host: its end removes the folder. */
   private filesSent = false
+  /** 2.1.3-beta.21: this start wrote the clipboard stand-in's two scripts
+   *  into the session's bin/ folder, so the CLI's image paste there reads the
+   *  picture the app sends (ADR-032). False: it was not asked for, could not
+   *  be written, or the start attached to a kept session and wrote nothing. */
+  clipStandInReady = false
   /** The start prepare() made, for HelperPty's hold to take (once). */
   private prepared: { record: HolderRecord } | { error: Error } | undefined
   /** This tab's holder runs until it is ended, its own or one it attached to. */
@@ -471,6 +532,8 @@ export class RemoteDriver implements HelperPtyDriver {
     }
     const same = launch.program === plan.first.program && JSON.stringify(launch.args) === JSON.stringify(plan.first.args) && JSON.stringify(launch.env) === JSON.stringify(plan.first.env)
     if (!same) this.failWith('its provider\'s launch changed its program, arguments or variables with what was read on the host')
+    // 2.1.3-beta.21: the spec's PATH was built with the first launch's stand-in.
+    if ((launch.clipStandIn === true) !== (plan.first.clipStandIn === true)) this.failWith('its provider\'s launch changed whether it reads pictures through the clipboard stand-in with what was read on the host')
     return { launch, files }
   }
 
@@ -568,27 +631,42 @@ export class RemoteDriver implements HelperPtyDriver {
   }
 
   /** The session's own files into its folder on the host (the `files` exec).
-   *  On any failure its holder is ended first, then the start fails saying why. */
+   *  On any failure its holder is ended first, then the start fails saying why.
+   *  2.1.3-beta.21: the same exec writes the clipboard stand-in's two scripts
+   *  into the session's bin/ folder when the launch asks for them (`clip`,
+   *  with the helper's folder, which they name); a stand-in it could not write
+   *  fails nothing: the start goes on, and the log says why. */
   private async writeFiles(sid: string, record: HolderRecord, launch: RemoteLaunch): Promise<void> {
     const host = this.o.machine.host
     let why: string | null = null
+    const standIn = clipStandInFolder(launch, this.current.plan?.helper.folder) !== null
     try {
       const { layout, stdin } = sessionFilesInput(launch.files)
       const nonce = newNonce()
       this.filesSent = true
-      const r = await runScript(this.o.runner, this.target, 'files', [nonce, this.o.machine.did, this.o.installId, sid, layout], { stdin })
+      const r = await runScript(this.o.runner, this.target, 'files', [nonce, this.o.machine.did, this.o.installId, sid, layout, this.o.machine.helper.folder, standIn ? 'clip' : 'none'], { stdin })
       if (r.notStarted) this.o.log(notStartedLogLine(host, r.stderr))
       const failed = sshFailure(r)
       const result = failed ? null : readScriptResult(r.stdout, nonce)
       if (failed) why = `${host} could not be reached: ${failed}`
       else if (!result) why = `${host} did not answer the session helper's write of the session's files`
       else if (!result.ok) why = `the session's files could not be written on ${host}: ${refusalText(result.refused)}`
+      else if (standIn) this.standInWritten(sid, result.values.get('clip'))
     } catch (err) {
       why = (err as Error).message
     }
     if (why === null) return
     await this.endHolder(record)
     this.failWith(why)
+  }
+
+  /** What the `files` exec said of the clipboard stand-in (`clip ok`, or the
+   *  word for why it wrote none): one log line when it wrote none. */
+  private standInWritten(sid: string, said: string | undefined): void {
+    this.clipStandInReady = said === 'ok'
+    if (this.clipStandInReady) return
+    const why = said !== undefined && /^[a-z-]{1,40}$/.test(said) ? said : 'no answer'
+    this.o.log(`[remote-helper] ${sid}: the clipboard stand-in was not written on ${this.o.machine.host} (${why}); image paste in this tab is not available`)
   }
 
   /** A holder this start made and cannot use: ended over a link of its own. */
@@ -1025,6 +1103,8 @@ export class RemoteHelperPty implements IPty {
   get attachedToKept(): boolean { return this.held?.attach === true }
   /** The tab showed its session at least once. */
   get everShown(): boolean { return this.driver.wasAttached }
+  /** 2.1.3-beta.21: this start wrote the clipboard stand-in (RemoteDriver clipStandInReady). */
+  get clipStandInReady(): boolean { return this.driver.clipStandInReady }
 
   write(data: string | Buffer): void {
     if (this.inner) { this.inner.write(data); return }
