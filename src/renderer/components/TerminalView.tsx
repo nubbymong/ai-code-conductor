@@ -70,7 +70,7 @@ import { spawnRefusalOf, refusedTabText } from '../../shared/providers'
 import { parentOfPartnerPtyId } from '../../shared/multi-spawn-rule'
 import { reportImagePaste, terminalTakesImagePaste } from '../utils/imagePaste'
 import { useThroughHelper } from '../hooks/useThroughHelper'
-import { matchesShortcut, DEFAULT_SHORTCUTS } from '../utils/shortcuts'
+import { matchesImagePasteShortcut, DEFAULT_SHORTCUTS } from '../utils/shortcuts'
 import { TERMINAL_SCROLLBACK_LINES } from '../../shared/terminal-scrollback'
 import { readReplayAtHolderSize, type ReplayAtHolderSize } from '../../shared/replay-at-holder-size'
 import { reconcileRefusedMultiSpawn } from '../utils/refusedMultiSpawn'
@@ -1957,7 +1957,7 @@ export default function TerminalView({ sessionId, configId, cwd, shellOnly, elev
         // ADR-032: Alt+V, and Ctrl+V with no text, in a session whose CLI
         // takes the image paste, go to main as one press (utils/imagePaste.ts).
         imagePaste: {
-          isImageChord: (e) => matchesShortcut(e, { ...DEFAULT_SHORTCUTS, ...(useSettingsStore.getState().settings.keyboardShortcuts || {}) }.pasteImage),
+          isImageChord: (e) => matchesImagePasteShortcut(e, { ...DEFAULT_SHORTCUTS, ...(useSettingsStore.getState().settings.keyboardShortcuts || {}) }.pasteImage),
           takes: () => terminalTakesImagePaste(useSessionStore.getState().sessions.find((s) => s.id === sessionId), { partnerPane: parentOfPartnerPtyId(sessionId) !== null, throughHelper: throughHelperRef.current }),
           terminalFocused: () => {
             const pane = xtermContainerRef.current

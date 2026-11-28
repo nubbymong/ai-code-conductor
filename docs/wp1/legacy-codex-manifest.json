@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-28T10:52:24.879Z",
-  "head": "2f5456b5043f1db887702611d4b072ef588594e1",
-  "tree": "f4c06df43b3ba651b553ab23d8faeb2f460075d2",
+  "generatedAt": "2026-11-28T11:38:47.320Z",
+  "head": "b33fd28872956fed6e32d9b5cb2cdad88d1dcd4a",
+  "tree": "b14bf0d03214433bef5c51552baa3727768db0c9",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -116,9 +116,9 @@
     "\\.(png|jpg|jpeg|gif|ico|icns|webp|svg|woff2?|ttf|otf|mp4|zip|asar|node|exe|dll|dylib|so|pdf)$",
     "^package-lock\\.json$"
   ],
-  "trackedFileCount": 4072,
-  "excludedFileCount": 658,
-  "scannedFileCount": 3414,
+  "trackedFileCount": 4075,
+  "excludedFileCount": 654,
+  "scannedFileCount": 3421,
   "unscopedFileCount": 15,
   "unscoped": [
     ".claude/settings.json",
@@ -139,8 +139,8 @@
   ],
   "unscopedMentions": [],
   "unreadable": [],
-  "matchedPathCount": 1166,
-  "pathDigest": "04896b701b24ded322eb131217ad11c15eccf62e06e5dc14b599e708e41bdae6",
+  "matchedPathCount": 1170,
+  "pathDigest": "44026a1f6f3f7757bf991fe0969a74bb1756bdd38830dbfffd787eda519ec7ec",
   "entries": [
     {
       "path": ".github/workflows/ci.yml",
@@ -148,7 +148,7 @@
         "P04",
         "P14"
       ],
-      "lineCount": 88
+      "lineCount": 100
     },
     {
       "path": ".github/workflows/upstream-cli-watch.yml",
@@ -4117,6 +4117,14 @@
       "lineCount": 65
     },
     {
+      "path": "tests/e2e/paste-unix.spec.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "lineCount": 66
+    },
+    {
       "path": "tests/e2e/session-dialog-permutations.spec.ts",
       "predicates": [
         "P05",
@@ -6079,11 +6087,25 @@
       "lineCount": 5
     },
     {
+      "path": "tests/unit/main/paste-linux-clipboard-tool.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
+    },
+    {
       "path": "tests/unit/main/paste-module.test.ts",
       "predicates": [
         "P13"
       ],
       "lineCount": 10
+    },
+    {
+      "path": "tests/unit/main/paste-unix-writers.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 4
     },
     {
       "path": "tests/unit/main/path-route-doors-frozen.test.ts",
@@ -9018,6 +9040,13 @@
         "P13"
       ],
       "lineCount": 1
+    },
+    {
+      "path": "tests/unit/scripts/paste-e2e-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "lineCount": 6
     },
     {
       "path": "tests/unit/scripts/probe-p11.test.ts",

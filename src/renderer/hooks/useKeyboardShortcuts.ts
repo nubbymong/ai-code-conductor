@@ -2,7 +2,7 @@ import { useEffect } from 'react'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { requestCloseSession } from '../stores/sshCloseStore'
-import { matchesShortcut, DEFAULT_SHORTCUTS } from '../utils/shortcuts'
+import { matchesShortcut, matchesImagePasteShortcut, DEFAULT_SHORTCUTS } from '../utils/shortcuts'
 import { captureGlyphDiagnostic } from '../utils/glyphDiagnostic'
 import { requestResync } from '../components/terminal/repaintRegistry'
 import { pasteImageFromOutside } from '../utils/imagePaste'
@@ -120,7 +120,7 @@ export function useKeyboardShortcuts(
       // reported to main, which reads the clipboard, writes a picture only when
       // it has to and sends the CLI's own paste key, then the sentence and
       // Enter (utils/imagePaste.ts). No path is typed anywhere.
-      if (matchesShortcut(e, shortcuts.pasteImage)) {
+      if (matchesImagePasteShortcut(e, shortcuts.pasteImage)) {
         e.preventDefault()
         const sessionId = useSessionStore.getState().activeSessionId
         if (sessionId) pasteImageFromOutside(sessionId, partnerOnScreen(sessionId))

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "04896b701b24ded322eb131217ad11c15eccf62e06e5dc14b599e708e41bdae6",
-  "manifestHead": "2f5456b5043f1db887702611d4b072ef588594e1",
+  "manifestPathDigest": "44026a1f6f3f7757bf991fe0969a74bb1756bdd38830dbfffd787eda519ec7ec",
+  "manifestHead": "b33fd28872956fed6e32d9b5cb2cdad88d1dcd4a",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -317,7 +317,7 @@
       ],
       "category": "OTHER",
       "disposition": "replace",
-      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts; ADR-030 probe P19 (2.1.3-beta.11 section A1): the dispatch-only probe-p19 job installs Claude Code and Codex into prefixes of their own with scripts off and runs the probe, read-only, no secrets (WP1.67); tests/unit/scripts/probe-p19-job.test.ts; 2.1.3-beta.11 (aicc_planning#368, WP1.71): the claude_rc_version input and the claude-conformance job added beside the Codex job, and a header comment that names the Codex rc job names the daily upstream CLI watch reads; no change to a Codex leg; tests/unit/scripts/upstream-cli-watch.test.ts, tests/integration/claude-conformance-lib.test.ts",
+      "evidence": "WP2 PR 4 P4.8 (rows 59, 60; OD20 D5, D7): ubuntu-latest in the test matrix; the codex-conformance job installs the minimum and pinned Codex CLI (a release candidate by dispatch) per OS and runs the no-sign-in checks, no secrets (WP1.30, WP1.71); tests/integration/codex-real-cli-conformance.test.ts; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.8 review (E-4, c75c3acb): every CLI run in the codex-conformance job gets a fresh CODEX_HOME, and the runner's own home is proven untouched (WP1.71); tests/integration/codex-conformance-ci.mjs; docs/wp1/evidence/ci-matrix.md; WP2 PR 4 P4.10 (60b39238, 2eb1b194): the Linux test job blocks after its first green run (CI run 37134624406), and the help captures are asserted on every OS once each OS was reviewed (WP1.30, WP1.71); docs/wp1/evidence/ci-matrix.md; 2.1.3-beta.1 process track (ADR-028): the codex-conformance job keeps its steps, its matrix and the versions it checks; only its start condition changed: on a PR it still needs ci-run, and another label change or an edit of the PR title or description no longer starts it again (a change of base branch does) (WP1.71); tests/unit/scripts/ci-cadence.test.ts; ADR-030 probe P19 (2.1.3-beta.11 section A1): the dispatch-only probe-p19 job installs Claude Code and Codex into prefixes of their own with scripts off and runs the probe, read-only, no secrets (WP1.67); tests/unit/scripts/probe-p19-job.test.ts; 2.1.3-beta.11 (aicc_planning#368, WP1.71): the claude_rc_version input and the claude-conformance job added beside the Codex job, and a header comment that names the Codex rc job names the daily upstream CLI watch reads; no change to a Codex leg; tests/unit/scripts/upstream-cli-watch.test.ts, tests/integration/claude-conformance-lib.test.ts; 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447): the paste-e2e job (dispatch only) installs Codex 0.157.1 from npm into a prefix of its own with scripts off, as snap-e2e does, for the clipboard paste on macOS and Linux (WP1.68); tests/unit/scripts/paste-e2e-job.test.ts",
       "note": "the job's name, comments and test paths; no Codex code path; P04 (P4.8 review): CODEX_HOME set to fresh empty folders made by codex-conformance-ci.mjs homes for the PATH check and the flag-drift suite; no global home resolver"
     },
     {
@@ -6002,6 +6002,17 @@
       "note": "P04: CODEX_HOME an empty folder of the spec's; P05: codexEnabled assertions"
     },
     {
+      "path": "tests/e2e/paste-unix.spec.ts",
+      "predicates": [
+        "P04",
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447) end-to-end spec (tests/e2e/paste-unix.spec.ts), run only by the paste-e2e job on the GitHub macOS and Ubuntu runners: probes PM1, PM2 and PL1, then the app's own clipboard paste route into a Claude Code tab and a Codex tab (real Codex 0.157.1 on a throwaway account folder whose CODEX_HOME and config point at the loopback model stand-in), each turn carrying the picture by its decoded pixels (WP1.2); tests/unit/scripts/paste-e2e-job.test.ts",
+      "note": "created by the clipboard paste on macOS and Linux; never run on this repo's own computers; P04: the account folder's CODEX_HOME for the CLI it starts"
+    },
+    {
       "path": "tests/e2e/session-dialog-permutations.spec.ts",
       "predicates": [
         "P05",
@@ -8729,6 +8740,16 @@
       "note": "host-safe: ipcMain and Claude's scanner mocked"
     },
     {
+      "path": "tests/unit/main/paste-linux-clipboard-tool.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447) test (tests/unit/main/paste-linux-clipboard-tool.test.ts): Claude Code on Linux with neither xclip nor wl-paste gets no key and the hint names both; the Codex package's table has no such check (WP1.2)",
+      "note": "created by the clipboard paste on Linux; fake reads, writes and door, no process"
+    },
+    {
       "path": "tests/unit/main/paste-module.test.ts",
       "predicates": [
         "P13"
@@ -8737,6 +8758,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) test (tests/unit/main/paste-module.test.ts): the paste module's decisions with fake reads and writes, a Codex session's key and copied-file rule among them (WP1.2)",
       "note": "created by the clipboard paste; fakes only, no clipboard and no process"
+    },
+    {
+      "path": "tests/unit/main/paste-unix-writers.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447) test (tests/unit/main/paste-unix-writers.test.ts): the macOS writer (public.png and public.tiff in one clipboard.write) and the Linux writer (image/png), each writing every format each registered provider's table (the Codex package's included) names for that OS (WP1.2)",
+      "note": "created by the clipboard paste on macOS and Linux; Electron's clipboard faked, no process"
     },
     {
       "path": "tests/unit/main/path-route-doors-frozen.test.ts",
@@ -12801,6 +12832,16 @@
       "disposition": "added",
       "evidence": "new 2.1.3-beta.13 C2 test (ADR-030 probes P3 and P6, aicc_planning#377): the verdicts follow the decision lines written before measuring, only the two key slots' host and user are read, only ssh and scp are started, and the host is left as found; it names Codex only as one of the programs P6 looks up (WP1.67); tests/unit/scripts/helper-probe-p3-p6.test.ts",
       "note": "loads helper/probes/p3-p6-linux.cjs without connecting to a host"
+    },
+    {
+      "path": "tests/unit/scripts/paste-e2e-job.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 3 (ADR-032, aicc_planning#447) test (tests/unit/scripts/paste-e2e-job.test.ts): the paste-e2e job of ci.yml starts only on a dispatch naming its part, installs Codex 0.157.1 and Claude Code 2.1.332 into prefixes of their own with scripts off, and runs the spec with retries off (WP1.2)",
+      "note": "created by the clipboard paste on macOS and Linux; reads ci.yml only"
     },
     {
       "path": "tests/unit/scripts/probe-p11.test.ts",

@@ -23,10 +23,19 @@
 // a copied file list, so the app writes a copied image file as a picture for
 // it. macOS: osascript, `«class PNGf»`. Linux: wl-paste or xclip; a copied
 // image file is not read on Linux (src/main/clipboard-file.ts), as before.
+// Without the program its read needs on Linux, Claude Code's own paste
+// cannot read the picture, so the app sends no key and the hint names the
+// two (plan 2.1.3-beta.21 phase 3, 3.1; ./linux-clipboard-tools.ts).
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import * as os from 'os'
 import type { ClipboardPasteRule, PasteKey } from '../types'
+import { createClaudeClipboardToolCheck } from './linux-clipboard-tools'
+
+/** Whether a local session's Claude Code has the program it reads the
+ *  clipboard with, asked once an app run while it is found
+ *  (linux-clipboard-tools.ts). */
+const claudeClipboardToolCheck = createClaudeClipboardToolCheck()
 
 /** Claude Code's action name for its image paste. */
 export const CLAUDE_IMAGE_PASTE_ACTION = 'chat:imagePaste'
@@ -172,6 +181,16 @@ export const CLAUDE_CLIPBOARD_PASTE: ClipboardPasteRule = {
   // copied file is not read on Linux by anyone.
   readsCopiedFile: () => false,
   formats: (platform) => (platform === 'win32' ? ['CF_DIB', 'PNG'] : platform === 'darwin' ? ['public.png'] : ['image/png']),
+  // Linux only: xclip under X11, wl-paste under Wayland, looked for where a
+  // local session's Claude Code runs it from. The session starts through a
+  // login shell in its terminal (spawn.ts: `-l` in a PTY, the launch line
+  // typed into it), an interactive login shell, so its PATH is what the
+  // user's login profile builds and what .bashrc or .zshrc adds, which the
+  // app's own PATH may not match: the app's PATH and the system folders are
+  // searched first, then the login shell is asked (`-l -c`, and after its
+  // plain "not found" `-l -i -c`), and no answer from it sends the key
+  // (linux-clipboard-tools.ts).
+  clipboardToolMissing: (platform) => claudeClipboardToolCheck(platform),
   // The path route behind the test switch only (plan Q5; deleted in
   // 2.1.3-beta.22): what the renderer types when main did not paste the path.
   pathRouteLine: 'enter',

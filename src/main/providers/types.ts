@@ -1084,6 +1084,12 @@ export interface ClipboardPasteRule {
   /** The clipboard formats the CLI's read takes on `platform` (what the
    *  writer for that OS must leave on the clipboard). */
   formats(platform: NodeJS.Platform): readonly string[]
+  /** Whether the program the CLI's clipboard read runs is missing on this
+   *  computer (plan 2.1.3-beta.21 phase 3: Claude Code on Linux runs xclip
+   *  or wl-paste), so the app sends no key and the hint names it; the paste
+   *  module awaits it before the key. Absent: the CLI reads the clipboard
+   *  itself. */
+  clipboardToolMissing?(platform: NodeJS.Platform): boolean | Promise<boolean>
   /** The path route only (plan Q5, deleted in 2.1.3-beta.22): the line the
    *  renderer typed when main did not paste the path. */
   readonly pathRouteLine: 'enter' | 'composer'

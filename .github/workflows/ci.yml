@@ -19,7 +19,7 @@ on:
   # with the always-on changelog check, probe-p19, probe-p21, snap-e2e and
   # remote-helper-e2e when the dispatch names them (probe_p19, probe_p21,
   # snap_e2e, remote_helper_e2e; snap_e2e_paste adds the Snap spec's clipboard
-  # paste part to snap-e2e), the
+  # paste part to snap-e2e), paste-e2e when paste_e2e names its part, the
   # claude-conformance job when
   # claude_rc_version is set, and
   # the Helper job too when the `helper` input is set; every other job's
@@ -75,6 +75,11 @@ on:
         default: false
       snap_e2e_paste:
         description: 'With snap_e2e: also run the clipboard image paste''s part of the Snap spec (ADR-032): probe runs probes PW1 and PW2, gate runs C2 on the path route and the clipboard route and C4 under the load grader; empty runs neither'
+        type: string
+        required: false
+        default: ''
+      paste_e2e:
+        description: 'Run the clipboard image paste end-to-end check (paste-e2e, ADR-032) on the macOS and Ubuntu runners: probe runs probes PM1 and PM2 (macOS) and PL1 (Linux), readings runs the app''s own route into Claude Code and Codex; empty runs neither'
         type: string
         required: false
         default: ''
@@ -1451,6 +1456,241 @@ jobs:
           name: snap-e2e-${{ matrix.os }}
           path: |
             ${{ runner.temp }}/snap-e2e
+            test-results
+          if-no-files-found: warn
+          retention-days: 30
+
+  # The clipboard image paste on macOS and Linux app machines (plan
+  # 2.1.3-beta.21 phase 3, 3.2 and 3.3; ADR-032; aicc_planning#447), on the
+  # GitHub macOS and Ubuntu runners: the built app (out/main, not packaged)
+  # with real Claude Code 2.1.332 and Codex 0.157.1 against probe P11's model
+  # stand-in on a loopback port (tests/e2e/paste-unix.spec.ts). `probe` runs
+  # probes PM1 and PM2 (macOS) and PL1 (Linux); `readings` runs the app's own
+  # route into each CLI, every press asserted. The two CLIs are installed as
+  # snap-e2e installs them: Codex from npm, Claude Code from its platform
+  # package, each with scripts off into a prefix and a cache of its own.
+  # node-pty and better-sqlite3 are rebuilt for Electron as the Test job
+  # rebuilds them on these systems.
+  #
+  # Linux runs under Xvfb (X11; Wayland is not measured here, and is written
+  # down as not measured). Claude Code reads the clipboard there by running
+  # xclip or wl-paste, so the spec runs once per state of the two: neither
+  # (both removed first), xclip, then wl-clipboard alone (which, under X11,
+  # probe PL1 read does not serve Claude Code); each run is its own
+  # Playwright run with PASTE_E2E_LINUX_TOOLS naming the state, and the next
+  # state's run goes on whatever the last one answered. Unprivileged user
+  # namespaces are allowed on the runner (Ubuntu 24.04's AppArmor restricts
+  # them), so the app starts with Chromium's namespace sandbox on, every
+  # process of it the runner user's. Not the setuid helper: run 46141007842
+  # left each Linux run waiting out Playwright's 30 s worker teardown after
+  # the app was stopped, and a process the root-owned helper starts is one
+  # the runner user cannot stop.
+  #
+  # Playwright runs with --retries=0, and the step after each run fails the
+  # job when its report shows a test retried or reported flaky
+  # (scripts/ci/playwright-no-retry.mjs). A red run is answered by its cause,
+  # never by a retry, a longer timer or a looser bound. The timeout is set
+  # from the presses: about 10 minutes of build and installs; macOS about 12
+  # for either part; Linux, three states, each two tabs' start (4 min) and
+  # its presses (about 4 min for `probe`; for `readings` 9 with xclip and
+  # 3 without): 60 and 50 minutes. Never raised to answer a red run.
+  #
+  # It runs ONLY on a dispatch that names it (`paste_e2e`, `probe` or
+  # `readings`), never on a pull request or a push. It is section evidence:
+  # not one of the checks a PR waits for, not in release.yml and not read by
+  # scripts/release-gate.mjs. It only reads: no secret, read-only
+  # permissions, the actions pinned by commit. What is uploaded as
+  # paste-e2e-<os> is the readings and Playwright's reports.
+  # tests/unit/scripts/paste-e2e-job.test.ts evaluates its condition.
+  paste-e2e:
+    if: github.event_name == 'workflow_dispatch' && (inputs.paste_e2e == 'probe' || inputs.paste_e2e == 'readings')
+    name: Paste e2e (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ inputs.paste_e2e == 'probe' && 60 || 50 }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+          cache: 'npm'
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        with:
+          python-version: '3.12'
+
+      - name: Install Python setuptools
+        run: pip install setuptools
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Install Electron binary
+        run: node node_modules/electron/install.js
+
+      - name: Rebuild native modules
+        shell: bash
+        run: |
+          node -e "
+          const { rebuild } = require('@electron/rebuild');
+          rebuild({
+            buildPath: process.cwd(),
+            electronVersion: require('./node_modules/electron/package.json').version,
+            onlyModules: ['node-pty', 'better-sqlite3']
+          }).then(() => console.log('rebuild done')).catch(e => { console.error(e); process.exit(1) })
+          "
+
+      - name: Let Electron's sandbox run (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Install Xvfb (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb
+
+      - name: Build the app
+        run: npm run build
+
+      - name: Install Codex 0.157.1 into its own prefix
+        shell: bash
+        env:
+          CODEX_VERSION: '0.157.1'
+          PREFIX: ${{ runner.temp }}/paste-codex
+          NPM_CACHE: ${{ runner.temp }}/npm-paste-codex-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
+
+      - name: Resolve this runner's Claude Code package
+        id: claudepkg
+        run: node tests/integration/claude-conformance-ci.mjs package
+
+      - name: Install Claude Code 2.1.332 into its own prefix
+        shell: bash
+        env:
+          CLAUDE_VERSION: '2.1.332'
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/paste-claude
+          NPM_CACHE: ${{ runner.temp }}/npm-paste-claude-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"
+
+      - name: Locate the installed Claude Code
+        id: claudebin
+        shell: bash
+        env:
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/paste-claude
+        run: node tests/integration/claude-conformance-ci.mjs bin "$PREFIX" "$CLAUDE_PACKAGE"
+
+      - name: Run the paste end-to-end check (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          PASTE_E2E: ${{ inputs.paste_e2e }}
+          PASTE_E2E_OUT: ${{ runner.temp }}/paste-e2e
+          PASTE_E2E_CODEX: ${{ runner.temp }}/paste-codex
+          PASTE_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/paste-e2e/report-macos.json
+        run: npx playwright test tests/e2e/paste-unix.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a macOS run Playwright retried or reported flaky
+        if: ${{ runner.os == 'macOS' && !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/paste-e2e/report-macos.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      - name: Remove xclip and wl-clipboard (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: sudo apt-get remove -y -q xclip wl-clipboard
+
+      - name: Run the paste end-to-end check, neither program (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          PASTE_E2E: ${{ inputs.paste_e2e }}
+          PASTE_E2E_LINUX_TOOLS: none
+          PASTE_E2E_OUT: ${{ runner.temp }}/paste-e2e
+          PASTE_E2E_CODEX: ${{ runner.temp }}/paste-codex
+          PASTE_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/paste-e2e/report-linux-none.json
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test tests/e2e/paste-unix.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a Linux run Playwright retried or reported flaky, neither program
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/paste-e2e/report-linux-none.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      - name: Install xclip (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        run: sudo apt-get install -y -q xclip
+
+      - name: Run the paste end-to-end check, xclip (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          PASTE_E2E: ${{ inputs.paste_e2e }}
+          PASTE_E2E_LINUX_TOOLS: xclip
+          PASTE_E2E_OUT: ${{ runner.temp }}/paste-e2e
+          PASTE_E2E_CODEX: ${{ runner.temp }}/paste-codex
+          PASTE_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/paste-e2e/report-linux-xclip.json
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test tests/e2e/paste-unix.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a Linux run Playwright retried or reported flaky, xclip
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/paste-e2e/report-linux-xclip.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      - name: Swap xclip for wl-clipboard (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        run: |
+          sudo apt-get remove -y -q xclip
+          sudo apt-get install -y -q wl-clipboard
+
+      - name: Run the paste end-to-end check, wl-paste alone (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          PASTE_E2E: ${{ inputs.paste_e2e }}
+          PASTE_E2E_LINUX_TOOLS: wl-paste
+          PASTE_E2E_OUT: ${{ runner.temp }}/paste-e2e
+          PASTE_E2E_CODEX: ${{ runner.temp }}/paste-codex
+          PASTE_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/paste-e2e/report-linux-wl-paste.json
+        run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test tests/e2e/paste-unix.spec.ts --retries=0 --workers=1 --reporter=list,json
+
+      - name: Fail a Linux run Playwright retried or reported flaky, wl-paste alone
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/paste-e2e/report-linux-wl-paste.json
+        run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
+
+      - name: Upload the readings and the reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: paste-e2e-${{ matrix.os }}
+          path: |
+            ${{ runner.temp }}/paste-e2e
             test-results
           if-no-files-found: warn
           retention-days: 30
