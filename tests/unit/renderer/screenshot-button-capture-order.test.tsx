@@ -110,17 +110,39 @@ describe('Snap, Rectangle: the menu closes before the capture is asked (aicc_pla
     expect(captureRectangle).toHaveBeenCalledTimes(1)
   })
 
-  it('the picture still goes to the session, and the button is usable again', async () => {
-    captureRectangle.mockResolvedValue('C:\\shots\\a.jpg')
+  // 2.1.3-beta.21 (ADR-032, plan 2.1.5): the capture names its session, and
+  // main hands the picture to the paste module itself; the renderer gets the
+  // paste's answer and no path.
+  it('the capture names the session, main\'s paste answer is applied, and the button is usable again', async () => {
+    const { usePasteHintStore } = await import('../../../src/renderer/stores/pasteHintStore')
+    usePasteHintStore.getState().clear('s1')
+    captureRectangle.mockResolvedValue({ snapped: { outcome: 'not-pasted', reason: 'no-placeholder', note: 'The picture is on the clipboard.' } })
     await openMenuAndPressRectangle()
     expect(snapButton().disabled).toBe(true)
+    await act(async () => { runFrame() })
+    await act(async () => { runFrame() })
+    expect(captureRectangle).toHaveBeenCalledWith('s1')
+    expect(usePasteHintStore.getState().hints.s1).toBe('The picture is on the clipboard.')
+    expect(sendImageToSession).not.toHaveBeenCalled()
+    expect(snapButton().disabled).toBe(false)
+    usePasteHintStore.getState().clear('s1')
+  })
+
+  it('a path answered as a bare string (beta.20\'s shape) is not sent anywhere: only the path route\'s answer is', async () => {
+    captureRectangle.mockResolvedValue('C:\\shots\\a.jpg')
+    await openMenuAndPressRectangle()
+    await act(async () => { runFrame() })
+    await act(async () => { runFrame() })
+    expect(sendImageToSession).not.toHaveBeenCalled()
+    captureRectangle.mockResolvedValue({ pathRoute: { file: 'C:\\shots\\a.jpg', line: 'enter' } })
+    await openMenuAndPressRectangle()
     await act(async () => { runFrame() })
     await act(async () => { runFrame() })
     expect(sendImageToSession).toHaveBeenCalledTimes(1)
     expect(sendImageToSession.mock.calls[0][0]).toBe('s1')
     expect(sendImageToSession.mock.calls[0][1]).toBe('C:\\shots\\a.jpg')
     expect(sendImageToSession.mock.calls[0][3]).toBe('local')
-    expect(snapButton().disabled).toBe(false)
+    expect(sendImageToSession.mock.calls[0][4]).toBe('enter')
   })
 })
 

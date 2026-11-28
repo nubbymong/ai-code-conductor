@@ -15,6 +15,15 @@
 // Red on beta: the strict payload refused `image`, and there was no
 // pty.submitImage. Mutants this must catch: the image routed to the prompt
 // door; the mode read for an image.
+//
+// 2.1.3-beta.21 (ADR-032, plan phase 2, 2.1.6 and Q5): the image branch is
+// the path route's, the one IPC that carries a path. Main refuses it unless
+// the test switch is on (src/main/paste/path-route.ts: the app not packaged
+// and CCC_E2E_PATH_ROUTE=1), so a packaged app refuses an image path
+// whatever the renderer sends. The tests above it run with the switch on.
+// Red on 0c54a1c6 (the beta.21 aggregate before phase 2): the image door was
+// asked in a packaged app. Mutant this must catch: the isPackaged check
+// dropped from pathRouteOn.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -25,11 +34,12 @@ const h = vi.hoisted(() => ({
   settingsReads: 0,
   exposed: {} as Record<string, any>,
   invoke: vi.fn(async () => undefined),
+  packaged: false,
 }))
 vi.mock('electron', () => ({
   ipcMain: { handle: (ch: string, fn: (...a: unknown[]) => unknown) => { h.handlers.set(ch, fn) }, on: vi.fn() },
   BrowserWindow: class {},
-  app: { getVersion: () => '9.9.9-test' },
+  app: { getVersion: () => '9.9.9-test', get isPackaged() { return h.packaged } },
   contextBridge: { exposeInMainWorld: (name: string, api: unknown) => { h.exposed[name] = api } },
   ipcRenderer: { invoke: h.invoke, send: vi.fn(), on: vi.fn(), removeListener: vi.fn(), once: vi.fn(), off: vi.fn(), sendSync: vi.fn() },
 }))
@@ -78,6 +88,9 @@ const SID = 'sess2222sess2222sess2222'
 const PATH = 'C:\\Users\\me\\AppData\\Local\\AI Code Conductor\\resources\\screenshots\\screenshot-2026-11-23-221500.jpg'
 
 beforeEach(() => {
+  // The path route's switch on: an unpackaged run with CCC_E2E_PATH_ROUTE=1.
+  h.packaged = false
+  vi.stubEnv('CCC_E2E_PATH_ROUTE', '1')
   h.prompts = []
   h.images = []
   h.settings = null
@@ -121,6 +134,31 @@ describe('pty:submitPrompt with an image', () => {
     expect(await submit({ sender: {}, senderFrame: mainFrame }, { sessionId: SID, text: 'x', image: PATH })).toEqual({ outcome: 'not-sent', reason: 'session-gone' })
     expect(await submit(fromApp, { sessionId: `${SID}-partner`, text: 'x', image: PATH })).toEqual({ outcome: 'not-sent', reason: 'session-gone' })
     expect(h.images).toEqual([])
+  })
+})
+
+describe('pty:submitPrompt with an image, off the path route (2.1.3-beta.21, Q5)', () => {
+  it('[host] a packaged app refuses an image path whatever the renderer sends, even with the switch set', async () => {
+    h.packaged = true
+    vi.stubEnv('CCC_E2E_PATH_ROUTE', '1')
+    expect(await submit(fromApp, { sessionId: SID, text: 'please view it.', image: PATH })).toEqual({ outcome: 'not-sent', reason: 'refused-text' })
+    expect(h.images).toEqual([])
+    expect(h.prompts).toEqual([])
+    expect(ptyManager.writePty).not.toHaveBeenCalled()
+  })
+
+  it('[host] an unpackaged app without the switch refuses it too', async () => {
+    h.packaged = false
+    vi.stubEnv('CCC_E2E_PATH_ROUTE', '')
+    expect(await submit(fromApp, { sessionId: SID, text: 'please view it.', image: PATH })).toEqual({ outcome: 'not-sent', reason: 'refused-text' })
+    expect(h.images).toEqual([])
+  })
+
+  it('[host] a prompt with no image is untouched by the switch, packaged or not', async () => {
+    h.packaged = true
+    vi.stubEnv('CCC_E2E_PATH_ROUTE', '')
+    await submit(fromApp, { sessionId: SID, text: 'explain this' })
+    expect(h.prompts).toEqual([{ sessionId: SID, text: 'explain this', mode: 'send' }])
   })
 })
 

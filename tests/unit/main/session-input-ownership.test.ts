@@ -50,7 +50,8 @@
 //    it, is not counted, whatever it is (but what a codexRunScreen of it
 //    returns is a run screen, below: the name is gone since 2.1.3-beta.18
 //    section 4, and still recognised, so it cannot come back unseen);
-//  - `.submit`, or `.submitImage` (2.1.3-beta.17 C6), read from a provider's
+//  - `.submit`, `.submitImage` (2.1.3-beta.17 C6) or `.submitClipboard`
+//    (2.1.3-beta.21, ADR-032), read from a provider's
 //    run screen, or destructured from one:
 //    anything traced to a `.runScreen` read (destructured included), typed
 //    SessionRunScreen or `X['runScreen']`, typed as what the module's
@@ -120,7 +121,7 @@ const MODULE_DIR = 'src/main/session-input/'
 const MODULE_ENTRY = 'src/main/session-input/index.ts'
 
 /** The functions that type into a session: today's, and the ones they replaced. */
-const TYPING_FUNCTIONS = new Set(['writePty', 'writeSubmittedLine', 'pastePty', 'writeCanvasMarkerLine', 'handOffAskQuestion', 'submitCodexText', 'submitCodexImage', 'writeCliSetupPty'])
+const TYPING_FUNCTIONS = new Set(['writePty', 'writeSubmittedLine', 'pastePty', 'writeCanvasMarkerLine', 'handOffAskQuestion', 'submitCodexText', 'submitCodexImage', 'submitCodexClipboard', 'writeCliSetupPty'])
 /** The modules that export one: a namespace of one handed on whole hands them on. */
 const TYPING_MODULES = new Set(['src/main/pty-manager', 'src/main/providers/codex/session-screen', 'src/main/ipc/setup-handlers'])
 /** A PTY handle's types, and (2.1.3-beta.18 section 4) the typing a door hands
@@ -193,7 +194,7 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
     run: { count: 1, why: "the run screen's writer: the raw writer the Codex run screen types through, reached only through runScreen.submit and (2.1.3-beta.17 C6) runScreen.submitImage, which only this module calls; both go through its one helper, onRun", until: 'stays' },
   },
   'src/main/providers/codex/index.ts': {
-    '(top level)': { count: 2, why: "the Codex package's runScreen.submit itself, handing a submission to its run (submitCodexText); and (2.1.3-beta.17 C6, aicc_planning#415) its runScreen.submitImage, handing an image to its run (submitCodexImage): the image door's Codex rule, which only this module calls", until: 'stays' },
+    '(top level)': { count: 3, why: "the Codex package's runScreen.submit itself, handing a submission to its run (submitCodexText); (2.1.3-beta.17 C6, aicc_planning#415) its runScreen.submitImage, handing an image to its run (submitCodexImage): the image door's Codex rule, which only this module calls; and (2.1.3-beta.21, ADR-032) its runScreen.submitClipboard, handing a clipboard paste to its run (submitCodexClipboard): the clipboard paste door's Codex rule, new, not moved", until: 'stays' },
   },
   // 2.1.3-beta.18 section 4 (aicc_planning#432): the doors' Codex calls,
   // moved here from the module, which made each one for a session it tested
@@ -203,6 +204,8 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
     prompt: { count: 2, why: "a prompt button's Send on Codex: the submit primitive, and a text it refused before typing anything typed with no Enter through the door's typing (the write port)", until: 'stays' },
     marker: { count: 1, why: "a canvas marker's Codex rule: the submit primitive, within the marker queue's bound", until: 'stays' },
     image: { count: 2, why: "an image's Codex rule (C6): the image rule's presence checked, then the image handed to it", until: 'stays' },
+    // 2.1.3-beta.21 (ADR-032, plan phase 2, 2.1.3): new, not moved.
+    clipboard: { count: 2, why: "the clipboard paste's Codex rule: the rule's presence checked, then the key and the sentence handed to it (the key as one write, then Codex's placeholder, then the sentence and Enter through the submit primitive)", until: 'stays' },
     ask: { count: 1, why: "Ask Conductor's question on Codex: the submit primitive, after the characters Codex's prompt drops are taken out", until: 'stays' },
   },
   // 2.1.3-beta.18 section 4 (aicc_planning#432): the rules the module typed
@@ -212,7 +215,9 @@ const ALLOWED: Record<string, Record<string, Allowed>> = {
   'src/main/providers/claude/run-screen.ts': {
     retryClaudeLine: { count: 2, why: "the Watchdog's retry into a Claude Code session: the line, then Enter as its own write, each after the leave key on an SSH Persistent session (a tab through the session helper since the 2.1.3-beta.18 fix round, every tab since PR 763 fix round 9; until then the line and Enter in one write, the bytes submitLine typed)", until: 'S13 (once main reads a Claude Code screen)' },
     sendClaudePrompt: { count: 2, why: "a prompt button's Send into a Claude Code session: the text, then Enter as its own write", until: 'S13 (once main reads a Claude Code screen)' },
-    pasteClaudeImage: { count: 3, why: "an image into a Claude Code session (X1.2): the path as a bracketed paste, the sentence, then Enter, each its own write", until: 'stays' },
+    pasteClaudeImage: { count: 3, why: "an image into a Claude Code session (X1.2): the path as a bracketed paste, the sentence, then Enter, each its own write", until: '2.1.3-beta.22 (the path route goes; ADR-032)' },
+    // 2.1.3-beta.21 (ADR-032, plan phase 2, 2.1.3): new, not moved.
+    pasteClaudeClipboard: { count: 3, why: "Claude Code's own clipboard image paste: its paste key as one write (never in a bracketed paste), then, after its placeholder and only for a press from outside the terminal or Snap, the sentence, then Enter, each its own write", until: 'stays' },
     // 2.1.3-beta.19 section 6.1 (aicc_planning#440): new, not moved.
     holdClaudeMarker: { count: 1, why: "a canvas marker's Enter in a tab through the session helper on its machine: the renderer types the line alone, and this types Enter as its own write once the line has gone, only while the run is still the one the line went to (every other tab: the renderer types the line and its Enter in one write, as before)", until: 'S13 (once main reads a Claude Code screen)' },
   },
@@ -575,7 +580,7 @@ export function typingSites(code: string, file = 'src/main/snippet.ts'): Site[] 
     const prop = propName(m)
     if (prop && TYPING_FUNCTIONS.has(prop) && nsKind(m.object) !== 'door') add(at, ancestors, `.${prop}${how}`)
     if (prop === 'write' && (isHandle(m.object) || byName(m.object))) add(at, ancestors, `.write on a PTY${how}`)
-    if ((prop === 'submit' || prop === 'submitImage') && isScreen(m.object)) add(at, ancestors, `.${prop} on a run screen${how}`)
+    if ((prop === 'submit' || prop === 'submitImage' || prop === 'submitClipboard') && isScreen(m.object)) add(at, ancestors, `.${prop} on a run screen${how}`)
   }
   /** Whether a namespace at `n` is only read through (a static key, a binding
    *  whose own uses are judged, a load for its side effects), not handed on. */
@@ -909,6 +914,8 @@ describe('the check sees each way of typing into a session (verify the verifier)
     ['a run screen\'s submit, bracketed', `provider.runScreen!['submit'](id, t, o)`],
     ['a run screen\'s submitImage', `getProvider('codex').runScreen.submitImage(id, path, words, { readyWaitMs: 1 })`],
     ['a submitImage destructured from a run screen', `const { submitImage } = provider.runScreen!\nsubmitImage!(id, path, words, o)`],
+    ['a run screen\'s submitClipboard (2.1.3-beta.21)', `getProvider('codex').runScreen.submitClipboard(id, key, null, { readyWaitMs: 1, placeholderWaitMs: 1 })`],
+    ['submitCodexClipboard called by name', `import { submitCodexClipboard } from './session-screen'\nsubmitCodexClipboard(id, key, null, o)`],
     ['a parameter typed as the provider\'s run screen', `function f(s: NonNullable<SessionProvider['runScreen']>) { s.submit(id, t, o) }`],
     ['a parameter typed IPty', `import * as pty from 'node-pty'\nfunction f(p: pty.IPty) { p.write('x') }`],
     ['a name typed IPty', `import type { IPty } from 'node-pty'\nlet t: IPty | null = null\nt!.write('x')`],
