@@ -470,10 +470,11 @@ P6 SAME, with the exec, `-l` and `-il` alike and claude found by all three.
 The question (the 2.1.3-beta.21 plan, phase 6, 6.2; aicc_planning#446): on a
 Linux host reached through the session helper, does Codex's review run there
 (PV1), and does the change read there match what this computer would read
-(PV2)? Until both have passed on a host, for the Codex and the git its last
-Check found, the app refuses a codex_review there and says why; nothing ever
-falls back to this computer, which would review a different copy of the change.
-Both run from one file, `tests/live/remote-review.live.ts`, through the app's
+(PV2)? Each pass proves a host kind, by architecture: Rocky for Linux x86-64,
+the Pi for Linux arm64. Until a build of the app records a PASS for a
+machine's architecture, it refuses a codex_review there and says why; nothing
+ever falls back to this computer, which would review a different copy of the
+change. Both run from one file, `tests/live/remote-review.live.ts`, through the app's
 own code (the machine's Check, the host read, the helper's run mode), so what
 they prove is what a review there does.
 
@@ -490,14 +491,20 @@ they prove is what a review there does.
   mode paths. A change over 512 KB, and named files over it together, are
   refused there, never cut.
 
-When both pass, the file writes one line in `~/.aicc/review-probes` on the host
-(`aicc-review-probes 1 codex <version> git <version>`, mode 0600) and checks
-that the next Check reads it. That line opens the gate for that Codex and that
-git only: an update of either shuts it until the probes pass again. Then the
-file runs one codex_review from a Claude Code tab through the session helper
-(the fake CLI as the tab's program, the session's own tool server on the host
-carrying the call) and checks that it ran there and its footer names the
-machine.
+The gate is a property of the app build, never a file on the host:
+`REMOTE_REVIEW_PROVEN` in `src/main/codex-review-remote.ts` has one entry for
+each architecture, null until a PASS is recorded. When both pass on a host
+line, the file prints the entry to set (`REMOTE_REVIEW_PROVEN entry to set
+... x86_64: Object.freeze({ codex: '<version>', git: '<version>' }),`), the
+Codex and git versions they passed with, and keeps it in the readings. The
+commit that records the PASS under "Results" below sets that entry: from then
+on that build runs a review on any machine of that architecture whose Codex is
+not older than the oldest the app runs, and whose git read at its Check (for
+a git change); no exact version is matched. Nothing is written on the host.
+Then the file runs one codex_review from a Claude Code tab through the session
+helper (the fake CLI as the tab's program, the session's own tool server on
+the host carrying the call), given this run's PASS as its proof, and checks
+that it ran there and its footer names the machine.
 
 ## What you need
 
@@ -526,25 +533,33 @@ REMOTE_HELPER_OUT=<readings folder> \
 npx vitest run --config vitest.live.config.ts tests/live/remote-review.live.ts --retry=0
 ```
 
-In PowerShell, set each variable with `$env:NAME = "value"` first. Set
-`REMOTE_REVIEW_KEEP_GATE=0` for a dry run that leaves the gate shut.
+In PowerShell, set each variable with `$env:NAME = "value"` first.
 
 ## What it does and reports
 
 1. Adds the machine with a device folder of its own (its Check: Codex's path,
    version and model list, and the git version).
-2. Takes away any probes' line an earlier run left, Checks again, and shows a
-   review there refused with the reason and nothing read or run.
+2. Shows a review there refused with the reason while its architecture has no
+   PASS recorded, and nothing read or run.
 3. PV1, then 4. PV2, as above, in a folder of the run's own inside the home
    folder (`~/aicc-pv.<random>`), which it removes at the end.
-5. Writes the probes' line when both passed, and Checks again.
+5. When both passed: the entry to record for the architecture (a host line
+   only; a stand-in run proves no Codex), and no file of the probes on the
+   host.
 6. The review through the tab.
 
 Then the tab ends, the run's folders go and the machine's device folder is
-removed. The probes' line stays: that is its purpose. The last two lines are
-`PV1 RESULT: PASS` or `FAIL` and `PV2 RESULT: PASS` or `FAIL`; the readings
-are `remote-review.json` in the readings folder. Exit 0 only when every step
-passed.
+removed. The last lines are `PV1 RESULT: PASS` or `FAIL`, `PV2 RESULT: PASS`
+or `FAIL` and, on a host line where both passed, the `REMOTE_REVIEW_PROVEN
+entry to set` line; the readings are `remote-review.json` in the readings
+folder. Exit 0 only when every step passed.
+
+## Recording a PASS
+
+In one commit: the result under "Results" below (host, architecture, date,
+Codex and git versions, both RESULT lines), and the printed entry in
+`REMOTE_REVIEW_PROVEN` in place of that architecture's `null`. The unit test
+`tests/unit/main/codex-review-remote.test.ts` checks the record's shape.
 
 ## Reading the answer
 
@@ -565,4 +580,20 @@ Codex is proven by the host lines only.
 
 Written for 2.1.3-beta.21. Not yet run on a host: Rocky and the Pi were off
 when the phase was built; the host lines are owed before the cut (plan
-section 6.2, s5).
+section 6.2, s5). Until they pass, both entries are null and this build
+refuses every review on a machine, with the reason.
+
+Owed too (plan 6.3's CI line as written): real Claude Code 2.1.332 as the
+tab's program in the `remote-helper-e2e` job, answering P11's stand-in model
+(`p11-model-stand-in.cjs`) with one scripted tool_use turn for
+`mcp__conductor__codex_review` (mode working), in place of the fake CLI and
+the test's own tool call. It waits for plan phase 5 to install Claude Code
+2.1.332 in that job, and runs as one dispatch on the beta.21 aggregate after
+phase 5 is merged there. The stand-in Codex stays a recorded change from the
+plan: the plan names real Codex 0.157.1 against P11, and the review's argv
+passes `--ignore-user-config` with a fixed host environment, so it cannot be
+pointed at a loopback model.
+
+## Results
+
+None yet.

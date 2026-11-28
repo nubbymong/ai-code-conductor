@@ -5,8 +5,11 @@
 // manager hands one over (conductor-mcp-tool-stream.test.ts's stand-in: no
 // port, nothing listens):
 //  - a registered remote tab whose machine names Codex: codex_review is
-//    listed, naming the machine; a call runs on the machine (the remote
-//    deps' run), and no account of this computer is asked for;
+//    listed, naming the machine; while this build records no PASS of the
+//    probes PV1 and PV2 for the machine's architecture, a call is refused
+//    with the reason and nothing runs anywhere; once it does, a call runs on
+//    the machine (the remote deps' run), and no account of this computer is
+//    asked for;
 //  - the same tab on a machine whose record names no Codex: not listed;
 //  - a tab never registered (its folder there was its home folder): the
 //    tool, offered by the local rule, refuses it and runs nothing anywhere;
@@ -40,6 +43,18 @@ vi.mock('../../../src/main/providers/core', async (importOriginal) => {
   const real = await importOriginal<typeof import('../../../src/main/providers/core')>()
   const { codexRemoteReview } = await import('../../../src/main/providers/codex/remote-review')
   return { ...real, tryGetProviderPackage: (id: string) => (id === 'codex' ? { review: { run: async () => ({ ok: false, code: 'failed', message: 'no local review here' }), remote: codexRemoteReview } } : real.tryGetProviderPackage(id as never)) }
+})
+// The running app's wiring gives no proof of its own: this build's
+// REMOTE_REVIEW_PROVEN decides. A test past the gate gives one here, for that
+// test only; unset, the call is the real one, unchanged.
+const runningProof = vi.hoisted(() => ({ value: null as null | Record<string, { codex: string; git: string } | null> }))
+vi.mock('../../../src/main/codex-review-remote', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/main/codex-review-remote')>()
+  return {
+    ...real,
+    runRemoteCodexReview: (a: unknown, t: Parameters<typeof real.runRemoteCodexReview>[1], d: Parameters<typeof real.runRemoteCodexReview>[2], s?: AbortSignal) =>
+      real.runRemoteCodexReview(a, t, d && d.proven === undefined && runningProof.value ? { ...d, proven: runningProof.value } : d, s),
+  }
 })
 vi.mock('../../../src/main/update-watcher', () => ({ isPackagedApp: () => false, getProjectRootPath: vi.fn(() => ''), hasSourcePath: vi.fn(() => false) }))
 const tmp = vi.hoisted(() => ({ dir: '' }))
@@ -95,7 +110,7 @@ const MACHINE: RemoteMachineRecord = {
   did: '0123456789abcdef0123456789abcdef', host: 'rocky.lan', port: 22, user: 'nick', label: 'Rocky', addedAt: 1,
   os: 'Linux', arch: 'x86_64', home: '/home/nick', shell: '/bin/bash', shellIsSh: true, claudePath: '/home/nick/.local/bin/claude',
   path: '/usr/bin:/bin', lang: null, helper: { path: 'linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
-  codex: { path: '/home/nick/.npm-global/bin/codex', version: '0.157.1' }, git: '2.47.1', reviewProbes: { codex: '0.157.1', git: '2.47.1' },
+  codex: { path: '/home/nick/.npm-global/bin/codex', version: '0.157.1' }, git: '2.47.1',
 }
 const machine = { value: MACHINE as RemoteMachineRecord }
 const run = vi.fn(async () => ({ outcome: { code: 0, signal: null, timeout: false, cut: false }, stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Reviewed on the machine.' } })}\n`, stderr: '', timedOut: false, cancelled: false }))
@@ -104,6 +119,7 @@ const links: FakeLink[] = []
 
 beforeEach(async () => {
   machine.value = MACHINE
+  runningProof.value = null
   run.mockClear()
   read.mockClear()
   prepareLaunch.mockClear()
@@ -127,7 +143,21 @@ function stream(sid: string): FakeLink {
 }
 
 describe('codex_review for a Claude Code tab through the session helper', () => {
+  it('with no PASS of the probes recorded for the machine\'s architecture: offered, and a call is refused with the reason; nothing runs anywhere', async () => {
+    runningProof.value = { x86_64: null, aarch64: null }
+    expect(sessions.registerRemoteReviewSession('rr-mcp-0', { did: MACHINE.did, cwd: '/home/nick/proj' }, MACHINE.home)).toBe(true)
+    const link = stream('rr-mcp-0')
+    expect((await link.tools()).map((t) => t.name)).toContain('codex_review')
+    const answer = await link.call(3, 'tools/call', { name: 'codex_review', arguments: { mode: 'working' } })
+    expect(answer.result.isError).toBe(true)
+    expect(answer.result.content[0].text).toBe('Codex review refused: reviews on Linux x86-64 machines have not been proven yet (probes PV1 and PV2, helper/probes/README.md). Nothing ran there or on this computer.')
+    expect(read).not.toHaveBeenCalled()
+    expect(run).not.toHaveBeenCalled()
+    expect(prepareLaunch).not.toHaveBeenCalled()
+  })
+
   it('is offered naming the machine, and runs the review there: no account of this computer is asked for', async () => {
+    runningProof.value = { x86_64: { codex: '0.157.1', git: '2.47.1' }, aarch64: null }
     expect(sessions.registerRemoteReviewSession('rr-mcp-1', { did: MACHINE.did, cwd: '/home/nick/proj' }, MACHINE.home)).toBe(true)
     const link = stream('rr-mcp-1')
     const tool = (await link.tools()).find((t) => t.name === 'codex_review')

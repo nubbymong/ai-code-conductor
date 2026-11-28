@@ -12,9 +12,10 @@
 // allow-lists are the machine's own Codex list
 // (read at its Check), applied here: the helper decides nothing (ADR-030 row
 // 4). Nothing of it ever runs on this computer: a review the machine cannot
-// run is refused, and says why. Until the probes PV1 and PV2 have passed on
-// the machine (helper/probes/README.md), for the Codex and the git it has now,
-// a review there is refused before anything is read or run.
+// run is refused, and says why. Until this build records a PASS of the
+// probes PV1 and PV2 on a host of the machine's architecture
+// (REMOTE_REVIEW_PROVEN; helper/probes/README.md), a review there is refused
+// before anything is read or run.
 //
 // Pure of the app's settings and accounts: what it needs of them (the model
 // registry, main's launch rule, the reviewing package's remote review, the
@@ -29,6 +30,7 @@ import { withInstalledCodexModels, type InstalledCodexModels, type ModelRegistry
 import { logInfo } from './debug-logger'
 import { clip, finishReview, redactFailure, redactHead, MAX_MESSAGE } from './providers/review-support'
 import { machineName, type RemoteMachineRecord } from './remote-helper/machines'
+import { linuxHelperRow } from './remote-helper/manifest'
 import { RUN_OUTPUT_MAX, hostReviewPaths, type HostMaterial, type HostReadInput, type HostRunResult, type HostRunSpec } from './remote-helper/review'
 import type { RemoteReviewTarget } from './remote-helper/review-sessions'
 import {
@@ -65,6 +67,40 @@ export interface RemoteReviewDeps extends RemoteReviewHost {
   onUsage?: (sessionId: string, usage: ReviewUsage) => void
   /** A finished review, for channel routing. Best-effort. */
   onReview?: (sessionId: string, review: string) => void
+  /** The probes' record by architecture; unset: this build's own
+   *  (REMOTE_REVIEW_PROVEN), as the running app always has it. Tests give one. */
+  proven?: RemoteReviewProof
+}
+
+/** A PASS of the probes PV1 and PV2 on one host: the Codex and git versions
+ *  they passed with (a record of that run; a review matches neither). */
+export type RemoteReviewProofEntry = Readonly<{ codex: string; git: string }>
+/** The probes' PASS by machine architecture (`uname -m`, the manifest row's
+ *  arch); null: none recorded yet. */
+export type RemoteReviewProof = Readonly<Record<string, RemoteReviewProofEntry | null>>
+
+/**
+ * Whether reviews run on machines of each architecture: a property of this
+ * build, never of a file on the machine. The probes PV1 and PV2
+ * (tests/live/remote-review.live.ts, helper/probes/README.md) prove a host
+ * kind: Rocky for x86_64, the Pi for aarch64. While an entry is null, a
+ * review on a machine of that architecture is refused with the reason, and
+ * nothing runs there or on this computer. The commit that records a PASS in
+ * that README sets the entry, to the versions the live file prints; from then
+ * on any Codex there not older than the oldest this app runs, and any git
+ * that read at its Check, run a review there.
+ */
+export const REMOTE_REVIEW_PROVEN: RemoteReviewProof = Object.freeze({
+  x86_64: null,
+  aarch64: null,
+})
+
+/** The entry for an architecture, by own keys only: a record's arch is a
+ *  host's answer, never a property of Object's prototype. */
+function provenFor(proof: RemoteReviewProof, arch: string): RemoteReviewProofEntry | null {
+  if (!Object.prototype.hasOwnProperty.call(proof, arch)) return null
+  const e = proof[arch]
+  return e && typeof e === 'object' && typeof e.codex === 'string' && typeof e.git === 'string' ? e : null
 }
 
 /** Whether a registered remote tab's connection is offered codex_review: its
@@ -152,12 +188,15 @@ export async function runRemoteCodexReview(
   if (version === null) return refused(`the version of Codex on ${name} did not read at its last Check. Press Check on the Machines page.`)
   if (reviewer.tooOld(version)) return refused(`${name} has Codex ${version}, older than ${reviewer.minVersion}, the oldest version this app runs. Update Codex there, then press Check on the Machines page.`)
   // The probes PV1 and PV2 (helper/probes/README.md): a review runs on a
-  // machine only once both have passed there, for the Codex and the git its
-  // last Check found. Never a review on this computer in its place: that
-  // would review another copy of the change.
-  const probes = m.reviewProbes
-  if (!probes || probes.codex !== version || !m.git || probes.git !== m.git) {
-    return refused(`reviews on ${name} have not been proven there yet for its Codex ${version} and ${m.git ? `git ${m.git}` : 'its git'} (the probes PV1 and PV2 must pass there first, then a Check reads them).`)
+  // machine only once this build records their PASS on a host of its
+  // architecture. Never a review on this computer in its place: that would
+  // review another copy of the change.
+  if (!provenFor(deps.proven ?? REMOTE_REVIEW_PROVEN, m.arch)) {
+    return refused(`reviews on Linux ${linuxHelperRow(m.arch)?.name ?? m.arch} machines have not been proven yet (probes PV1 and PV2, helper/probes/README.md).`)
+  }
+  // A git change is read by the git there; named files need none.
+  if (args.mode !== 'paths' && !m.git) {
+    return refused(`git was not found on ${name} at its last Check (git --version did not read there), so the change cannot be read there. Install git there and press Check on the Machines page, or name files with mode "paths".`)
   }
   const chosen = chooseRemoteCodexReview(args, deps.registry(), m.codex.models, name)
   if ('refused' in chosen) return { isError: true, text: chosen.refused }

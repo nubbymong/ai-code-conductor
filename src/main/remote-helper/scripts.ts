@@ -361,23 +361,16 @@ export const LOGIND_READS: readonly string[] = [
 
 // ── 2.1.3-beta.21: a review on the machine a remote session runs on ──────────
 
-/** The file the probes PV1 and PV2 write in `~/.aicc` once both have passed
- *  on the machine (tests/live/remote-review-probes.live.ts): one line,
- *  `aicc-review-probes 1 codex <version> git <version>`, naming the Codex and
- *  the git they ran with. A review runs on a machine only while its last
- *  Check read this line for the Codex and the git it found there. */
-export const REVIEW_PROBES_FILE = 'review-probes'
-
 /** The probe's reads for a review on the machine (aicc_planning#446): where
- *  `codex` is on the exec's PATH, the exec's git version, and the probes'
- *  line (REVIEW_PROBES_FILE), a regular file of the user's own, at most 300
- *  bytes of its first line. `W` is `timeout 10` where the machine has it, so
- *  a `codex --version` that does not answer cannot hold the probe. */
+ *  `codex` is on the exec's PATH and the exec's git version. `W` is
+ *  `timeout 10` where the machine has it, so a `codex --version` that does
+ *  not answer cannot hold the probe. Whether reviews run on a machine is not
+ *  read there: it is this build's record of the probes PV1 and PV2 by
+ *  architecture (codex-review-remote.ts REMOTE_REVIEW_PROVEN). */
 const REVIEW_PROBE_READS = [
   'W=; command -v timeout >/dev/null 2>&1 && W="timeout 10"',
   'r codex "$(command -v codex 2>/dev/null)"',
   'r git "$(git --version </dev/null 2>/dev/null | head -n 1)"',
-  `Q=$HOME/.aicc/${REVIEW_PROBES_FILE}; if [ -f "$Q" ] && [ ! -L "$Q" ]; then set -- $(ls -ldn "$Q"); [ "$3" = "$u" ] && r review-probes "$(head -c 300 "$Q" 2>/dev/null | head -n 1)"; fi`,
 ]
 
 /** The run mode's timeout, in whole seconds: 30 to 900, a review's own

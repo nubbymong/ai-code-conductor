@@ -11,8 +11,11 @@
  * - the allow-lists are the machine's own Codex list, never this computer's;
  *   with no list read there a model may not be named;
  * - hostile values, an old or missing Codex there, a version that did not
- *   read, and a machine where the probes PV1 and PV2 have not passed for its
- *   Codex and git, are refused before anything is read or run there;
+ *   read, no git read there for a git change, and a machine of an
+ *   architecture this build has no PASS of probes PV1 and PV2 for
+ *   (REMOTE_REVIEW_PROVEN), are refused before anything is read or run there;
+ *   once the build has one, any Codex not older than the oldest this app
+ *   runs, and any git that read, run there: no exact version is matched;
  * - the material is the host's and its refusals are said; nothing to review
  *   runs nothing; nothing is written on this computer;
  * - the footer names the machine and its own Codex sign-in, the model and the
@@ -26,15 +29,28 @@ vi.mock('../../../src/main/providers/core', async (importOriginal) => {
   const { codexRemoteReview } = await import('../../../src/main/providers/codex/remote-review')
   return { ...real, tryGetProviderPackage: (id: string) => (id === 'codex' ? { review: { run: async () => ({ ok: false, code: 'failed', message: 'no local review here' }), remote: codexRemoteReview } } : real.tryGetProviderPackage(id as never)) }
 })
+// The running app's wiring gives no proof of its own: this build's
+// REMOTE_REVIEW_PROVEN decides. A test of that wiring past the gate gives one
+// here, for that test only; unset, the call is the real one, unchanged.
+const runningProof = vi.hoisted(() => ({ value: null as null | Record<string, { codex: string; git: string } | null> }))
+vi.mock('../../../src/main/codex-review-remote', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../../src/main/codex-review-remote')>()
+  return {
+    ...real,
+    runRemoteCodexReview: (a: unknown, t: Parameters<typeof real.runRemoteCodexReview>[1], d: Parameters<typeof real.runRemoteCodexReview>[2], s?: AbortSignal) =>
+      real.runRemoteCodexReview(a, t, d && d.proven === undefined && runningProof.value ? { ...d, proven: runningProof.value } : d, s),
+  }
+})
 const recordReview = vi.fn()
 vi.mock('../../../src/main/codex-review-usage', () => ({
   recordReview: (sessionId: string, payload: unknown) => recordReview(sessionId, payload),
 }))
 import fs from 'fs'
 import {
-  runRemoteCodexReview, runCodexReview, chooseRemoteCodexReview, registerRemoteCodexReviewTool, remoteCodexReviewOffered, abortSessionReviews, setRemoteReviewDeps,
-  type RemoteReviewDeps, type ReviewToolDeps,
+  runRemoteCodexReview, runCodexReview, chooseRemoteCodexReview, registerRemoteCodexReviewTool, remoteCodexReviewOffered, abortSessionReviews, setRemoteReviewDeps, REMOTE_REVIEW_PROVEN,
+  type RemoteReviewDeps, type RemoteReviewProof, type ReviewToolDeps,
 } from '../../../src/main/codex-review-mcp-tool'
+import { LINUX_HELPER_ROWS } from '../../../src/main/remote-helper/manifest'
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import type { HostMaterial, HostReadInput, HostRunResult, HostRunSpec } from '../../../src/main/remote-helper/review'
 import { codexReviewCommandLine } from '../../../src/main/providers/codex/cli-runner'
@@ -49,8 +65,11 @@ const MACHINE: RemoteMachineRecord = {
   path: '/home/nick/.local/bin:/usr/bin:/bin', lang: 'C.UTF-8', helper: { path: 'linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
   codex: { path: '/home/nick/.npm-global/bin/codex', version: '0.157.1', models: { version: '0.157.1', models: [{ id: 'gpt-host-1', label: 'GPT Host 1', efforts: ['low', 'medium', 'high'] }, { id: 'gpt-host-2', label: 'GPT Host 2' }] } },
   git: '2.47.1',
-  reviewProbes: { codex: '0.157.1', git: '2.47.1' },
 }
+/** A build that recorded PV1 and PV2 PASS on a Linux x86-64 host (Rocky), and none on arm64 yet. */
+const PROVEN: RemoteReviewProof = { x86_64: { codex: '0.157.1', git: '2.47.1' }, aarch64: null }
+/** A build with no PASS recorded on any architecture. */
+const UNPROVEN: RemoteReviewProof = { x86_64: null, aarch64: null }
 const NAME = 'Rocky (nick@rocky.lan:22)'
 const TARGET = { did: MACHINE.did, cwd: '/home/nick/proj' }
 const SID = 'rr-sess-1'
@@ -78,6 +97,7 @@ function fake(over: Partial<RemoteReviewDeps> = {}): Fake {
     registry: () => LOCAL,
     launchRefusal: () => null,
     reviewer: () => codexRemoteReview,
+    proven: PROVEN,
     ...over,
   }
   return { deps, read, run, machine }
@@ -171,6 +191,7 @@ describe('the footer names the machine and its own sign-in, the model, the effor
     const f = fake()
     const host = { machine: f.deps.machine, read: f.deps.read, run: f.deps.run, env: f.deps.env }
     setRemoteReviewDeps(host)
+    runningProof.value = PROVEN
     try {
       let handler: ((args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>) | null = null
       const server = { tool: (_n: string, _d: string, _s: unknown, h: typeof handler) => { handler = h } }
@@ -179,6 +200,7 @@ describe('the footer names the machine and its own sign-in, the model, the effor
       expect(r.isError, r.content[0].text).toBeFalsy()
       expect(recordReview).toHaveBeenCalledWith(SID, { inputTokens: 1200, outputTokens: 80, rateLimit: null })
     } finally {
+      runningProof.value = null
       setRemoteReviewDeps(null)
     }
   })
@@ -245,10 +267,11 @@ describe('refused before anything is read or run there, and never run here inste
     ['no Codex there', { codex: undefined }, /Codex was not found on Rocky/],
     ['a Codex older than the oldest this app runs', { codex: { ...MACHINE.codex!, version: '0.150.0' } }, /has Codex 0\.150\.0, older than 0\.153\.4/],
     ['a Codex version that did not read', { codex: { ...MACHINE.codex!, version: null } }, /did not read at its last Check/],
-    ['the probes not passed there', { reviewProbes: undefined }, /have not been proven there yet for its Codex 0\.157\.1 and git 2\.47\.1/],
-    ['the probes passed with another Codex', { reviewProbes: { codex: '0.155.1', git: '2.47.1' } }, /have not been proven there yet/],
-    ['the probes passed with another git', { reviewProbes: { codex: '0.157.1', git: '2.39.5' } }, /have not been proven there yet/],
-    ['no git read there', { git: undefined }, /have not been proven there yet for its Codex 0\.157\.1 and its git/],
+    ['an arm64 machine, with a PASS recorded on x86-64 only', { arch: 'aarch64' }, /reviews on Linux arm64 machines have not been proven yet \(probes PV1 and PV2, helper\/probes\/README\.md\)\./],
+    ['an architecture this app has no row for', { arch: 'riscv64' }, /reviews on Linux riscv64 machines have not been proven yet/],
+    ['a record whose architecture names an object property', { arch: 'constructor' }, /reviews on Linux constructor machines have not been proven yet/],
+    ['a record whose architecture names the prototype', { arch: '__proto__' }, /reviews on Linux __proto__ machines have not been proven yet/],
+    ['no git read there, for a git change', { git: undefined }, /git was not found on Rocky \(nick@rocky\.lan:22\) at its last Check/],
     ['a machine no longer on the list', null, /no longer on this computer's list/],
   ]
   for (const [what, change, words] of cases) {
@@ -257,7 +280,6 @@ describe('refused before anything is read or run there, and never run here inste
       f.machine.value = change === null ? null : ({ ...MACHINE, ...change } as RemoteMachineRecord)
       if (change && 'codex' in change && change.codex === undefined) delete (f.machine.value as Partial<RemoteMachineRecord>).codex
       if (change && 'git' in change && change.git === undefined) delete (f.machine.value as Partial<RemoteMachineRecord>).git
-      if (change && 'reviewProbes' in change && change.reviewProbes === undefined) delete (f.machine.value as Partial<RemoteMachineRecord>).reviewProbes
       const r = await review(f)
       expect(r.isError).toBe(true)
       expect(r.text).toMatch(words)
@@ -265,6 +287,61 @@ describe('refused before anything is read or run there, and never run here inste
       nothingRan(f)
     })
   }
+
+  it('a build with no PASS recorded for the machine\'s architecture: refused with the reason', async () => {
+    const f = fake({ proven: UNPROVEN })
+    const r = await review(f)
+    expect(r).toEqual({ isError: true, text: 'Codex review refused: reviews on Linux x86-64 machines have not been proven yet (probes PV1 and PV2, helper/probes/README.md). Nothing ran there or on this computer.' })
+    nothingRan(f)
+  })
+
+  it('this build\'s own record: a review on a machine of each architecture it has no PASS for is refused, and nothing runs', async () => {
+    for (const row of LINUX_HELPER_ROWS) {
+      if (REMOTE_REVIEW_PROVEN[row.arch] !== null) continue
+      const f = fake({ proven: undefined })
+      f.machine.value = { ...MACHINE, arch: row.arch }
+      const r = await review(f)
+      expect(r.isError, row.arch).toBe(true)
+      expect(r.text).toBe(`Codex review refused: reviews on Linux ${row.name} machines have not been proven yet (probes PV1 and PV2, helper/probes/README.md). Nothing ran there or on this computer.`)
+      nothingRan(f)
+    }
+  })
+
+  it('this build\'s record is frozen, names each architecture the app installs on, and each entry is a PASS\'s versions or none', () => {
+    expect(Object.isFrozen(REMOTE_REVIEW_PROVEN)).toBe(true)
+    expect(Object.keys(REMOTE_REVIEW_PROVEN).sort()).toEqual(LINUX_HELPER_ROWS.map((r) => r.arch).sort())
+    for (const [arch, e] of Object.entries(REMOTE_REVIEW_PROVEN)) {
+      if (e === null) continue
+      expect(Object.isFrozen(e), arch).toBe(true)
+      expect(Object.keys(e).sort(), arch).toEqual(['codex', 'git'])
+      expect(e.codex, arch).toMatch(/^\d+\.\d+\.\d+$/)
+      expect(e.git, arch).toMatch(/^\d+\.\d+(\.\d+){0,2}$/)
+    }
+  })
+
+  it('once proven for its architecture, any Codex not older than the oldest this app runs, and any git that read, run there: no exact version is matched', async () => {
+    for (const change of [{ codex: { ...MACHINE.codex!, version: '0.160.0' } }, { codex: { ...MACHINE.codex!, version: '0.153.4' } }, { git: '2.39.5' }, { git: '2.52' }] as Array<Partial<RemoteMachineRecord>>) {
+      const f = fake()
+      f.machine.value = { ...MACHINE, ...change }
+      const r = await review(f)
+      expect(r.isError, `${JSON.stringify(change)}: ${r.text}`).toBe(false)
+      expect(f.run).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('no git read there: named files still read and run there (they need no git); a git change is refused', async () => {
+    const f = fake()
+    f.machine.value = { ...MACHINE }
+    delete (f.machine.value as Partial<RemoteMachineRecord>).git
+    f.read.mockResolvedValueOnce({ ok: true, kind: 'files', files: [{ path: 'src/a.ts', text: 'const a = 1\n' }] })
+    const r = await review(f, { mode: 'paths', paths: ['src/a.ts'] })
+    expect(r.isError, r.text).toBe(false)
+    expect(f.run).toHaveBeenCalledTimes(1)
+    const range = await review(f, { mode: 'range', range: 'HEAD~1..HEAD' })
+    expect(range.text).toMatch(/git was not found on Rocky/)
+    expect(f.read).toHaveBeenCalledTimes(1)
+    expect(f.run).toHaveBeenCalledTimes(1)
+  })
 
   it('Codex switched off in this app (main\'s one launch rule): refused, and nothing is read or run there', async () => {
     const f = fake({ launchRefusal: () => ({ code: 'disabled', message: 'Codex is switched off (Settings, Accounts).' }) as never })

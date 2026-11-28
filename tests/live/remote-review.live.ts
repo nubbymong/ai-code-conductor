@@ -1,6 +1,6 @@
 /**
  * A review on the machine a remote session runs on (2.1.3-beta.21 plan,
- * phase 6; aicc_planning#446): probes PV1 and PV2, the gate they open, and
+ * phase 6; aicc_planning#446): probes PV1 and PV2, the gate they decide, and
  * one codex_review from a Claude Code tab through the session helper, run on
  * that machine. The app's own code under Node, over real ssh with key sign-in
  * only, as tests/live/remote-helper-device.live.ts runs it.
@@ -22,17 +22,16 @@
  *   REMOTE_HELPER_HOSTS, REMOTE_HELPER_BIN, REMOTE_HELPER_MANIFEST,
  *   REMOTE_HELPER_FAKE_CLI   as the device check takes them
  *   REMOTE_REVIEW_CODEX      `stand-in` (CI) or `real` (a host line)
- *   REMOTE_REVIEW_KEEP_GATE  `0`: do not write the probes' line even when
- *                            both pass (a dry run); anything else writes it
  *   REMOTE_HELPER_OUT        a folder for the readings (optional)
  *
  * In order:
  *   1. Add the machine: its Check reads where Codex is (the `-il` lookup), its
  *      version, the models its own picker lists there (PV1's last clause) and
  *      the exec's git.
- *   2. The gate shut: with no probes' line for that Codex and git, a review
- *      there is refused with the reason, and nothing is read or run there or
- *      on this computer.
+ *   2. The gate shut: with no PASS recorded for the machine's architecture
+ *      (the app build's REMOTE_REVIEW_PROVEN entry null), a review there is
+ *      refused with the reason, and nothing is read or run there or on this
+ *      computer.
  *   3. PV1: the run mode starts a program with no terminal; the review's argv
  *      (ADR-031's, the Codex package's) runs from one `ssh -T` exec with the
  *      prompt on standard input and JSON events out, read by the Codex
@@ -43,18 +42,25 @@
  *      computer's review-diff.ts for one fixture repository made the same on
  *      both (modes working, range and paths), and its bound holds (a change
  *      and files over 512 KB refused, never cut).
- *   5. Both passed: the probes' line is written in ~/.aicc/review-probes
- *      (`aicc-review-probes 1 codex <version> git <version>`, 0600), and the
- *      next Check reads it.
+ *   5. Both passed: on a host line (REMOTE_REVIEW_CODEX=real) it prints the
+ *      REMOTE_REVIEW_PROVEN entry to set for the machine's architecture (the
+ *      Codex and git versions they passed with), for the commit that records
+ *      the PASS in helper/probes/README.md; with the stand-in it prints none
+ *      (a stand-in run proves no Codex). Nothing is written on the host.
  *   6. One codex_review from a Claude Code tab (the fake CLI as the tab's
  *      program, its tool server the session's mcp.json relay on the host),
  *      through the relay, the holder and the bridge to a tool host here that
- *      runs the app's remote review: the review ran there, on that machine's
- *      own sign-in; its footer names the machine; every process this
- *      computer started for it was ssh.
+ *      runs the app's remote review, given this run's PASS as its proof: the
+ *      review ran there, on that machine's own sign-in; its footer names the
+ *      machine; every process this computer started for it was ssh.
  * Then: the tab ends, the fixture folders and the machine's device folder go;
- * the probes' line stays (that is its purpose), and so does a ~/.codex it did
- * not make.
+ * a ~/.codex it did not make stays.
+ *
+ * Not yet here (plan 6.3's CI line as written): the tab's program is the
+ * fake CLI, not real Claude Code 2.1.332 answering P11's stand-in model with
+ * a scripted tool_use turn; that swap is owed once plan phase 5 installs
+ * Claude Code 2.1.332 in the remote-helper-e2e job (helper/probes/README.md,
+ * "Status").
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
@@ -69,8 +75,7 @@ import { claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launc
 import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
 import { readHostReviewMaterial, runOnHost, type HostReviewCtx } from '../../src/main/remote-helper/review'
 import { forgetRemoteReviewSession, registerRemoteReviewSession, remoteReviewTarget } from '../../src/main/remote-helper/review-sessions'
-import { REVIEW_PROBES_FILE } from '../../src/main/remote-helper/scripts'
-import { runRemoteCodexReview, type RemoteReviewDeps } from '../../src/main/codex-review-remote'
+import { REMOTE_REVIEW_PROVEN, runRemoteCodexReview, type RemoteReviewDeps, type RemoteReviewProofEntry } from '../../src/main/codex-review-remote'
 import { codexRemoteReview } from '../../src/main/providers/codex/remote-review'
 import { REVIEW_DIFF_MAX_BYTES, produceReviewDiff, produceReviewFiles } from '../../src/main/review-diff'
 import { mergeRegistry, type ModelRegistry } from '../../src/shared/model-registry'
@@ -137,6 +142,9 @@ let hostDir = ''
 let localDir = ''
 /** Which probes passed. */
 const passed = { pv1: false, pv2: false }
+/** This run's PASS of both, once step 5 has it: the proof step 6's review is
+ *  given (the app build's own entry decides every other review). */
+let proof: RemoteReviewProofEntry | null = null
 
 const ctx = (): HostReviewCtx => ({ runner, installId: machines.installId(), log: (l) => { logs.push(l) } })
 const registry = (): ModelRegistry => mergeRegistry(registryJson as unknown as ModelRegistry, null)
@@ -152,6 +160,7 @@ function deps(over: Partial<RemoteReviewDeps> = {}): RemoteReviewDeps {
     registry,
     launchRefusal: () => null,
     reviewer: () => codexRemoteReview,
+    ...(proof && machine ? { proven: { ...REMOTE_REVIEW_PROVEN, [machine.arch]: proof } } : {}),
     ...over,
   }
 }
@@ -326,6 +335,9 @@ afterAll(async () => {
   // One line each, for a host line's operator.
   console.log(`PV1 RESULT: ${passed.pv1 ? 'PASS' : 'FAIL'}`)
   console.log(`PV2 RESULT: ${passed.pv2 ? 'PASS' : 'FAIL'}`)
+  if (codexKind === 'real' && proof && machine) {
+    console.log(`REMOTE_REVIEW_PROVEN entry to set (src/main/codex-review-remote.ts), in the commit that records this PASS: ${machine.arch}: Object.freeze({ codex: '${proof.codex}', git: '${proof.git}' }),`)
+  }
 })
 
 /** The stand-in's newest record (CI only). */
@@ -353,20 +365,19 @@ describe('a review on the machine a remote session runs on', () => {
     expect(machine.git, 'the git version did not read').toMatch(/^\d+\.\d+/)
   })
 
-  it('2. the gate shut: with no probes\' line for that Codex and git, a review there is refused with the reason, and nothing runs there or here', async () => {
+  it('2. the gate shut: with no PASS recorded for its architecture, a review there is refused with the reason, and nothing runs there or here', async () => {
     expect(machine).toBeDefined()
-    // A line an earlier run left is taken away first: this run proves it again.
-    sshRun(`rm -f -- "$HOME/.aicc/${REVIEW_PROBES_FILE}"`)
-    const c = await machines.check(machine.did)
-    expect(c.ok, c.message).toBe(true)
-    ;[machine] = machines.list()
-    expect(machine.reviewProbes).toBeUndefined()
+    note('build-entry', { arch: machine.arch, entry: Object.prototype.hasOwnProperty.call(REMOTE_REVIEW_PROVEN, machine.arch) ? REMOTE_REVIEW_PROVEN[machine.arch] : 'no entry' })
     const calls: string[] = []
-    const d = deps({ read: async (m, i) => { calls.push('read'); return readHostReviewMaterial(ctx(), m, i) }, run: async (m, s, i, t, sig) => { calls.push('run'); return runOnHost(ctx(), m, s, i, t, sig) } })
+    const d = deps({
+      proven: { ...REMOTE_REVIEW_PROVEN, [machine.arch]: null },
+      read: async (m, i) => { calls.push('read'); return readHostReviewMaterial(ctx(), m, i) },
+      run: async (m, s, i, t, sig) => { calls.push('run'); return runOnHost(ctx(), m, s, i, t, sig) },
+    })
     const r = await runRemoteCodexReview({ cccSessionId: 'pv-gate', mode: 'working' }, { did: machine.did, cwd: `${hostDir}/repo` }, d)
     note('gate-shut', r)
     expect(r.isError).toBe(true)
-    expect(r.text).toMatch(/have not been proven there yet/)
+    expect(r.text).toMatch(/machines have not been proven yet \(probes PV1 and PV2, helper\/probes\/README\.md\)\./)
     expect(r.text).toMatch(/Nothing ran there or on this computer\.$/)
     expect(calls).toEqual([])
   })
@@ -457,26 +468,24 @@ describe('a review on the machine a remote session runs on', () => {
     passed.pv2 = true
   }, 300_000)
 
-  it('5. both passed: the probes\' line is written for that Codex and git, and the next Check reads it', async () => {
+  it('5. both passed: the entry to record for its architecture (a host line), and nothing written on the host', async () => {
     expect(passed, 'PV1 and PV2 must both pass first').toEqual({ pv1: true, pv2: true })
-    if (process.env.REMOTE_REVIEW_KEEP_GATE === '0') {
-      note('gate', 'not written (REMOTE_REVIEW_KEEP_GATE=0)')
-      return
-    }
     const version = machine.codex!.version!
     const git = machine.git!
     expect(version).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/)
     expect(git).toMatch(/^\d+\.\d+(\.\d+){0,2}$/)
-    const w = sshRun(`umask 077; printf '%s\\n' 'aicc-review-probes 1 codex ${version} git ${git}' > "$HOME/.aicc/${REVIEW_PROBES_FILE}" && stat -c %a "$HOME/.aicc/${REVIEW_PROBES_FILE}"`)
-    expect(w.out.trim(), w.err).toBe('600')
-    const c = await machines.check(machine.did)
-    expect(c.ok, c.message).toBe(true)
-    ;[machine] = machines.list()
-    expect(machine.reviewProbes).toEqual({ codex: version, git })
+    proof = { codex: version, git }
+    // Only the real Codex proves a host kind: a stand-in run prints no entry.
+    const entry = codexKind === 'real' ? `${machine.arch}: Object.freeze({ codex: '${version}', git: '${git}' }),` : null
+    note('proven-entry', entry ?? 'none: a stand-in run proves no Codex')
+    // The host holds nothing of it: no file of the probes beside the device folders.
+    const left = sshRun('ls -A "$HOME/.aicc" 2>/dev/null')
+    note('aicc-folder', left.out.split('\n').filter(Boolean))
+    expect(left.out.split('\n').map((n) => n.trim())).not.toContain('review-probes')
   })
 
   it('6. a codex_review from a Claude Code tab through the session helper runs on the machine: its footer names it, and this computer started only ssh', async () => {
-    expect(machine.reviewProbes, 'the gate is shut: PV1 and PV2 did not pass, or the line was not written').toBeDefined()
+    expect(proof, 'PV1 and PV2 did not both pass in this run').not.toBeNull()
     const id = 'pv-review-tab'
     const remotePath = `${hostDir}/repo`
     const m: RemoteMachineRecord = { ...machine, claudePath: `${hostDir}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }

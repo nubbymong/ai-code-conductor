@@ -12,8 +12,7 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   install once per target (a host, or a container on it; R2 at a saved SSH
   config's first upload), so installs and devices never share one.
 - **Layout.** Everything lives under `~/.aicc/<did>/` (the node id aside,
-  section 13); `~/.aicc` holds only `did` folders, and from 2.1.3-beta.21 one
-  file, `review-probes` (section 4, the one-shot run mode). In one: `owner`, a marker
+  section 13); `~/.aicc` holds only `did` folders. In one: `owner`, a marker
   with the `did` and app install id; `helper/<version>-<hash12>/aicc-helper`
   (first 12 hex of its SHA-256; never on `PATH`); `sessions/<sid>/` (0700: spec,
   provider files, socket `s`, `seq`, a bounded spool, the helper log, `holder`
@@ -356,15 +355,19 @@ after it). Codex's argv, its output reader and its version and model list
 rules come from the Codex package (core's `ProviderRemoteReview`).
 
 **The probes' gate.** A review runs on a machine only once probes PV1 and PV2
-(`tests/live/remote-review.live.ts`, helper/probes/README.md) have passed
-there for the Codex and the git it has now: they then write one line,
-`aicc-review-probes 1 codex <version> git <version>`, in `~/.aicc/review-probes`
-(a regular file of the user's own, 0600), and a Check reads its first line
-(at most 300 bytes) with the Codex version and the git version. While the line
-is missing, or names another Codex or git, a review there is refused with the
-reason before anything is read or run there, and nothing runs on this
-computer instead. Remove leaves it: it belongs to the host account, not to a
-device folder.
+(`tests/live/remote-review.live.ts`, helper/probes/README.md) have passed on
+a host of its architecture: Rocky for Linux x86-64, the Pi for Linux arm64.
+The proof is a property of the app build, never of a file on the machine:
+`REMOTE_REVIEW_PROVEN` in `src/main/codex-review-remote.ts` holds one entry
+for each architecture, null until the commit that records a PASS in
+helper/probes/README.md sets it to the Codex and git versions that run
+passed with (the live file prints the entry). While a machine's architecture
+has no entry, a review there is refused with the reason before anything is
+read or run there, and nothing runs on this computer instead. Once it has
+one, a review runs on any machine of that architecture whose Codex is not
+older than the oldest version the app runs (`CODEX_MIN_SUPPORTED_VERSION`)
+and, for modes `working` and `range`, whose git read at its last Check: no
+exact version is matched, and nothing of it is written or read on the host.
 
 ## 5 Processes
 

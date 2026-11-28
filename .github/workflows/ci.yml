@@ -1595,8 +1595,10 @@ jobs:
   # phase 6, aicc_planning#446) it then runs tests/live/remote-review.live.ts:
   # probes PV1 and PV2 against the stand-in Codex the rc step puts on the login
   # PATH (helper/probes/pv-codex-stand-in.cjs; its header says why not the real
-  # Codex), the gate they open, and one codex_review from a Claude Code tab
-  # through the relay, run on the machine, whose footer names it.
+  # Codex), the gate they decide (the app build's record of a PASS by
+  # architecture, never a file on the host), and one codex_review from a
+  # Claude Code tab through the relay, run on the machine, whose footer names
+  # it.
   #
   # It runs ONLY on a dispatch that names it (`remote_helper_e2e`), never on a
   # pull request or a push. It is section evidence, like a test-machine line:

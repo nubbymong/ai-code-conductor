@@ -97,9 +97,6 @@ export interface RemoteMachineRecord {
   codex?: { path: string; version: string | null; models?: HostCodexModels }
   /** The exec's git there, its version (`2.43.0`); absent when it did not read. */
   git?: string
-  /** The probes PV1 and PV2's line there (scripts.ts REVIEW_PROBES_FILE), as
-   *  the last Check read it: the Codex and the git versions they passed with. */
-  reviewProbes?: { codex: string; git: string }
 }
 
 /** The model list a machine's Codex offers (installed-codex-models.ts's shape). */
@@ -142,12 +139,6 @@ function readHostCodex(v: unknown): RemoteMachineRecord['codex'] | null {
 export function gitVersionOf(line: string | undefined): string | null {
   const m = /^git version (\d{1,6}\.\d{1,6}(?:\.\d{1,6}){0,2})(?:[ .][\x21-\x7e ]{0,80})?$/.exec((line ?? '').trim())
   return m ? m[1] : null
-}
-
-/** The probes' line (REVIEW_PROBES_FILE) as the record keeps it. */
-export function reviewProbesOf(line: string | undefined): { codex: string; git: string } | null {
-  const m = /^aicc-review-probes 1 codex (\S{1,64}) git (\S{1,64})$/.exec((line ?? '').trim())
-  return m && RECORD_VERSION_RE.test(m[1]) && /^\d{1,6}\.\d{1,6}(?:\.\d{1,6}){0,2}$/.test(m[2]) ? { codex: m[1], git: m[2] } : null
 }
 
 /** Whether a machine's logind ends the user's processes at logout, as its
@@ -293,13 +284,12 @@ function readRecord(v: unknown): RemoteMachineRecord | null {
   }
 }
 
-/** 2.1.3-beta.21: a record's Codex, git and probes fields, read strictly;
- *  each one off is left out. */
-function readReviewFields(r: Record<string, unknown>): Pick<RemoteMachineRecord, 'codex' | 'git' | 'reviewProbes'> {
+/** 2.1.3-beta.21: a record's Codex and git fields, read strictly; each one
+ *  off is left out. */
+function readReviewFields(r: Record<string, unknown>): Pick<RemoteMachineRecord, 'codex' | 'git'> {
   const codex = readHostCodex(r.codex)
   const git = typeof r.git === 'string' && /^\d{1,6}\.\d{1,6}(?:\.\d{1,6}){0,2}$/.test(r.git) ? r.git : null
-  const probes = r.reviewProbes && typeof r.reviewProbes === 'object' ? reviewProbesOf(`aicc-review-probes 1 codex ${String((r.reviewProbes as Record<string, unknown>).codex)} git ${String((r.reviewProbes as Record<string, unknown>).git)}`) : null
-  return { ...(codex ? { codex } : {}), ...(git ? { git } : {}), ...(probes ? { reviewProbes: probes } : {}) }
+  return { ...(codex ? { codex } : {}), ...(git ? { git } : {}) }
 }
 
 /** A saved session config, as much of it as Add reads. */
@@ -713,13 +703,12 @@ export class RemoteMachines {
     const execPath = hostText(probe.values.get('path'), 32767) ?? '/usr/local/bin:/usr/bin:/bin'
     const claudePath = hostPath(probe.values.get('il-claude'), 4096) ?? hostPath(probe.values.get('claude'), 4096)
     // 2.1.3-beta.21 (aicc_planning#446): Codex there, by the same lookup, and
-    // its version; the exec's git; the probes PV1 and PV2's line.
+    // its version; the exec's git.
     const codexPath = hostPath(probe.values.get('il-codex'), 4096) ?? hostPath(probe.values.get('codex'), 4096)
     let reviewer: ProviderRemoteReview | undefined
     try { reviewer = this.deps.reviewer?.() } catch { reviewer = undefined }
     const codexVersion = reviewer ? reviewer.parseVersion(probe.values.get('il-codex-version') || probe.values.get('codex-version') || '') : null
     const git = gitVersionOf(probe.values.get('git'))
-    const reviewProbes = reviewProbesOf(probe.values.get('review-probes'))
     const lang = probe.values.get('lang')
     // 3. install, unless the machine has this helper already in place
     const inPlace = a.known && a.known.helper.sha256 === helper.sha256 && a.known.check.ok
@@ -763,7 +752,6 @@ export class RemoteMachines {
       check: { at: this.now(), ok: checked.ok, ...(checked.ok ? {} : { detail: checked.why }) },
       logind: readLogind(probe.values.get('logind-kill'), probe.values.get('logind-exclude'), probe.values.get('linger')),
       ...(git ? { git } : {}),
-      ...(reviewProbes ? { reviewProbes } : {}),
     }
     if (codexPath) {
       // The model list is read only from a Codex this app can use, with the helper checked there.

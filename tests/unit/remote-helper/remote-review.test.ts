@@ -9,9 +9,10 @@
  *   on its machine; the home folder there or a folder above it is never
  *   registered; a shell-only tab is not.
  * - The machine's record: a Check reads where Codex is (the same lookup as
- *   Claude Code's), its version, the exec's git, the probes PV1 and PV2's
- *   line, and Codex's own model list there (in a fresh, empty Codex home),
- *   and keeps them through the records file.
+ *   Claude Code's), its version, the exec's git, and Codex's own model list
+ *   there (in a fresh, empty Codex home), and keeps them through the records
+ *   file. It reads nothing of the probes PV1 and PV2: their PASS is this
+ *   build's record by architecture (codex-review-remote.ts).
  * - The host read: its request on standard input; the change or the files
  *   back as data; its refusals in review-diff.ts's words; the bound checked
  *   again here on what came back (a host that sends more is refused).
@@ -32,11 +33,11 @@ import { EventEmitter } from 'events'
 import { PassThrough } from 'stream'
 import type { ChildProcess } from 'child_process'
 import { FakeSsh, parseCommand, result, type ExecCall, type FakeAnswer } from './fake-ssh'
-import { RemoteMachines, type MachineStore, type RemoteMachineRecord, gitVersionOf, reviewProbesOf } from '../../../src/main/remote-helper/machines'
+import { RemoteMachines, type MachineStore, type RemoteMachineRecord, gitVersionOf } from '../../../src/main/remote-helper/machines'
 import type { BundledLinuxHelper } from '../../../src/main/remote-helper/manifest'
 import { readHostReviewMaterial, runOnHost, remoteReviewLimits, hostReviewPaths, parseRunResult, REMOTE_RELAY_MAX_MS, REMOTE_RUN_EXTRA_MS, RUN_INPUT_MAX, RUN_OUTPUT_MAX, RUN_REQUEST_MAX, RUN_STDOUT_MAX, type HostReviewCtx } from '../../../src/main/remote-helper/review'
 import { registerRemoteReviewSession, remoteReviewTarget, forgetRemoteReviewSession, hostFolderIsHomeOrAbove } from '../../../src/main/remote-helper/review-sessions'
-import { scriptText, scriptCommand, RUN_TIMEOUT_RE, REVIEW_PROBES_FILE } from '../../../src/main/remote-helper/scripts'
+import { scriptText, scriptCommand, RUN_TIMEOUT_RE } from '../../../src/main/remote-helper/scripts'
 import { hostRunEnv } from '../../../src/main/remote-helper/session'
 import { EXEC_TIMEOUT_MS, type SshRunner } from '../../../src/main/remote-helper/ssh-exec'
 import { setRemoteHelperDeps, remoteHelperPty, forgetRemoteHelperTab } from '../../../src/main/remote-helper'
@@ -58,7 +59,7 @@ const MACHINE: RemoteMachineRecord = {
   os: 'Linux', arch: 'x86_64', home: '/home/nick', shell: '/bin/bash', shellIsSh: true, claudePath: '/home/nick/.local/bin/claude',
   path: '/home/nick/.local/bin:/usr/bin:/bin', lang: null, helper: { path: 'linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
   logind: { kill: 'no', exclude: '', linger: 'no' },
-  codex: { path: '/home/nick/.npm-global/bin/codex', version: '0.157.1' }, git: '2.47.1', reviewProbes: { codex: '0.157.1', git: '2.47.1' },
+  codex: { path: '/home/nick/.npm-global/bin/codex', version: '0.157.1' }, git: '2.47.1',
 }
 const INSTALL = 'f'.repeat(32)
 const hex = (s: string) => Buffer.from(s, 'utf8').toString('hex')
@@ -171,16 +172,17 @@ function host(over: Partial<Record<ExecCall['script'], (c: ExecCall) => FakeAnsw
 }
 const CODEX_PROBE = {
   'il-codex': '/home/nick/.npm-global/bin/codex', 'il-codex-version': 'codex-cli 0.157.1', git: 'git version 2.47.1',
-  'review-probes': 'aicc-review-probes 1 codex 0.157.1 git 2.47.1',
 }
 
-function memoryStore(): MachineStore {
+function memoryStore(): MachineStore & { value: () => unknown } {
   let v: unknown = null
-  return { read: () => v, write: (x) => { v = JSON.parse(JSON.stringify(x)) } }
+  return { read: () => v, write: (x) => { v = JSON.parse(JSON.stringify(x)) }, value: () => v }
 }
 
-async function added(ssh: FakeSsh): Promise<RemoteMachines> {
-  const m = new RemoteMachines({ runner: ssh, store: memoryStore(), bundled: async () => ({ ok: true, helpers: [HELPER] }), readFile: async () => Buffer.alloc(4096, 7), inUse: () => 0, log: (l) => { logs.push(l) }, reviewer: () => codexRemoteReview })
+const machinesOn = (ssh: SshRunner, store: MachineStore) => new RemoteMachines({ runner: ssh, store, bundled: async () => ({ ok: true, helpers: [HELPER] }), readFile: async () => Buffer.alloc(4096, 7), inUse: () => 0, log: (l) => { logs.push(l) }, reviewer: () => codexRemoteReview })
+
+async function added(ssh: FakeSsh, store: MachineStore = memoryStore()): Promise<RemoteMachines> {
+  const m = machinesOn(ssh, store)
   const q = await m.prepare([{ id: 'cfg', label: 'Rocky', sessionType: 'ssh', sshConfig: { host: 'rocky.lan', port: 22, username: 'nick' } }], 'cfg')
   if (!q.ok) throw new Error(q.message)
   const r = await m.add(q.token)
@@ -188,14 +190,18 @@ async function added(ssh: FakeSsh): Promise<RemoteMachines> {
   return m
 }
 
-describe('a Check reads Codex, its model list, the git and the probes\' line there', () => {
+describe('a Check reads Codex, its model list and the git there', () => {
   it('kept in the record, through the records file', async () => {
     const ssh = new FakeSsh(host({}, CODEX_PROBE))
-    const m = await added(ssh)
+    const store = memoryStore()
+    const m = await added(ssh, store)
     const [rec] = m.list()
     expect(rec.codex).toEqual({ path: '/home/nick/.npm-global/bin/codex', version: '0.157.1', models: { version: '0.157.1', models: [{ id: 'gpt-host-1', label: 'GPT Host 1', efforts: ['low', 'medium', 'high'] }, { id: 'gpt-host-2', label: 'GPT Host 2' }] } })
     expect(rec.git).toBe('2.47.1')
-    expect(rec.reviewProbes).toEqual({ codex: '0.157.1', git: '2.47.1' })
+    // Read back from the records file, the same.
+    const again = machinesOn(new FakeSsh(host()), { read: store.read, write: () => {} }).list()
+    expect(again[0].codex).toEqual(rec.codex)
+    expect(again[0].git).toBe('2.47.1')
     // The model list's read runs once Codex was found, after the helper's own checks.
     const scripts = ssh.scripts()
     expect(scripts.indexOf('cliread')).toBeGreaterThan(scripts.indexOf('selftest'))
@@ -229,15 +235,28 @@ describe('a Check reads Codex, its model list, the git and the probes\' line the
     expect(gitVersionOf('git version 2.45.1.windows.1')).toBe('2.45.1')
     expect(gitVersionOf('git version x')).toBeNull()
     expect(gitVersionOf('')).toBeNull()
-    expect(reviewProbesOf('aicc-review-probes 1 codex 0.157.1 git 2.47.1')).toEqual({ codex: '0.157.1', git: '2.47.1' })
-    expect(reviewProbesOf('aicc-review-probes 1 codex 0.157.1 git 2.47.1 extra')).toBeNull()
-    expect(reviewProbesOf('aicc-review-probes 2 codex 0.157.1 git 2.47.1')).toBeNull()
-    expect(reviewProbesOf('aicc-review-probes 1 codex $(id) git 2.47.1')).toBeNull()
   })
 
-  it('the probe reads the probes\' line only from a regular file of the user\'s own, and Codex\'s version only within a bound', () => {
+  it('nothing on the machine says whether reviews run there: the probe reads no such file, and the record keeps no such field', async () => {
     const t = scriptText('probe')
-    expect(t).toContain(`Q=$HOME/.aicc/${REVIEW_PROBES_FILE}; if [ -f "$Q" ] && [ ! -L "$Q" ]; then set -- $(ls -ldn "$Q"); [ "$3" = "$u" ] && r review-probes`)
+    expect(t).not.toMatch(/review-probes|reviewProbes/)
+    // A host that still prints such a line, and a records file an earlier
+    // build of this branch wrote with such a field: neither is kept.
+    const ssh = new FakeSsh(host({}, { ...CODEX_PROBE, 'review-probes': 'aicc-review-probes 1 codex 0.157.1 git 2.47.1' }))
+    const store = memoryStore()
+    const [rec] = (await added(ssh, store)).list()
+    expect(Object.keys(rec)).not.toContain('reviewProbes')
+    const file = JSON.parse(JSON.stringify(store.value())) as { machines?: Array<Record<string, unknown>> } | Array<Record<string, unknown>>
+    const rows = Array.isArray(file) ? file : file.machines ?? []
+    expect(rows.length).toBe(1)
+    rows[0].reviewProbes = { codex: '0.157.1', git: '2.47.1' }
+    const again = machinesOn(new FakeSsh(host()), { read: () => file, write: () => {} }).list()
+    expect(again).toHaveLength(1)
+    expect(Object.keys(again[0])).not.toContain('reviewProbes')
+  })
+
+  it('the probe reads Codex\'s version only within a bound', () => {
+    const t = scriptText('probe')
     expect(t).toContain('W=; command -v timeout >/dev/null 2>&1 && W="timeout 10"')
     expect(t).toContain('il-codex-version ${v}(command -v codex >/dev/null 2>&1 && $W codex --version')
   })
@@ -560,6 +579,8 @@ describe('the limits, and a stop', () => {
       registry: () => mergeRegistry(registryJson as unknown as ModelRegistry, null),
       launchRefusal: () => null,
       reviewer: () => codexRemoteReview,
+      // A build that recorded the probes' PASS on a host of this machine's kind.
+      proven: { x86_64: { codex: '0.157.1', git: '2.47.1' } },
     }
     let done = false
     const p = runRemoteCodexReview({ cccSessionId: 'rr-slow', mode: 'working', timeoutSeconds: 900 }, { did: m.did, cwd: '/home/nick/proj' }, deps).then((r) => { done = true; return r })

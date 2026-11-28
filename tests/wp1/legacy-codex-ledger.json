@@ -3566,7 +3566,7 @@
       ],
       "category": "REVIEW-MCP",
       "disposition": "added",
-      "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446): a machine's Check records where Codex is there (the same -il lookup as Claude Code's), its version, the models its own picker lists there (the cliread script, by the package's ProviderRemoteReview passed in its deps), the exec's git and the probes PV1 and PV2's line; it imports no Codex package module and compares no provider name (WP1.68); tests/unit/remote-helper/remote-review.test.ts, tests/live/remote-review.live.ts",
+      "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446): a machine's Check records where Codex is there (the same -il lookup as Claude Code's), its version, the models its own picker lists there (the cliread script, by the package's ProviderRemoteReview passed in its deps), and the exec's git (the probes PV1 and PV2 are the app build's record by architecture, codex-review-remote.ts REMOTE_REVIEW_PROVEN, never read on the host); it imports no Codex package module and compares no provider name (WP1.68); tests/unit/remote-helper/remote-review.test.ts, tests/live/remote-review.live.ts",
       "note": "the P04 hits are the record field `codex` (`record.codex`, `m.codex`), not a Codex home resolver"
     },
     {
@@ -3576,7 +3576,7 @@
       ],
       "category": "REVIEW-MCP",
       "disposition": "added",
-      "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446): the probe script also reads where codex is on the exec's PATH and the login shell's, its version within 10 s, the exec's git and the probes' line; the run, reviewread and cliread fixed scripts (the helper's one-shot run mode, review-diff.ts's hardened git on the host, one CLI read in a fresh empty config folder) name no Codex flag (WP1.68); tests/unit/remote-helper/remote-review.test.ts, tests/live/remote-review.live.ts",
+      "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446): the probe script also reads where codex is on the exec's PATH and the login shell's, its version within 10 s and the exec's git; the run, reviewread and cliread fixed scripts (the helper's one-shot run mode, review-diff.ts's hardened git on the host, one CLI read in a fresh empty config folder) name no Codex flag (WP1.68); tests/unit/remote-helper/remote-review.test.ts, tests/live/remote-review.live.ts",
       "note": "the P14 hits are the probe's `command -v codex` lookups and their result keys"
     },
     {
@@ -7115,7 +7115,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) live file (tests/live/remote-review.live.ts): probes PV1 and PV2 through the app's own code against a Linux host (the run mode with no terminal, the review argv with the prompt on stdin and JSON events out, the host read byte for byte equal to review-diff.ts here), the gate they open, and one codex_review from a Claude Code tab through the relay, run on the machine; dispatch-only remote-helper-e2e job and host lines (WP1.38, WP1.68)",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) live file (tests/live/remote-review.live.ts): probes PV1 and PV2 through the app's own code against a Linux host (the run mode with no terminal, the review argv with the prompt on stdin and JSON events out, the host read byte for byte equal to review-diff.ts here), the gate they decide (the app build's REMOTE_REVIEW_PROVEN entry by architecture, which a host line's PASS prints), and one codex_review from a Claude Code tab through the relay, run on the machine; dispatch-only remote-helper-e2e job and host lines (WP1.38, WP1.68)",
       "note": "never part of the unit suite: the default vitest config takes no live file"
     },
     {
@@ -10662,7 +10662,7 @@
       ],
       "category": "TEST",
       "disposition": "added",
-      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) test (tests/unit/remote-helper/remote-review.test.ts): the registration (never the host's home folder or above), the Check's Codex, model list, git and probes' line, the host read and its bound and refusals, the run mode's request, input bounds and result line, the limits (a 900 s review not cut) and a stop (WP1.38, WP1.68)",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) test (tests/unit/remote-helper/remote-review.test.ts): the registration (never the host's home folder or above), the Check's Codex, model list and git (no probes' file read or kept), the host read and its bound and refusals, the run mode's request, input bounds and result line, the limits (a 900 s review not cut) and a stop (WP1.38, WP1.68)",
       "note": ""
     },
     {
