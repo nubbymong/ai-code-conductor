@@ -124,7 +124,8 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
 - **Session id (`sid`)**, chosen by the app: `^[A-Za-z0-9][A-Za-z0-9_-]{7,31}$`.
   Every socket bind and connect happens after a `chdir` into the session
   folder, by the name `s`, so a long home never meets the path limit.
-- **Host home.** Learned once per target (R2's first upload; from R3 the
+- **Host home.** Learned once per target (R2's upload named it, and was not
+  built; from remote step 1 the machine's first Check reads it, and from R3 the
   probe): starts with `/`, at most 1,024 bytes of valid UTF-8, no control (Cc)
   or format (Cf) character. Every later path must start with exactly it; a
   different home stops the device until the user checks it again.
@@ -194,7 +195,8 @@ path goes to ssh with forward slashes, in double quotes inside the option (ssh
 splits on whitespace, reads a backslash as an escape and expands `%`); one
 still holding a backslash, `"` or `%` is refused, naming it. A UNC data folder
 (a redirected profile) is not used: the file goes in a local, owner-only folder
-with no space. A target's first connection (R2's first upload, or R3's probe)
+with no space. A target's first connection (R2's upload, not built; from remote step 1 the
+first exec to the machine; or R3's probe)
 uses `StrictHostKeyChecking=ask`: the question goes to the user through
 askpass, saying whether the user's own known hosts trust that key; nothing
 saved is released on it. On a yes the app reads the new line into the record
@@ -300,7 +302,10 @@ option is given once, and nothing else is taken. No value a host reported is
 put on the command line: the run mode reads its request from standard input,
 one line holding a JSON object with exactly `argv`, `cwd` and `env`, at most
 64 KiB, and then the rest of its standard input, at most 2 MiB, is the
-program's standard input (the review's prompt). `argv`, `cwd` and `env` follow
+program's standard input (the review's prompt). A request that is not one
+line, is over 64 KiB, or is not exactly that object is refused. The run mode
+reads the whole prompt before it starts the program, and a prompt over 2 MiB
+is refused, never cut. `argv`, `cwd` and `env` follow
 `term.launch`'s rules (section 15, Launch): `argv[0]` is an absolute path,
 started by that exact path with no search of `PATH` and no shell between
 (`execve`), and `env` is the program's whole environment. What they hold is the
@@ -311,7 +316,8 @@ the host, and `env` the host account's variables as a helper tab's launch has
 them (`src/main/remote-helper/session.ts:139`). The program leads a new
 session and process group, and its standard input is closed after the prompt.
 Its standard output is copied to the run mode's, byte for byte, at most 4 MiB;
-its standard error to the run mode's, at most 64 KiB. If the copied output did
+its standard error to the run mode's, at most 64 KiB; more is dropped, not
+copied, and does not end the program. If the copied output did
 not end with a line end (a cut, or a last write with no newline), the run mode
 writes one before the result line, so the result line is always the last line
 it writes. Then the run mode prints one line,
@@ -325,7 +331,7 @@ data (JSON events), never as marked lines, and reads the exec with a standard ou
 `EXEC_STDOUT_MAX`'s 2 MiB (`src/main/remote-helper/ssh-exec.ts:165`). The run
 mode ends the program's whole group (hangup, then kill after 2 s, as a holder
 ends a tree, section 15) when the program exits, when `--timeout` seconds have
-passed since it started (`timeout` true), when its output passes either cap
+passed since it started (`timeout` true), when its standard output passes its cap
 (`cut` true), and when its own standard output closes before the program has
 exited (the app ended the exec, section 10); it then exits. The end of its
 standard input is not an end: it comes once the prompt is read. It

@@ -213,7 +213,8 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 - **A picture from this computer to a host** (ADR-032, from 2.1.3-beta.21).
   Only on the user's own key press (Alt+V, or Ctrl+V with only a picture on
   the clipboard) or Snap, and only for the one session on screen, the app reads
-  this computer's clipboard and sends a picture, never text, to that session's
+  this computer's clipboard (for Snap, takes main's own capture) and sends a
+  picture, never text, to that session's
   holder by `file.put` on the tab's own connection (protocol section 15).
   Nothing the host sends starts it. The host gets the picture's bytes and its
   hash and never names a local path; the reply carries the hash only, and no
