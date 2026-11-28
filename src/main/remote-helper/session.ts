@@ -167,7 +167,7 @@ export const PLAIN_WRAPPER = 'exec "$0" "$@"'
  * so no host path is in the text; an empty PATH gets the folder alone, never
  * a trailing colon, which would put the working folder on PATH.
  */
-export const CLIP_STAND_IN_WRAPPER = 'PATH="$1${PATH:+:$PATH}"; export PATH; shift; exec "$0" "$@"'
+export const CLIP_STAND_IN_WRAPPER = 'shift; exec "$0" "$@"'
 
 /** What the stand-in's folder may not hold: PATH's separator, a control
  *  character, and the two characters the `files` script never writes into a
