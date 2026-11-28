@@ -187,8 +187,8 @@ describe('the login shell\'s answer, read', () => {
 })
 
 describe('an alias or a function by the program\'s name hides it, not stands in for it (R3-F1)', () => {
-  /** The launcher as a login profile that defines it makes it (.bash_profile,
-   *  .zprofile, .profile): xclip on the PATH Homebrew's shellenv line builds,
+  /** The launcher when a login profile (.bash_profile, .zprofile, .profile)
+   *  defines the name: xclip on the PATH Homebrew's shellenv line builds,
    *  and a definition of that name, so the seam answers the definition to
    *  every question, `-l -c` and `-l -i -c` alike. Until the definition is
    *  cleared (`unalias xclip` for the alias, `unset -f xclip` for the
@@ -226,9 +226,12 @@ describe('an alias or a function by the program\'s name hides it, not stands in 
     })
   }
 
-  it('the path R3-F1 reported: `-l -c` a plain "not found", then `-l -i -c` reads .bashrc, .zshrc or $ENV, where Homebrew\'s line and the alias are: found, so not missing and the key goes', async () => {
-    /** `-l -c` reads neither file, so it finds nothing; the interactive
-     *  question sees the alias, and once it is cleared the program's path. */
+  it('the path R3-F1 reported: `-l -c` a plain "not found", then `-l -i -c` gets past .bashrc\'s interactive guard, or reads .zshrc or $ENV, where Homebrew\'s line and the alias are: found, so not missing and the key goes', async () => {
+    /** `-l -c` does not reach those lines (zsh reads .zshrc and sh reads
+     *  $ENV only when interactive; bash's .bashrc, sourced by the profile,
+     *  returns at its interactive guard), so it finds nothing; the
+     *  interactive question sees the alias, and once it is cleared the
+     *  program's path. */
     const rcOnly = () => {
       const asked: Array<{ command: string; interactive: boolean }> = []
       return {
