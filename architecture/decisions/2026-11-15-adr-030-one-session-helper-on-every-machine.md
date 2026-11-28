@@ -8,7 +8,7 @@
 - Builds on: ADR-029 (remote sessions run through a device helper),
   `docs/remote/helper-protocol.md` (protocol version 1),
   `docs/remote/helper-threat-model.md`
-- Related: ADR-009 (adversarial review), ADR-028 (beta cadence)
+- Related: ADR-009 (adversarial review), ADR-028 (beta cadence). Amended by ADR-032 (2026-11-28; `2026-11-28-adr-032-images-reach-every-cli-through-its-own-clipboard-paste.md`): every picture goes in through the CLI's own clipboard paste. Each line it changes is marked "ADR-032" in place, with the text it supersedes struck through; line numbers are unchanged.
 - Supersedes in ADR-029: decision 4, decision 10 and the step plan R1 to R14
   (see "What this changes in ADR-029")
 
@@ -59,16 +59,16 @@ and text paste, and services with a measured cost.
 - **Amended: decision 6.** The terminal's remote command is still the helper,
   run by exec. The helper now starts the CLI through the host's login shell,
   after the saved post-connect command (D8).
-- **Amended: decision 7.** Image paste goes through the holder into a
+- **Amended: decision 7.** ~~Image paste goes through the holder into a
   per-session paste folder (D5), not a one-shot upload before the helper
-  exists.
+  exists.~~ **ADR-032 (2026-11-28):** image paste goes through the holder's clipboard stand-in or clipboard write, fed by `file.put`; no path is inserted.
 - **Amended: the remote data rule of the helper protocol (Payload
   allow-lists).** When D9 lands, forwarded conversation content passes through
   one checked intake. A remote path is still never opened.
 - **Replaced: the step plan R1 to R14**, by the ordered slices of D2. Probes
   P1 to P6 are carried; P6 no longer gates session launch (D8). Eleven probes
   are added.
-- **Unchanged.** Codex over SSH stays in the feature queue.
+- **Unchanged.** ~~Codex over SSH stays in the feature queue.~~ **ADR-032 (2026-11-28):** Codex over SSH is in 2.1.3 (ADR-032, owner 28 Nov); Codex remote sessions are planned for 2.1.3-beta.24.
 
 ## Components
 
@@ -79,17 +79,17 @@ Rows are numbered so that "does not own" can name the owner.
 | 1 | Core shell | Electron main process | The window and preload IPC; config and session state files; the one service registry (start, stop, health and restart of every service row, routed to the supervisor that holds the process; today's three supervisors stay); start-up and quit order; the updater (check, verify, detach every holder, install, then ask row 3 to re-open tabs and re-attach); the order of steps in the first-run flow and the upgrade assistant | Any PTY or CLI process; helper rows (read-only on Services); tool logic; account rules; paste staging; what a status or hook frame means; what is queued, or how long a session lives, while the app is away | Renderer through preload; core modules by direct call; workers over message ports |
 | 2 | Renderer UI | Sandboxed window | Drawing and user input only; reporting the paste key to core | Any state of record; any file or process access; where a session runs; reading a session's screen to decide whether the app may type (moves to rows 3 and 14); the paste decision (row 8) | Core only, through preload |
 | 3 | Session client and launch spec builder (new; replaces `pty-manager.ts`) | Module in core | The one list of sessions (live, detached, leftover) and their attach state; finding leftover sessions by asking each machine's helper; the one launch spec (program, arguments, environment, folder, account binding, provider files, the saved post-connect command as a pre-launch step, the lifetime kind); mapping every saved config shape to a launch spec; attach, detach, replay by offset, resize, write; re-opening tabs after an update or crash; `submit`, the one function through which the app itself types into a CLI; handing each incoming frame to its one owner | The PTY, the CLI and the screen (row 4); chunking a large write and the away clock (row 4); what an account is (row 6); what a tool does (row 7); what a frame means (row 13); when a CLI takes typed text (row 14); ssh options and host keys (row 5); conversation content (row 10) | Holders, with protocol frames: a named pipe or Unix socket on This computer, one ssh exec per session for a remote machine (the bridge, 2.1.3-beta.17; protocol change 16); renderer through core IPC |
-| 4 | Session helper (new, Rust) | One holder process per session on the session's machine, the same binary on every system; no daemon, no port. Short-lived modes: statusline, hook, mcp relay, run, capture, list, self-test | The PTY and the CLI process; applying the launch spec exactly; the output ring with offsets; the one screen of record and the last-output time; the session folder and its removal at session end; enforcing the lifetime kind and the away clock; answering list mode; while the app is away, a bounded queue of status and hook events, holding a tool call about 30 seconds, and letting a held permission question fall back to the CLI's own prompt; chunking a large write on whole characters; transfer and paste-folder caps; holding an account token in memory only; forwarding the conversation file; screen grabbing in capture mode | Any decision (which account, sign-in kind or tools; retry or not; what to launch; which lifetime kind; whether a screen is ready; what a paste becomes); any pattern about a CLI's screen text; writing a token to disk or argv; the host's own login; its own install, update or health row (row 5); what conversation content means (row 10) | The session client only (frames); the CLI through its short-lived modes |
+| 4 | Session helper (new, Rust) | One holder process per session on the session's machine, the same binary on every system; no daemon, no port. Short-lived modes: statusline, hook, mcp relay, run, capture, list, self-test, and the clipboard stand-in (ADR-032) | The PTY and the CLI process; applying the launch spec exactly; the output ring with offsets; the one screen of record and the last-output time; the session folder and its removal at session end; enforcing the lifetime kind and the away clock; answering list mode; while the app is away, a bounded queue of status and hook events, holding a tool call about 30 seconds, and letting a held permission question fall back to the CLI's own prompt; chunking a large write on whole characters; transfer and paste-folder caps; holding an account token in memory only; forwarding the conversation file; screen grabbing in capture mode; **ADR-032 (2026-11-28):** serving its session's clipboard read on a host (the stand-in on Linux; writing the clipboard on Windows and macOS hosts), still making no decision | Any decision (which account, sign-in kind or tools; retry or not; what to launch; which lifetime kind; whether a screen is ready; what a paste becomes); any pattern about a CLI's screen text; writing a token to disk or argv; the host's own login; its own install, update or health row (row 5); what conversation content means (row 10) | The session client only (frames); the CLI through its short-lived modes |
 | 5 | Machines (new) | Module in core plus a page | One record per machine, This computer always present (OS, shell, CLI paths, pinned host key, helper version and hash, last self-test); installing, checking, re-provisioning and removing the helper on Linux, macOS and Windows hosts; the helper store on This computer; helper health rows; ssh connection settings; the transport over which row 3 asks a machine what is running; the Machines page. It stores three per-machine values for their owners: the tool allow-list (row 7), the "use this host's own login" switch (row 6), the Tokenomics exclusion (row 10) | The session list (row 3; the page shows it and its buttons call row 3); session lifetime (rows 3 and 4); the allow or deny decision; which login a launch uses; what is indexed; launch specs | Local file copy for This computer; fixed-option ssh commands for remote machines |
 | 6 | Accounts | Module in core | Accounts managed once for local and remote: the registry; each account's sign-in kind; the token in the OS secure store on the app machine; per-account config folders for Standard login; which login a launch on a given machine uses; usage reads; the one in-use lease per account. It hands row 3 an account binding for a launch | Launching anything; carrying the token to the CLI (rows 3 and 4); a host's own CLI login files; a CLI's environment variable names (row 14); Codex accounts on a remote host until their probe passes | Session client (binding and lease); account web views; data workers for attribution |
 | 7 | Tool host (the MCP service) | Inside core, with a real health row | The tool router; which session is offered which tools; the remote default-deny decision and its allow-list rules; the tool entry points | The transport to the CLI and what a call sees while the app is away (row 4); session identity (the holder the call arrived on); the canvas store and the browser (row 12); starting reviewer processes (row 11) | Session client (tool frames); rows 11 and 12 by direct call |
-| 8 | Paste and Snap (new module) | Module in core plus the Snap overlay window | Image paste and Snap, local and remote, one path: the decision that the app takes the paste key when the clipboard holds an image; the limits table and the paste-folder cap; delivery by `file.put` to the session's holder, then asking row 3 to insert the returned path; the Snap overlay, the crop, and the macOS screen-recording permission check. Until the old paths are deleted it also runs today's delivery route for sessions still on them | Screen grabbing (row 4); text paste (rows 3 and 4); when and how a CLI takes typed text (row 14); the paste folder on disk and its deletion (row 4); any shared image library; other file kinds, drag and drop, annotation tools, window capture | Helper capture mode as a child process; session client |
+| 8 | Paste and Snap (new module) | Module in core plus the Snap overlay window | Image paste and Snap, local and remote, one path: the decision that the app takes the paste key when the clipboard holds an image; the limits table and the paste-folder cap; ~~delivery by `file.put` to the session's holder, then asking row 3 to insert the returned path~~ **ADR-032 (2026-11-28):** delivery through the CLI's own clipboard paste: on this computer the app writes the picture only when the clipboard does not already hold what the CLI reads, then asks row 3 to send the CLI's paste key; for a remote session it sends the picture to the holder by `file.put`, and the holder serves the CLI's clipboard read; the Snap overlay, the crop, and the macOS screen-recording permission check. Until the old paths are deleted it also runs today's delivery route for sessions still on them | Screen grabbing (row 4); text paste (rows 3 and 4); when and how a CLI takes typed text (row 14); the paste folder on disk and its deletion (row 4); any shared image library; other file kinds, drag and drop, annotation tools, window capture | Helper capture mode as a child process; session client |
 | 9 | Watchdog | In-process service in core | Limit, rate-limit and stop-failure detectors per CLI; reset-time parsing; whether and when to retry, and with what text; the sleep state shown to the user | The screen (row 4); whether the screen will take typed text (row 14); typing the retry (row 3); hook transport; other hook events | Session client (screen tail, last-output time, submit); row 13 (StopFailure) |
 | 10 | Data workers (session logging, usage index) | Two Electron utility processes, each under its own supervisor | `transcripts.db` and `tokenomics.db`; tailing local transcript files; whether the usage index runs at all and what it excludes; the bounded transcript walks; taking a Token session's conversation before its per-session folder is deleted; the intake of conversation content forwarded from a remote machine (size caps, content checks, its own store) | Session lifecycle; finding the local transcript path (row 13); carrying remote content (rows 3 and 4); deleting a session folder (row 4); storing the per-machine exclusion (row 5); prices and model data | Core over message ports |
 | 11 | App-wide services (Sentinel, Insights, cloud agents, reviewers, Ask Conductor, model registry, pull request integration, vendor status) | Modules in core, one service row each | Their own schedule, inputs and results. Each asks for a one-shot run by handing a launch spec to row 3 | Starting processes (helper run mode); account rules (row 6); reading a screen or deciding it is ready (rows 4 and 14); anything per session | Session client; row 13; Accounts; network |
-| 12 | App-bound views (canvas store, canvas marker queue, vision browser, browser pane, account web sessions, artifacts viewer) | Core and renderer, tied to Electron | Canvas versions, review notes and their serving; the canvas marker queue, held until the turn boundary; the headless browser and its targets; vision screenshot files, handed to the calling session through row 8's route; web views and their navigation rules | Reach into a session (rows 3 and 7); typing a marker or deciding the prompt is ready (rows 3 and 14); file transfer (row 8) | Tool host by direct call; session client; rows 8 and 13; renderer |
+| 12 | App-bound views (canvas store, canvas marker queue, vision browser, browser pane, account web sessions, artifacts viewer) | Core and renderer, tied to Electron | Canvas versions, review notes and their serving; the canvas marker queue, held until the turn boundary; the headless browser and its targets; vision screenshot files, ~~handed to the calling session through row 8's route~~ **ADR-032 (2026-11-28):** handed to the calling session as the parity table's Vision screenshots row says (ADR-030's target, unchanged), not through row 8's paste route; web views and their navigation rules | Reach into a session (rows 3 and 7); typing a marker or deciding the prompt is ready (rows 3 and 14); file transfer (row 8) | Tool host by direct call; session client; rows 8 and 13; renderer |
 | 13 | Session signals (status and hook consumers) | Module in core. Until the old path is deleted it also owns the hooks gateway utility process | What a status frame and a hook frame mean: statusline data, the attention indicator, the hook event stream and its per-session ring, redaction, turn boundaries. It answers no permission: the app answers none today (the parity table's "Permission answers from the app"), and answering one, on This computer only, would need protocol change 3 first. It hands the transcript path to row 10, StopFailure to row 9 and the turn boundary to row 12 | How frames arrive or are queued (rows 3 and 4); which fields a CLI's payload keeps (row 14); limit detection and retry (row 9); drawing (row 2) | Session client; rows 9, 10 and 12; renderer through core IPC |
-| 14 | Provider packages (Claude, Codex) | Modules in core plus shared pure code | Everything that is knowledge about one CLI: launch arguments, environment variable names, provider files; the managed-launch project gate; which status and hook fields are kept; how to read that CLI's screen for the ready state and how to submit text; whether that CLI attaches an inserted image path like its own paste; the stricter check on a remote-drawn screen; the text of the status strip controls | Sessions, launching or writing (row 3); the screen (row 4); limit detectors and retry (row 9); which account or sign-in kind (row 6); the paste decision (row 8) | Called by rows 3, 6, 8, 9 and 13; no process, no transport |
+| 14 | Provider packages (Claude, Codex) | Modules in core plus shared pure code | Everything that is knowledge about one CLI: launch arguments, environment variable names, provider files; the managed-launch project gate; which status and hook fields are kept; how to read that CLI's screen for the ready state and how to submit text; ~~whether that CLI attaches an inserted image path like its own paste~~ **ADR-032 (2026-11-28):** that CLI's image paste key per OS (read from the CLI's own keybindings where it has them), the image formats its clipboard read takes, and whether it reads a copied file itself; the stricter check on a remote-drawn screen; the text of the status strip controls | Sessions, launching or writing (row 3); the screen (row 4); limit detectors and retry (row 9); which account or sign-in kind (row 6); the paste decision (row 8) | Called by rows 3, 6, 8, 9 and 13; no process, no transport |
 
 ## Owner decisions
 
@@ -113,17 +113,17 @@ Rows are numbered so that "does not own" can name the owner.
   The third-party Snap package is deleted either way.
 - **D4 Snap scope.** Whole screen or a rectangle. No annotation tools and no
   window capture.
-- **D5 Paste.** Images and text. With an image on the clipboard the app takes
+- **D5 Paste.** Images and text. ~~With an image on the clipboard the app takes
   the paste key, sends the image to the holder's per-session paste folder and
   inserts the path so the CLI attaches it, the same local and remote. A probe
   first checks that Claude Code and Codex attach an inserted path like their
-  own paste; a CLI that does not keeps its own paste on This computer. Text
+  own paste; a CLI that does not keeps its own paste on This computer.~~ **Images, ADR-032 (2026-11-28):** superseded by ADR-032's decisions 1 to 6: every picture goes in through the CLI's own clipboard paste, on this computer and on remote machines, and no path is typed or inserted anywhere. The rest of D5 stands. Text
   paste goes through the holder, chunked on whole characters. The paste folder
-  is capped and deleted when the session ends, and the shared screenshots
-  library goes away. Other file kinds and drag and drop are not in 2.1.3.
+  is capped and deleted when the session ends (on hosts only, ADR-032), and the shared screenshots
+  library goes away (declared exception 13 keeps it until the remote deletion). Other file kinds and drag and drop are not in 2.1.3.
 - **D6 Remote gains.** Remote sessions get the hook event stream, canvas notes
-  at the turn boundary, Watchdog StopFailure, and image paste into plain and
-  partner terminals. The event stream is internal plumbing with no page.
+  at the turn boundary, Watchdog StopFailure, and ~~image paste into plain and
+  partner terminals~~ (**ADR-032, 2026-11-28:** Alt+V reaches the program in a plain or partner terminal as a key, and no path is typed). The event stream is internal plumbing with no page.
 - **D7 Accounts.** Managed once in the app, for local and remote. Each account
   has a sign-in kind.
   - Token: a long-lived token from the CLI's own setup-token flow, kept in the
@@ -247,9 +247,9 @@ cut over.
 | Canvas review markers | Claude: the renderer's terminal reads the prompt and types. Codex: a second headless pane in main (from 2.1.3-beta.14, the holder's screen for a held session) | Claude: the same renderer typing, with no turn boundary | The marker queue calls `submit`; it works with no window attached; the turn boundary comes from hook frames on both (D6) |
 | Codex composer submit | A headless pane in main for every local Codex session; from 2.1.3-beta.14 a held one (agent sessions' setting on) is read from the holder's screen and has no pane | Not applicable | The composer rule reads the holder's screen; the pane is deleted |
 | Status strip controls (Compact, model, effort) | Typed by the renderer after it reads its own terminal | The same (not checked separately for SSH) | The control calls `submit` against the holder's screen |
-| Canvas rendering of project files | The project folder and the session worktree | None; inline content only | Unchanged (declared exception 3) |
-| Image paste | Focus outside the terminal: the app saves the image and types the path. Focus in the terminal: the CLI pastes it itself | Claude: a prompt asking the agent to call a tool. Plain and partner terminals: a hint only | D5: the app takes the key wherever the focus is; identical local and remote, for every session kind |
-| Snap | A third-party overlay and native add-on; rectangle and window capture | The same capture, then the tool prompt route | The helper's capture mode and our overlay; whole screen or a rectangle (D3, D4); delivered as an image paste |
+| Canvas rendering of project files | The project folder and the session worktree | None; inline content only | ~~Unchanged (declared exception 3)~~ **ADR-032 (2026-11-28):** remote canvas files come in 2.1.3-beta.28 (planned; declared exception 3 reopened) |
+| Image paste | Focus outside the terminal: the app saves the image and types the path. Focus in the terminal: the CLI pastes it itself | Claude: a prompt asking the agent to call a tool. Plain and partner terminals: a hint only | ~~D5: the app takes the key wherever the focus is; identical local and remote, for every session kind~~ **ADR-032 (2026-11-28):** the CLI's own clipboard paste wherever the focus is: the app writes the clipboard on this computer, the helper serves or writes it on a remote machine; no path anywhere |
+| Snap | A third-party overlay and native add-on; rectangle and window capture | The same capture, then the tool prompt route | The helper's capture mode and our overlay; whole screen or a rectangle (D3, D4); ~~delivered as an image paste~~ **ADR-032 (2026-11-28):** delivered as the CLI's own clipboard paste; the picture stays on this computer's clipboard |
 | Recent images and storyboard | None. The Recent menu was rendered nowhere and it alone sent a storyboard; the menu, its sender and the screenshot:listRecent chain were deleted in 2.1.3-beta.19 (aicc_planning#435) | None | None planned |
 | Other file kinds and drag and drop | None | None | Not in 2.1.3 (D5) |
 | Partner terminal | A second shell PTY in main | A second ssh terminal that types a `cd` line | A second holder in the session's folder on the same machine; image paste reaches it (D6) |
@@ -262,7 +262,7 @@ cut over.
 | SSH post-connect command | Not applicable | A saved command typed after connect, behind an overlay of buttons | D8: run through the login shell in the session's terminal, then the CLI in the same shell; the overlay is removed |
 | Remote host kinds | Not applicable | Live packs for Linux and macOS hosts and a prototype Windows path | The helper on Linux (x64, arm64, 32-bit ARM), macOS and Windows hosts (D10); anything else is a labelled plain terminal |
 | App accounts | Windows and Linux, by moving the home folder; off on macOS | The host's own login | D7: Token or Standard login per account; remote by Token in the launch frame, or the host's own login by the per-machine switch |
-| Codex sessions | Yes | Refused | Remote Codex stays in the feature queue (declared exception 2) |
+| Codex sessions | Yes | Refused | ~~Remote Codex stays in the feature queue (declared exception 2)~~ **ADR-032 (2026-11-28):** Codex remote sessions come in 2.1.3-beta.24 (planned; declared exception 2 reopened) |
 | Plain terminal | A shell PTY in main | An ssh terminal | The holder; an unsupported host opens as a labelled plain terminal |
 | First-run setup terminal | Its own PTY in the setup handlers | Not applicable | Through the helper, or the one PTY the app keeps (declared exception 10) |
 
@@ -282,8 +282,8 @@ slice's adversarial pass.
    remote keep-list is unchanged except for change 13.
 5. **Screen reads.** `screen.tail` and `screen.read`, both read-only.
 6. **One-shot run mode**, beside `external` and `held`.
-7. **`file.put` on This computer.** The per-session cap and the removal of the
-   paste folder at session end apply locally too.
+7. **`file.put` on This computer.** ~~The per-session cap and the removal of the
+   paste folder at session end apply locally too.~~ **ADR-032 (2026-11-28):** not needed for paste. `file.put` is built for remote sessions only, and no pasted or Snapped picture goes through a paste folder on This computer.
 8. **Large writes.** The holder chunks a write on whole characters.
 9. **Away behaviour.** A bounded queue for status and hook events; the mcp
    relay holds a call about 30 seconds, then answers the fixed updating
@@ -333,16 +333,16 @@ slice's adversarial pass.
    credits need Standard login (probe P12, result under Probes). Codex on a remote host uses the
    host's sign-in until probe P14 passes. If probe P17 fails, Standard login
    keeps the home move on Windows and Linux, so two binding methods remain.
-2. Codex over SSH stays in the feature queue.
+2. ~~Codex over SSH stays in the feature queue.~~ **Reopened by ADR-032 (2026-11-28):** Codex over SSH is in 2.1.3 (the owner's answer to Q7); Codex remote sessions are planned for 2.1.3-beta.24.
 3. Canvas rendering of a remote machine's project files waits for a canvas
-   source seam. Remote canvas content is inline only.
+   source seam. Remote canvas content is inline only. **Reopened by ADR-032 (2026-11-28):** remote canvas files are in 2.1.3, planned for 2.1.3-beta.28; until then this holds.
 4. The remote hook payload is cut down, so a permission answer from the app
    could only be for This computer; the app gives none today (the parity
    table). A remote session asks in its own terminal.
 5. A truly unsupported host (for example FreeBSD), or a host that refuses the
    upload, opens as a labelled plain terminal with no features.
-6. Paste covers images and text only. If probe P11 fails for one CLI, that CLI
-   keeps its own paste on This computer.
+6. Paste covers images and text only. ~~If probe P11 fails for one CLI, that CLI
+   keeps its own paste on This computer.~~ **ADR-032 (2026-11-28):** removed; every CLI uses its own paste.
 7. Snap is whole screen or a rectangle. Linux capture stays experimental. The
    old engine stays one click away on Windows and Linux until the old Snap
    package is deleted.
@@ -359,7 +359,7 @@ slice's adversarial pass.
 12. A session already under tmux at the remote cutover stays on the old path
     until it ends (parked question Q10).
 13. The shared screenshots folder lives until the remote deletion, because the
-    old remote route uses it until then. Helper sessions never write to it.
+    old remote route uses it until then. ~~Helper sessions never write to it.~~ **ADR-032 (2026-11-28):** Helper sessions never read it; Snap saves its picture there for every session until the remote deletion, for the C2 proof and the tool route.
 
 ## SDLC targets
 
@@ -417,14 +417,14 @@ their questions, gates and fallbacks are restated for the slice plan.
 | P1 | Does a helper status frame arrive within 2 seconds on a host where the statusline is missing today? | Remote sessions through the helper | That machine stays on the old path until the cause is found |
 | P2 | Do saved passwords pass through askpass with the Windows ssh client? | Adding a remote machine | The in-process SSH library ADR-029 names as the fallback |
 | P3 | Does a holder outlive the ssh logout that started it? | Remote sessions through the helper | That host kind is labelled "no re-attach" and resumes by conversation id |
-| P4 | Does a CLI on a remote host attach an image from an inserted path? | Remote paste | The host transfer tool stays for remote sessions, through the helper relay |
+| P4 | **Withdrawn by ADR-032 (2026-11-28), replaced by its PR1.** ~~Does a CLI on a remote host attach an image from an inserted path?~~ | ~~Remote paste~~ | ~~The host transfer tool stays for remote sessions, through the helper relay~~ |
 | P5 | Can sudo be answered without a terminal, through askpass frames? | Containers and sudo | The user answers the sudo prompt in the session's own terminal |
 | P6 | Is the `PATH` of an ssh exec the same as the login `PATH`? | One-shot commands only | CLI paths come from a login-shell lookup in the probe report |
 | P7 | On Windows, do a detached holder and its console child survive app exit and the installer? | Local sessions through the holder; update without restart | The helper store is excluded from the installer's close step; or the system console host is used |
 | P8 | The same survival question on macOS and Linux | Update without restart | On that system an update keeps today's end-and-resume behaviour and says so |
 | P9 | Can a signed helper started by the app capture the screen on macOS, and does a denied permission return a clean error? | Snap replaced | Electron's `desktopCapturer` behind our overlay on macOS |
 | P10 | What is the root cause of the macOS Snap crash? | The Snap engine on macOS | Build with the current library behind a capture interface and the permission check first; switch engine only on a second crash |
-| P11 | Do Claude Code and Codex attach an image from an inserted path like their own paste, as a bracketed paste and as typed text? | Image paste, local and remote | That CLI keeps its own paste locally and the tool route remotely |
+| P11 | Do Claude Code and Codex attach an image from an inserted path like their own paste, as a bracketed paste and as typed text? | ~~Image paste, local and remote~~ **ADR-032 (2026-11-28):** nothing; its result (below) is kept as a record | ~~That CLI keeps its own paste locally and the tool route remotely~~ |
 | P12 | On a Token session: are the rate limits in the statusline data, what does the usage read answer, and is Remote Control unavailable? | Token sign-in, and the default kind | Token accounts show "usage not available" and Standard login is the default |
 | P13 | On macOS, where does Claude Code keep its account file under a per-account config folder, and do keychain entries separate? | Standard login by config folder on macOS | macOS multi-account is delivered by the Token kind only |
 | P14 | Can one centrally held Codex sign-in be used on more than one machine? | Central Codex accounts on a remote host | Codex on a remote host uses the host's sign-in |
@@ -1055,9 +1055,9 @@ slice named.
   Default: per session only, deleted when the session ends. (Before local image
   paste.) Recent images and storyboards left this question in 2.1.3-beta.19:
   the menu behind both was deleted (aicc_planning#435).
-- **Q7** Is Codex on remote machines part of 2.1.3? Default: no. The helper is
-  the same for every CLI, so it is one provider slice later. (Before remote
-  sessions through the helper.)
+- **Q7** Is Codex on remote machines part of 2.1.3? ~~Default: no. The helper is
+  the same for every CLI, so it is one provider slice later.~~ (Before remote
+  sessions through the helper.) **Answered by the owner, 2026-11-28 (ADR-032):** yes, "it is all 2.1.3". Codex remote sessions are planned for 2.1.3-beta.24, and declared exceptions 2 and 3 are reopened; their builds come in their own betas.
 - **Q8** Does a Token session see the machine's own skills, agents, memory and
   past conversations? Default: yes; only the sign-in is private to the
   session. (Before Token sign-in.)
