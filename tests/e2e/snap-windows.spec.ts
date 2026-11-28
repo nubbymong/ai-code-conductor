@@ -1552,6 +1552,13 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
 //     code before the gate is dispatched. A CLI that shows no placeholder for
 //     ESC v at 3 busy processes is diagnosed and the owner told; the path
 //     does not come back.
+//     READ (run 46128921672, a warm PowerShell cache): Claude Code 2.1.332
+//     926, 914, 1030 and 1250 ms after ESC v at 0 to 3 busy processes, no
+//     placeholder for Ctrl+V on Windows; Codex 0.157.1 31 to 76 ms after
+//     either key; every turn carried the picture by its decoded pixels. PW2
+//     (the same run and runs 46126339163, 46127035163): one write left PNG,
+//     CF_DIBV5, CF_BITMAP and CF_DIB, and GetImage read it. So the wait is
+//     2 x 1250 ms = 2.5 s.
 //   GATE (one job, the Windows runner, --retries=0): the load grader at 0,
 //     1, 2 and 3 busy processes (node, normal priority), each early and late
 //     (GRADES). C2 on the path route (the test switch, CCC_E2E_PATH_ROUTE=1,
