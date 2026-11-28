@@ -5,7 +5,7 @@ import type { CoreToolId, CommandBarOverflow } from '../../stores/commandBarStor
 import type { SessionCapabilities } from '../../lib/session-capabilities'
 import { COMMAND_SWATCHES, swatchesFor, DEFAULT_COMMAND_COLOR } from '../../lib/command-swatches'
 import { COMMAND_ICON_KEYS, CommandIcon } from '../command-icons'
-import { chipTitle } from './layout'
+import { chipTitle, sendToAllOffer } from './layout'
 import { isContextMenuGesture } from '../../lib/pointer'
 import { ON_BRAND } from '../ui/Dialog'
 
@@ -128,8 +128,8 @@ export function MenuItem({ onClick, children, danger, disabled, hint, icon, test
 }
 
 export function MenuRule() { return <div className="h-px my-1 mx-2" style={{ background: 'var(--border-strong)' }} /> }
-export function MenuFoot({ children }: { children: React.ReactNode }) {
-  return <div className="px-3 pt-1 pb-1 text-[10.5px]" style={{ color: 'var(--text-muted)' }}>{children}</div>
+export function MenuFoot({ children, testId }: { children: React.ReactNode; testId?: string }) {
+  return <div className="px-3 pt-1 pb-1 text-[10.5px]" style={{ color: 'var(--text-muted)' }} data-testid={testId}>{children}</div>
 }
 
 const I = {
@@ -147,6 +147,8 @@ const I = {
   globe: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></svg>,
   lock: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>,
   warn: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" /></svg>,
+  /** The broadcast pill's mark (chips.tsx Paths.broadcast). */
+  broadcast: <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 12h.01M8.5 8.5a5 5 0 0 0 0 7M15.5 8.5a5 5 0 0 1 0 7M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14" /></svg>,
 }
 export const MenuIcons = I
 
@@ -234,6 +236,12 @@ export interface UserButtonMenuProps {
   returnFocusTo?: HTMLElement | null
   /** Why the button cannot run in THIS session (D5) -- Run is then disabled here too. */
   cannotRunReason?: string | null
+  /** aicc_planning#450: "Send to all sessions…", a one-off broadcast of this
+   *  button's prompt through the broadcast chooser. The item shows where
+   *  sendToAllOffer offers it, disabled with its reason where it cannot be
+   *  chosen; absent, with no item, when the bar has no way to send (no prompt
+   *  path in the preload). */
+  onSendToAll?: () => void
 }
 
 export function UserButtonMenu(p: UserButtonMenuProps) {
@@ -242,6 +250,7 @@ export function UserButtonMenu(p: UserButtonMenuProps) {
   const hasArgs = !isPage && !!(cmd.defaultArgs?.length || cmd.lastCustomArgs?.length)
   const isGlobal = cmd.scope === 'global'
   const runDisabled = !!p.cannotRunReason
+  const sendToAll = p.onSendToAll ? sendToAllOffer(cmd, p.caps) : null
   return (
     <Menu x={p.x} y={p.y} onClose={p.onClose} ariaLabel={`${cmd.label} menu`} returnFocusTo={p.returnFocusTo} testId="command-menu">
       {/* The header IS the tooltip (D4): title + " — " + sub. Slice the label
@@ -253,6 +262,8 @@ export function UserButtonMenu(p: UserButtonMenuProps) {
       <MenuItem onClick={p.onRun} icon={I.play} disabled={runDisabled} hint={runDisabled ? "can't run here" : undefined} testId="menu-run">{isPage ? 'Open' : 'Run'}</MenuItem>
       {!isPage && <MenuItem onClick={p.onRunWithArgs} icon={I.args} hint={runDisabled ? "can't run here" : 'Ctrl+click'} disabled={!hasArgs || runDisabled} testId="menu-run-args">Run with arguments…</MenuItem>}
       {runDisabled && <MenuFoot>{p.cannotRunReason}</MenuFoot>}
+      {sendToAll && <MenuItem onClick={p.onSendToAll} icon={I.broadcast} disabled={!!sendToAll.blockedBy} hint={sendToAll.blockedBy ? "can't send" : undefined} testId="menu-send-all">Send to all sessions…</MenuItem>}
+      {sendToAll?.blockedBy && <MenuFoot testId="menu-send-all-why">{sendToAll.blockedBy}</MenuFoot>}
       <MenuRule />
       <MenuItem onClick={p.onEdit} icon={I.edit} testId="menu-edit">Edit…</MenuItem>
       <MenuItem onClick={p.onDuplicate} icon={I.copy} testId="menu-duplicate">Duplicate</MenuItem>
