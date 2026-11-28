@@ -1189,20 +1189,19 @@ closes (the app pings every 15 s). Each limit is for the whole frame: one sent
 a byte at a time must still be whole in time. (One exception: a frame begun
 within a picture's chunk wait, the session's pictures, below.) A frame's JSON
 is at most 4 KiB before the `hello.ack`, at most 64 KiB once the session is
-launched or a launch
-is under way (on a connection that acked `mcp`, which may carry a tool result,
-16 MiB then too), and otherwise 16 MiB as section 6 allows: a larger one is
-`bad-frame` and a close, refused on its header before its payload is read, and
-a payload's buffer grows only as its bytes arrive. At most 16 connections at
-once: the next one gets the hello, `busy`, and is closed. When the holder
-closes a connection after a last message (an `error`, `term.detached`,
-`term.ended`, `term.exit`), it stops writing first, so the app reads that
-message and then the end of the stream; the app then closes its end (the
-holder cuts the connection 2 s later regardless). A write that has not finished
-in 5 s closes the connection; the 5 s are for the whole message, however slowly
-the app reads it. A type the connection does not allow gets `unknown-type` and
-a close; 20 `bad-field` or `too-large` replies in 60 s are allowed, the next
-one closes.
+launched or a launch is under way (on a connection that acked `mcp`, which
+may carry a tool result, 16 MiB then too), and otherwise 16 MiB as section 6
+allows: a larger one is `bad-frame` and a close, refused on its header before
+its payload is read, and a payload's buffer grows only as its bytes arrive. At
+most 16 connections at once: the next one gets the hello, `busy`, and is
+closed. When the holder closes a connection after a last message (an `error`,
+`term.detached`, `term.ended`, `term.exit`), it stops writing first, so the
+app reads that message and then the end of the stream; the app then closes its
+end (the holder cuts the connection 2 s later regardless). A write that has
+not finished in 5 s closes the connection; the 5 s are for the whole message,
+however slowly the app reads it. A type the connection does not allow gets
+`unknown-type` and a close; 20 `bad-field` or `too-large` replies in 60 s are
+allowed, the next one closes.
 
 Which errors close the connection here (for the local transport this replaces
 the last column of section 8's table):
