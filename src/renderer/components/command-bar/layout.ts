@@ -7,7 +7,7 @@
 import type { CustomCommand, CommandSection } from '../../stores/commandStore'
 import { bandMembers, type CommandBand } from '../../lib/command-bands'
 import { describeTarget, type SessionCapabilities, type CommandTarget } from '../../lib/session-capabilities'
-import { isBroadcastButton } from '../../lib/commandBroadcast'
+import { isBroadcastButton, oneOffBroadcastBlocker } from '../../lib/commandBroadcast'
 
 /** Where a button's text goes. 'agent' = the agent in the main pane; 'main-shell' =
  *  the main pane when it IS a shell; 'partner' = the partner shell; 'page' = the browser. */
@@ -60,6 +60,33 @@ export function inapplicability(cmd: CustomCommand, caps: SessionCapabilities): 
   if (kind === 'shell' && target === 'claude' && !caps.mainPaneIsShell) return { reason: 'This shell line was made for a terminal-only session; here the main pane is an agent' }
   if (cmd.hasSecretArg && !caps.canDeliverSecret(target)) return { reason: 'Secret values reach shells on this PC only' }
   return null
+}
+
+/** aicc_planning#450: what the right-click menu's "Send to all sessions…" offers. */
+export interface SendToAllOffer {
+  /** Why it cannot be chosen in this session, or null when it can. */
+  blockedBy: string | null
+}
+
+/**
+ * aicc_planning#450 (2.1.3-beta.21, plan block 7): the right-click menu's
+ * "Send to all sessions…" for this button in THIS session, a one-off
+ * broadcast through the same chooser, send path and note as a broadcast
+ * press; the button's own option does not change. Null when the menu does
+ * not offer it: not a send-a-prompt button (a shell line, a page), or a
+ * broadcast button, whose own press already asks. Else why it cannot be
+ * chosen here, as the Run item says why a button cannot run: Ask Conductor
+ * and a terminal-only tab send to no other session, and only a prompt with no
+ * arguments goes (oneOffBroadcastBlocker, so a Session prompt goes too). Its
+ * enabled state matches CommandBar's canBroadcastOnce, the check at the
+ * chooser's answer; keep the two in step. This one also hides the item on a
+ * broadcast button, a shell line and a page.
+ */
+export function sendToAllOffer(cmd: CustomCommand, caps: SessionCapabilities): SendToAllOffer | null {
+  if (effectiveKind(cmd, caps) !== 'prompt' || cmd.target === 'partner' || isBroadcastButton(cmd)) return null
+  if (caps.isAsk) return { blockedBy: 'Ask Conductor cannot send to other sessions.' }
+  if (!caps.agent) return { blockedBy: 'Only an agent session can send to other sessions.' }
+  return { blockedBy: oneOffBroadcastBlocker(cmd) }
 }
 
 export interface SectionGroup {

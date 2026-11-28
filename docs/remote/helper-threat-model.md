@@ -49,7 +49,7 @@ the two share one home folder (3.4). Each claim holds from its step in 2.1.
 | Host folders per device id; clean-up and removal only behind this install's marker, another install's folder read-only to the app; sessions `elsewhere` or `unknown` never ended or removed by the app, an `unmanaged` or `orphaned` one only on the user's explicit end, shown by the CLI's stopped state (protocol 7); removal reads a session as dead only on positive proof | fixed scripts, app | R2; states R6, R9 |
 | Fixed ssh options, minimal environment and per-connection pins; on a terminal `-e none` and the environment first, the rest later | app | R2 (execs), R6 (side channel); terminal R2, R10 |
 | Saved ssh passwords only through askpass, under its release rules | app | R2 (execs), R10 (terminal) |
-| Host home recorded once; the only pasted host text is a checked upload path; remote terminal: no clipboard read or write, links `http` or `https` only, on a click | app | R2 |
+| Host home recorded once; no host text is pasted or typed into a terminal (ADR-032, from 2.1.3-beta.21; before it, the only pasted host text was a checked upload path); remote terminal: no clipboard read or write in answer to anything the host sends (the user's own Alt+V or Snap is 3.3's ADR-032 row), links `http` or `https` only, on a click | app | R2; ADR-032 rows from 2.1.3-beta.21 |
 | Remote allow-list: tools list filtered, argument rules, no local render roots, inline canvas content under the egress-confined policy, remote-session flag | app (Conductor server) | R2 (route before R8), R8 (side channel) |
 | Browser tools for a remote session: `http` and `https` only, filtering proxy, throwaway context | app | R8 (refused before) |
 | Device records under a MAC, the only store of host-key pins; consent re-checked against pin and hash | app | R2 (pins), R3 (records) |
@@ -205,10 +205,38 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
   a hello naming another `sid` fails. Host text has control and format characters
   removed wherever it is shown.
 - **The terminal view.** Not parsed (from R11). For a remote terminal the app
-  neither reads nor writes the local clipboard (no OSC 52) and cleans window
-  titles. Links open only on a click, only `http` or `https` after
-  normalisation, through one checked open path, showing the real target when an
-  OSC 8 link's text differs (tested with `file:` and UNC links).
+  neither reads nor writes the local clipboard in answer to anything the host
+  sends (no OSC 52); the user's own Alt+V or Snap is ADR-032's row (below). The
+  app cleans window titles. Links open only on a click, only `http` or `https`
+  after normalisation, through one checked open path, showing the real target
+  when an OSC 8 link's text differs (tested with `file:` and UNC links).
+- **A picture from this computer to a host** (ADR-032, from 2.1.3-beta.21).
+  Only on the user's own key press (Alt+V, or Ctrl+V with only a picture on
+  the clipboard) or Snap, and only for the one session on screen, the app reads
+  this computer's clipboard (for Snap, takes main's own capture) and sends a
+  picture, never text, to that session's
+  holder by `file.put` on the tab's own connection (protocol section 15).
+  Nothing the host sends starts it. The host gets the picture's bytes and its
+  hash and never names a local path; the reply carries the hash only, and no
+  path is typed into the terminal. The paste key that follows is one raw write
+  from the provider table, never inside a bracketed paste. For a helper tab the
+  key is read from the host's own keybindings file and mapped through a fixed
+  chord-to-bytes table, so a host picks at most a chord from that table, never
+  raw bytes.
+- **The stand-in serving it** (ADR-032, from 2.1.3-beta.21). On a Linux host
+  the helper's clipboard stand-in (protocol section 15) serves the picture to
+  the CLI. It is reached through a two-line fixed sh script per name (`xclip`,
+  `wl-paste`) in `sessions/<sid>/bin/` (folder 0700, each script 0700), put
+  first on the CLI's `PATH`, which runs the helper by absolute path for that
+  one session. It answers only the list and read shapes Claude Code sends,
+  only with the current picture from its own session's `paste/`, and only an
+  image type; it reads no other file, and touches no host clipboard or display.
+  Anything else goes to the real tool by the absolute path recorded at launch,
+  never through `PATH`, or exits non-zero. Any process of the session's user
+  on that host can read the current picture by running `xclip` in that
+  session, as the agent can on a desktop: the same user, the same trust as the
+  session. The picture stays in the session folder until the next picture or
+  the session's end.
 
 ### 3.4 Other users, shared homes and containers
 
@@ -298,9 +326,10 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 
 | Class of tool | For a remote session |
 | --- | --- |
-| Reading the app's screenshot or other local folders; script evaluation in a browser; local accounts, other sessions, local files or settings | not allowed (remote images arrive by upload, R2 and R7) |
+| Reading the app's screenshot or other local folders; script evaluation in a browser; local accounts, other sessions, local files or settings | not allowed (remote images arrive by `file.put` on the session's own connection, protocol section 15, ADR-032; the R2 and R7 uploads were not built) |
 | Opening, reading or driving a page (every navigate or open tool, the in-app browser's included) | from R8 only, in that session's own browser context, through the filtering proxy below. After URL normalisation the scheme is `http` or `https` only; any other (`file`, `chrome`, `view-source`, `data`, `javascript`, `blob`, `filesystem`, `about` other than `about:blank`) is refused before the browser sees it, and page-initiated navigations to them are refused in the remote context |
 | Showing on the canvas; its review notes | inline content only: no local path, no local URL, no local render root; served only under the egress-confined design policy (connections only to the app, WebRTC blocked, DNS prefetch off, resource hints stripped, including ones a script adds); review notes on that session's own canvas only |
+| `codex_review` from a Claude Code helper tab whose machine record names Codex (from 2.1.3-beta.21, aicc_planning#446) | runs on the host, never on this computer: one exec of the helper's one-shot run mode (protocol section 4) in the tab's working folder there, on that machine's own Codex sign-in. The change it reviews is read on the host by a fixed script and passes through main as capped data, never written to disk here and never opened as a path; no local path reaches it. The model and the effort pass ADR-031's allow-lists, against the host's own Codex list, before any exec; a working folder that is the host home or above is refused, as locally. It joins with a fixture row and argument rules, as any new tool |
 
 - **The browser.** All of a remote session's browser traffic goes through an
   app-run filtering proxy that resolves each name itself, connects to the
@@ -330,9 +359,11 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 ### 3.6 Uploaded files
 
 - The app picks the name; the file cannot follow or replace a link; caps, hash
-  check and partial-file removal apply; the path must equal the recorded home
-  plus the expected folder before it is pasted (protocol 8, 13). `paste/` goes
-  with the session and the device, and the paste notice says so.
+  check and partial-file removal apply (protocol 8, section 15's `file.put`).
+  From 2.1.3-beta.21 (ADR-032) the reply carries the hash only and nothing is
+  pasted: no host path is typed into any terminal, and the CLI reads the
+  picture through the stand-in (3.3). `paste/` goes with the session and the
+  device, and the paste notice says so.
 
 ### 3.7 sudo answers
 
@@ -371,8 +402,10 @@ rollback returns to the earlier beta's rows, and every row has a negative test.
 
 ### 3.9 Consent, removal and clean-up
 
-- R2 and R3 place no helper. R2 writes only pasted images and the marker under
-  `~/.aicc/<did>/`; outside `~/.aicc`, R3's setup writes only the files it
+- R2 and R3 place no helper. R2 writes only the marker under `~/.aicc/<did>/`
+  (its image upload was not built; from 2.1.3-beta.21 a picture arrives by
+  `file.put` into `sessions/<sid>/paste/`, protocol section 15); outside
+  `~/.aicc`, R3's setup writes only the files it
   records in the device record, backing up any it replaces (protocol 13).
 - The helper is placed only after the user agrees (ADR decision 2) on a screen
   that also names the folder-trust edit in plain words. Consent is per target;
