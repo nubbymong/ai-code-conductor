@@ -37,11 +37,11 @@ const SHA = 'a'.repeat(64)
 const MACHINE: RemoteMachineRecord = {
   did: '0123456789abcdef0123456789abcdef', host: 'rocky.lan', port: 22, user: 'nick', label: 'Rocky', addedAt: 1,
   os: 'Linux', arch: 'x86_64', home: '/home/nick', shell: '/bin/bash', shellIsSh: true, claudePath: '/home/nick/.local/bin/claude',
-  path: '/home/nick/.local/bin:/usr/bin:/bin', lang: null, helper: { version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
+  path: '/home/nick/.local/bin:/usr/bin:/bin', lang: null, helper: { path: 'linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, folder: `0.1.0-${SHA.slice(0, 12)}` }, check: { at: 1, ok: true },
 }
 const HELPER: RemoteHelperCommands = remoteHelperCommands(MACHINE, remoteSessionId('kb-tab'))
 const ACCOUNT_DIR = '/home/nick/.aicc/accounts/p-0123456789abcdef'
-const opts = (over: Partial<RemoteLaunchOptions> = {}): RemoteLaunchOptions => ({ cwd: '/home/nick/work', settings: null, tools: false, ...over })
+const opts = (over: Partial<RemoteLaunchOptions> = {}): RemoteLaunchOptions => ({ reconnect: false, cwd: '/home/nick/work', settings: null, tools: false, ...over })
 const CTRL_V = '\u0016'
 const ESC_V = '\u001bv'
 
