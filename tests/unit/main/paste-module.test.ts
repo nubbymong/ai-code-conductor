@@ -24,7 +24,10 @@
 //  - Snap's token is taken for the press's own session (review round 1,
 //    R1-2).
 //  - The session's account folder (the profile it spawned under) reaches
-//    the table.
+//    the table. With none, this computer's own config folder is read, and
+//    here that is a scratch folder of this file's own (CLAUDE_CONFIG_DIR
+//    pointed at it before every test), never the real one: red with that
+//    line removed (the default ESC v, not the scratch folder's Ctrl+G).
 //  - The path route behind the test switch: the line, and nothing written
 //    or typed.
 // Red on 0c54a1c6: no such module. Mutants this must catch: a write when the
@@ -42,7 +45,9 @@
 // session's account folder is built the same way since the audit after
 // 7e068f5e: the table joins it to its keybindings file, and on macOS and
 // Linux a joined Windows-shaped folder is a relative path, not the folder.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -68,6 +73,17 @@ const SHOTS = join(parse(process.cwd()).root, 'res', 'screenshots')
 const SNAP_FILE = join(SHOTS, 'screenshot-2026-11-28-101500.jpg')
 /** A session's account folder, in this OS's own shape, as main's profile folders are. */
 const ACCOUNT_DIR = join(parse(process.cwd()).root, 'acct', 'one')
+/**
+ * This computer's own Claude Code config folder, for a session with no
+ * account folder (accountDir null: claudeConfigDirOf reads CLAUDE_CONFIG_DIR,
+ * else ~/.claude): a scratch folder of this file's own in the worker's temp
+ * folder, which CLAUDE_CONFIG_DIR names before every test and which holds no
+ * keybindings file unless a test writes one. So those tests never read this
+ * computer's real config folder, nor a keybindings file another test file
+ * left in the worker's shared home.
+ */
+const OWN_CONFIG = mkdtempSync(join(tmpdir(), 'paste-module-claude-'))
+let configBefore: string | undefined
 const ESC_V = '\u001bv'
 
 let where: PasteSessionWhere | null
@@ -105,6 +121,9 @@ beforeEach(() => {
   pathRoute = false
   keyCtx = []
   accountDir = null
+  configBefore = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = OWN_CONFIG
+  rmSync(join(OWN_CONFIG, 'keybindings.json'), { force: true })
   snaps.clear()
   snapTakes = []
   // The Linux clipboard tool check reads this computer's PATH; it has its
@@ -126,6 +145,15 @@ beforeEach(() => {
     pathRoute: () => pathRoute,
     takeSnap: (token: string, sessionId: string) => { snapTakes.push(sessionId); const k = snaps.get(token) ?? null; snaps.delete(token); return k },
   } as never)
+})
+
+afterEach(() => {
+  if (configBefore === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = configBefore
+})
+
+afterAll(() => {
+  rmSync(OWN_CONFIG, { recursive: true, force: true })
 })
 
 /** Snap tokens main keeps (screenshot-capture's, faked): one-shot. */
@@ -242,6 +270,12 @@ describe('a Claude Code or Codex session on this computer', () => {
     accountDir = ACCOUNT_DIR
     await press('image', true)
     expect(keyCtx).toEqual([{ platform: 'win32', accountDir: null }, { platform: 'win32', accountDir: ACCOUNT_DIR }])
+  })
+
+  it('no account folder: this computer\'s own config folder (CLAUDE_CONFIG_DIR) is read, here the test\'s scratch one, and its rebinding is the key sent', async () => {
+    writeFileSync(join(OWN_CONFIG, 'keybindings.json'), JSON.stringify({ bindings: [{ context: 'Chat', bindings: { 'ctrl+g': 'chat:imagePaste' } }] }))
+    await press('image', true)
+    expect(door).toEqual([{ sessionId: 's1', key: '\u0007', sentence: null }])
   })
 
   it('a plain shell (no provider) or a provider with no table: not available, nothing read or typed', async () => {
