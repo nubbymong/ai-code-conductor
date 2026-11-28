@@ -25,18 +25,21 @@
  *   D2 RECTANGLE, 3 runs: Snap, Rectangle opens one overlay page per Electron
  *      display, each with its picture; a 200 by 120 DIP drag shows its size in
  *      the display's pixels, and Enter gives one new JPEG of that size (200 and
- *      120 times the display's scale), not all black; its path reaches the tab
- *      as main's paste, then the sentence and Enter (since X1.2; the run ends
- *      once that Enter is typed); one line names a rectangle of that size, the
+ *      120 times the display's scale), not all black; since 2.1.3-beta.21
+ *      (ADR-032) the picture goes onto the clipboard at that size and the
+ *      CLI's own paste key (ESC v) reaches the tab as one write, then the
+ *      sentence and Enter, and no path is typed (the run ends once that Enter
+ *      is typed); one line names a rectangle of that size, the
  *      helper's time
  *      (within the 2 s bound) and one entry per display at its physical size
  *      and scale; no overlay page is left, the button is usable again, and no
  *      press folder is left. Run 1 keeps a picture of the overlay mid-drag
  *      (overlay-mid-drag.png, the runner's desktop only).
  *   D3 WHOLE SCREEN, 3 runs: Whole screen gives one new JPEG of the display at
- *      its physical size (the longer side capped at 1920), not all black; its
- *      path reaches the tab as main's paste, then the sentence and Enter (the
- *      run ends once that Enter is typed); one line names the whole screen.
+ *      its physical size (the longer side capped at 1920), not all black; the
+ *      picture onto the clipboard and the CLI's own paste key into the tab,
+ *      then the sentence and Enter, no path typed (the run ends once that
+ *      Enter is typed); one line names the whole screen.
  *   D4 ESCAPE, 3 runs: Escape gives no file and types nothing; one line says
  *      cancelled; no overlay page is left and the button is usable again.
  *   D5 DEFAULT (S8 step 3): with no choice saved (magic-buttons.json without
@@ -210,12 +213,16 @@
  *      warning sign, on two reads 300 ms apart; the Snap button shows.
  *   C2 RECTANGLE, 3 runs, and C3 WHOLE SCREEN, 3 runs, each pressed while
  *      Codex is at rest with "1 warning" (two reads 300 ms apart): one new
- *      JPEG at D2's or D3's size, not all black, its SHA-256 none of an
- *      earlier press's; one new-engine line; one line from main saying
- *      Codex's image rule pasted and sent it; exactly one new request from
- *      Codex to the stand-in (the turn), whose pictures are every picture
- *      pressed so far, in order, each once by its SHA-256, the newest this
- *      press's file (Codex sends the whole conversation with each turn); then
+ *      JPEG at D2's or D3's size, not all black; one new-engine line; since
+ *      2.1.3-beta.21 (ADR-032) one line from main saying Codex's clipboard
+ *      paste pasted and sent it, and none of its path rule; the picture the
+ *      app left on the clipboard at that size, its decoded pixels none of an
+ *      earlier press's (kept beside the JPEG as <name>.clipboard.png);
+ *      exactly one new request from Codex to the stand-in (the turn), whose
+ *      pictures are every picture pressed so far, in order, each once by its
+ *      decoded pixels (helper/probes/png-rgba.cjs: Codex re-encodes what it
+ *      reads from the clipboard), the newest this press's (Codex sends the
+ *      whole conversation with each turn); then
  *      Codex at rest with its count again, and still that one request. Each
  *      run's picture is made to differ from the one before it (PICTURE_STEP:
  *      C2's drag starts 16 DIP further right a run, C3 moves the app's window
@@ -241,13 +248,13 @@
  * part's readings go to $SNAP_E2E_OUT/codex-readings.json.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
-import { execFile, spawnSync } from 'child_process'
+import { execFile, spawn, spawnSync } from 'child_process'
 import crypto from 'crypto'
 import fs from 'fs'
 import { createRequire } from 'module'
 import path from 'path'
 import { launchIsolatedApp, closeIsolatedApp, IsolatedApp } from './helpers/electron-app'
-import { seedCodexAccount, realmDirOf, createCodexConfig, openSession, activeSessionId, terminalRows, answerFirstScreen } from './helpers/codex-mode'
+import { seedCodexAccount, realmDirOf, createCodexConfig, openSession, activeSessionId, terminalRows, answerFirstScreen, ptyWrite } from './helpers/codex-mode'
 import { nextFirstScreen, FOOTER, type FirstScreenAnswer } from './helpers/codex-first-screens'
 import { pathWithoutCodex } from './helpers/fake-codex'
 import { isolatedHomeDir } from './helpers/isolated-env'
@@ -288,8 +295,15 @@ const mainLines: string[] = []
 /** A stand-in `claude`: every start is recorded in launches.jsonl beside it
  *  (its arguments, whether its input and output are a terminal, its pid);
  *  `--version` answers the app's floor; on a terminal it says it is ready,
- *  keeps what it is typed in typed.txt beside itself and echoes it, until its
- *  input ends; any other call ends at once. */
+ *  keeps what it is typed in typed.txt beside itself, until its input ends;
+ *  any other call ends at once. Since 2.1.3-beta.21 (ADR-032, plan phase 2)
+ *  it draws a prompt shaped as Claude Code's (two rules of U+2500 around the
+ *  pointer row, a footer two columns in: what src/shared/claude-screen.ts
+ *  reads), with what it is typed on the pointer row, and Claude Code's own
+ *  paste key (ESC v, or Ctrl+V) adds an "[Image #N]" placeholder there as
+ *  Claude Code's does; Enter clears the row. So main's placeholder read sees
+ *  the key arrive, then types the sentence and Enter. It reads no clipboard:
+ *  a real Claude Code reading the picture is C4's (part three). */
 function installStandInClaude(dir: string): string {
   fs.mkdirSync(dir, { recursive: true })
   fs.writeFileSync(path.join(dir, 'stand-in-claude.js'), [
@@ -300,8 +314,12 @@ function installStandInClaude(dir: string): string {
     'if (!process.stdin.isTTY) process.exit(0)',
     "const typed = path.join(__dirname, 'typed.txt')",
     "try { process.stdin.setRawMode(true) } catch (e) { record({ rawMode: String(e && e.message) }) }",
-    "process.stdout.write('stand-in Claude Code ready' + String.fromCharCode(13, 10))",
-    "process.stdin.on('data', (d) => { fs.appendFileSync(typed, d); process.stdout.write(d) })",
+    "const C = String.fromCharCode, NL = C(13, 10), RULE = C(0x2500).repeat(40), ESC = C(27)",
+    "let prompt = '', images = 0, esc = false",
+    "const draw = () => process.stdout.write(ESC + '[2J' + ESC + '[H' + 'stand-in Claude Code ready' + NL + NL + RULE + NL + C(0x276f) + ' ' + prompt + NL + RULE + NL + '  ? for shortcuts' + NL)",
+    "const image = () => { images++; prompt += '[Image #' + images + '] ' }",
+    "draw()",
+    "process.stdin.on('data', (d) => { fs.appendFileSync(typed, d); for (const ch of d.toString('latin1')) { if (esc) { esc = false; if (ch === 'v') image(); else if (ch >= ' ') prompt += ch; continue } if (ch === ESC) { esc = true; continue } if (ch === C(22)) { image(); continue } if (ch === C(13)) { prompt = ''; images = 0; continue } if (ch >= ' ') prompt += ch } draw() })",
     "process.stdin.on('end', () => { record({ end: process.pid, at: Date.now() }); process.exit(0) })",
     '',
   ].join('\n'))
@@ -460,6 +478,7 @@ async function pressNew(opts: { menuOpen?: () => Promise<void>; overlayUp?: () =
   const displays = await electronDisplays(app)
   await expect(snapButton()).toBeEnabled({ timeout: CANCEL_MS })
   const from = mark()
+  typedAtPress = typedText().length
   await snapButton().click()
   if (opts.menuOpen) await opts.menuOpen()
   const started = performance.now()
@@ -511,10 +530,19 @@ async function expectOverlayGone(): Promise<void> {
   await expect(snapButton()).toBeEnabled({ timeout: CANCEL_MS })
 }
 
-/** The one JPEG a press saved, checked at its size and not all black, and its
- *  path typed into the tab; answers its name. D12 passes `lit: false` (a box
- *  of the dark menu or of the terminal behind it can be mostly near black)
- *  and `prefix` (its readings' names). */
+/** What the tab was typed before the last press (pressNew), for that
+ *  press's own keys (ADR-032). */
+let typedAtPress = 0
+/** Claude Code's paste key on Windows, as the app types it (ADR-032). */
+const ESC_V = '\u001bv'
+
+/** The one JPEG a press saved, checked at its size and not all black; since
+ *  2.1.3-beta.21 (ADR-032, plan phase 2, 2.1.5) the picture on the clipboard
+ *  at that size, and no path typed into the tab: the CLI's own paste key
+ *  (ESC v) as one write, then, once the stand-in shows its placeholder, the
+ *  sentence and Enter. Answers its name. D12 passes `lit: false` (a box of
+ *  the dark menu or of the terminal behind it can be mostly near black) and
+ *  `prefix` (its readings' names). */
 async function expectSaved(before: string[], answeredAt: number, width: number, height: number, opts: { lit?: boolean; prefix?: string } = {}): Promise<string> {
   await expect.poll(() => jpegs().filter((f) => !before.includes(f)).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(1)
   push(named(opts.prefix, 'enterToFileMs'), Math.round(performance.now() - answeredAt))
@@ -525,33 +553,57 @@ async function expectSaved(before: string[], answeredAt: number, width: number, 
   expect(info.empty, name).toBe(false)
   expect({ width: info.width, height: info.height }, name).toEqual({ width, height })
   if (opts.lit !== false) expect(info.lit, `${name}: pixels not near black, of ${info.pixels}`).toBeGreaterThan(info.pixels / 100)
+  const sincePress = (): string => typedText().slice(typedAtPress)
   try {
-    await expect.poll(typedText, { timeout: OVERLAY_MS, intervals: [50] }).toContain(`${path.sep}screenshots${path.sep}${name}`)
+    await expect.poll(sincePress, { timeout: OVERLAY_MS, intervals: [50] }).toContain(ESC_V)
   } catch (err) {
     // What the tab showed and what the stand-in recorded, for the cause.
     readings.atTypedFailure = { terminal: await terminalText(ctx!.page).catch(() => 'unread'), launches: launches(), typed: typedText() }
     throw err
   }
   push(named(opts.prefix, 'fileToTypedMs'), Math.round(performance.now() - savedAt))
-  // From the beta.16 aggregate (X1.2) main types a saved image into a local
-  // Claude Code tab in three writes: the path as a bracketed paste, a space
-  // and the sentence 1.5 s later, Enter 0.7 s after that (session-input
-  // submitImage, IMAGE_PASTE_SETTLE_MS and IMAGE_ENTER_DELAY_MS). The press is
-  // done when that Enter has reached the tab, so the next test reads a tab at
-  // rest (D4's "types nothing") and the next picture's path does not wait
-  // behind this one. An event wait inside the unchanged OVERLAY_MS.
+  // Since 2.1.3-beta.21 (ADR-032) main types the key in one write, reads the
+  // stand-in's placeholder, then types a space and the sentence, then Enter
+  // as its own write (session-input pasteFromClipboard). The press is done
+  // when that Enter has reached the tab, so the next test reads a tab at rest
+  // (D4's "types nothing") and the next picture does not wait behind this
+  // one. An event wait inside the unchanged OVERLAY_MS.
   try {
     await expect.poll(() => {
-      const t = typedText()
-      const at = t.lastIndexOf(name)
+      const t = sincePress()
+      const at = t.indexOf(ESC_V)
       return at >= 0 && t.indexOf('\r', at) > at
     }, { timeout: OVERLAY_MS, intervals: [50] }).toBe(true)
   } catch (err) {
     readings.atEnterFailure = { terminal: await terminalText(ctx!.page).catch(() => 'unread'), typed: typedText() }
     throw err
   }
+  // No path, and no file name, typed: the key is the only way the picture went in.
+  const typed = sincePress()
+  expect(typed, 'no path typed into the tab').not.toContain(name)
+  expect(typed, 'no path typed into the tab').not.toMatch(/[\\/]screenshots[\\/]/)
+  expect(typed.split(ESC_V).length - 1, 'the key, once, as one write').toBe(1)
+  // The picture is on this computer's clipboard afterwards (plan Q1), at its size.
+  const png = await clipboardPng(ctx!.app)
+  expect(png, 'a picture on the clipboard').not.toBeNull()
+  expect(pngSize(png!), 'the clipboard picture is the press\'s').toEqual({ width, height })
   return name
 }
+
+/** The PNG of the picture on this computer's clipboard (main's Electron 44
+ *  clipboard.read, image/png), or null. */
+async function clipboardPng(app: ElectronApplication): Promise<Buffer | null> {
+  const b64 = await app.evaluate(async ({ clipboard }) => {
+    const items = await clipboard.read()
+    const item = items.find((it) => Array.isArray(it.types) && it.types.includes('image/png'))
+    if (!item) return null
+    const blob = await item.getType('image/png') as Blob
+    return Buffer.from(await blob.arrayBuffer()).toString('base64')
+  })
+  return typeof b64 === 'string' ? Buffer.from(b64, 'base64') : null
+}
+/** A PNG's size, from its header. */
+const pngSize = (png: Buffer): { width: number; height: number } => ({ width: png.readUInt32BE(16), height: png.readUInt32BE(20) })
 
 /** Press Snap, Rectangle; wait for the previous Snap's window; cancel it with
  *  the library's own Cancel message; wait until the button is usable again. */
@@ -1164,8 +1216,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
  *  each picture it carried named by its SHA-256. */
 type StandInEvent = {
   ev: string; t: number; id: number; path?: string; kind?: string; tools?: number; stream?: boolean; model?: string | null
-  images?: Array<{ way?: string; sha256?: string; kind?: string; bytes?: number; width?: number | null; height?: number | null }>
+  images?: Array<{ way?: string; sha256?: string; rgbaSha256?: string; rgbSha256?: string; pixelsUnread?: string; kind?: string; bytes?: number; width?: number | null; height?: number | null }>
 }
+/** A PNG named by its decoded pixels (helper/probes/png-rgba.cjs), as the
+ *  model stand-in names one: ADR-032's proof compares pixels, exactly. */
+const { pngPixelHashes } = createRequire(__filename)('../../helper/probes/png-rgba.cjs') as { pngPixelHashes: (b: Buffer) => { rgbaSha256?: string; rgbSha256?: string; unread?: string } }
 type StandIn = { listen: () => Promise<number>; close: () => Promise<void> }
 const { createModelStandIn } = createRequire(__filename)('../../helper/probes/p11-model-stand-in.cjs') as { createModelStandIn: (o: { onEvent: (e: StandInEvent) => void }) => StandIn }
 const standInEvents: StandInEvent[] = []
@@ -1243,8 +1298,14 @@ const atRestWithCount = (screen: string) => { const r = codexRest(screen); retur
  *  turn carries Codex's tools and a second request after it does not, made
  *  on P19's own launch, does not describe the app's. */
 const codexTurns = () => standInEvents.filter((e) => e.ev === 'request' && e.path === '/v1/responses' && e.kind !== 'not-found')
-/** The pictures pressed into the Codex tab so far, by SHA-256, in order. */
+/** The pictures pressed into the Codex tab so far, in order: since
+ *  2.1.3-beta.21 (ADR-032) each by the hash of the decoded pixels of the PNG
+ *  the app left on the clipboard (Codex re-encodes what it reads there), on
+ *  the path route by the file's SHA-256. */
 const codexSent: string[] = []
+/** How a turn names a picture: its decoded pixels' hash when it is a PNG
+ *  (the clipboard route), else its SHA-256 (the path route's JPEG). */
+const turnPicture = (i: NonNullable<StandInEvent['images']>[number]): string => i.rgbaSha256 ?? i.sha256 ?? `${i.way ?? 'unknown'} (not inline)`
 const sha256Of = (file: string) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
 
 /** Before a press into the Codex tab: Codex at rest, its warning count 1, on
@@ -1256,12 +1317,14 @@ async function expectCodexAtRestWithCount(): Promise<void> {
 }
 
 /** After a press into the Codex tab: the one JPEG it saved (its size, not all
- *  black, its SHA-256 none of an earlier press's); one new-engine line; main's
- *  one line saying Codex's image rule pasted and sent it; and exactly one new
- *  turn at the stand-in, whose pictures are every picture pressed so far, in
- *  order, each once, the newest this file's SHA-256 (Codex sends the whole
- *  conversation each turn). Then Codex back at rest with its count, and still
- *  that one turn. */
+ *  black); one new-engine line; main's one line saying Codex's clipboard
+ *  paste pasted and sent it (since 2.1.3-beta.21, ADR-032: the picture on the
+ *  clipboard, Codex's own paste key, no path); the picture the app left on
+ *  the clipboard at that size, its decoded pixels none of an earlier
+ *  press's; and exactly one new turn at the stand-in, whose pictures are
+ *  every picture pressed so far, in order, each once, the newest that
+ *  picture by its decoded pixels (Codex sends the whole conversation each
+ *  turn). Then Codex back at rest with its count, and still that one turn. */
 async function expectSentToCodex(before: string[], turnsBefore: number, answeredAt: number, width: number, height: number, from: Mark, linePattern: RegExp): Promise<void> {
   await expect.poll(() => jpegs().filter((f) => !before.includes(f)).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(1)
   push('codexEnterToFileMs', Math.round(performance.now() - answeredAt))
@@ -1274,19 +1337,27 @@ async function expectSentToCodex(before: string[], turnsBefore: number, answered
   expect(info.lit, `${name}: pixels not near black, of ${info.pixels}`).toBeGreaterThan(info.pixels / 100)
   await expect.poll(() => snapLines(from).length, { timeout: CANCEL_MS }).toBe(1)
   expect(snapLines(from)[0]).toMatch(linePattern)
-  // Each press's picture is made to differ from every earlier one (C2's drag
-  // and C3's window move 16 DIP a run), so a turn that sent an earlier
-  // press's picture again cannot pass as this one's.
-  const sha = sha256Of(file)
-  expect(codexSent, 'this press\'s picture differs from every earlier press\'s').not.toContain(sha)
-  codexSent.push(sha)
   try {
-    await expect.poll(() => linesSince(from, '[codex-image]').length, { timeout: CODEX_TURN_MS, intervals: [100] }).toBe(1)
-    expect(linesSince(from, '[codex-image]')[0]).toMatch(new RegExp(`^\\[codex-image\\] ${codexSid}: an image path of \\d+ characters pasted and sent; `))
+    await expect.poll(() => linesSince(from, '[codex-paste]').length, { timeout: CODEX_TURN_MS, intervals: [100] }).toBe(1)
+    expect(linesSince(from, '[codex-paste]')[0]).toMatch(new RegExp(`^\\[codex-paste\\] ${codexSid}: the clipboard picture pasted and sent; `))
+    expect(linesSince(from, '[codex-image]'), 'no path pasted').toEqual([])
+    // The picture the app left on the clipboard (plan Q1), kept beside the
+    // JPEG as the reference: the pixels Codex was given.
+    const png = await clipboardPng(ctx!.app)
+    expect(png, 'a picture on the clipboard').not.toBeNull()
+    expect(pngSize(png!), 'the clipboard picture is the press\'s').toEqual({ width, height })
+    fs.writeFileSync(path.join(OUT, `${name}.clipboard.png`), png!)
+    const ref = pngPixelHashes(png!)
+    expect(ref.unread, 'the clipboard picture decodes').toBeUndefined()
+    // Each press's picture is made to differ from every earlier one (C2's
+    // drag and C3's window move 16 DIP a run), so a turn that sent an earlier
+    // press's picture again cannot pass as this one's.
+    expect(codexSent, 'this press\'s picture differs from every earlier press\'s').not.toContain(ref.rgbaSha256)
+    codexSent.push(ref.rgbaSha256!)
     await expect.poll(() => codexTurns().length, { timeout: CODEX_TURN_MS, intervals: [100] }).toBeGreaterThan(turnsBefore)
     push('codexFileToTurnMs', Math.round(performance.now() - savedAt))
     const turn = codexTurns()[turnsBefore]
-    expect((turn.images ?? []).map((i) => i.sha256 ?? `${i.way ?? 'unknown'} (not inline)`), 'the turn\'s pictures: every picture pressed so far, in order, each once').toEqual(codexSent)
+    expect((turn.images ?? []).map(turnPicture), 'the turn\'s pictures: every picture pressed so far, in order, each once, by its pixels').toEqual(codexSent)
     const turnAt = performance.now()
     await expectCodexAtRestWithCount()
     push('codexTurnToRestMs', Math.round(performance.now() - turnAt))
@@ -1450,4 +1521,680 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
       await placeAppWindow()
     })
   }
+})
+
+// ===== PART THREE (plan 2.1.3-beta.21 phase 2, 2.1.7, 2.2 and 2.3; ADR-032) =====
+// The clipboard route's probes and its load proof, each run only when the
+// dispatch names it (the snap_e2e_paste input, SNAP_E2E_PASTE): `probe` runs
+// PW2 and PW1; `gate` runs C2 on the path route and on the clipboard route,
+// and C4, under the load grader. Real Claude Code 2.1.332 (SNAP_E2E_CLAUDE,
+// installed by the job from its platform package with scripts off) and Codex
+// 0.157.1 (SNAP_E2E_CODEX) run against probe P11's model stand-in, which
+// names each PNG a turn carries by its decoded pixels (png-rgba.cjs).
+//
+// DECISION LINES, fixed before measuring.
+//   PW2: one Electron 44 clipboard.write() with one item holding image/png
+//     (the app's writer, src/main/paste/clipboard-writer.ts), then a Win32
+//     format list of the clipboard (EnumClipboardFormats) and WinForms
+//     Clipboard.GetImage() (Claude Code's read). Recorded: whether CF_DIB and
+//     the registered PNG format are there together, and what GetImage reads.
+//     Both CLIs reading the result is PW1's.
+//   PW1: in a Codex 0.157.1 tab and a Claude Code 2.1.332 tab (the bundled
+//     ConPTY), at 0, 1, 2 and 3 busy processes: a picture written by
+//     Electron, then ESC v and then Ctrl+V into the CLI (pty:write, as xterm
+//     would type them); the time from the key to a new "[Image #N]" on the
+//     tab's screen (bound 15 s), then a sentence and Enter, and whether the
+//     turn carries the same picture by its decoded pixels. THE WAITS: the
+//     clipboard paste's placeholder wait (session-input
+//     CLIPBOARD_PLACEHOLDER_WAIT_MS) is set to PW1's worst time to the
+//     placeholder at 3 busy processes, over both CLIs, for the key the app
+//     sends on Windows (ESC v), times 2 (THE FACTOR), at most 10 s, fixed in
+//     code before the gate is dispatched. A CLI that shows no placeholder for
+//     ESC v at 3 busy processes is diagnosed and the owner told; the path
+//     does not come back.
+//     READ, both runs that measured Claude Code. Run 46128029706 (the app on
+//     a fresh, empty PowerShell module analysis cache, beta.20's D1
+//     condition): Claude Code 2.1.332, for ESC v, showed no placeholder
+//     within the 15 s bound at 0, 1, 2 and 3 busy processes (4 of 4); the
+//     one placeholder seen, 13.7 s into the grade 1 Ctrl+V row, is most
+//     likely that grade's ESC v read ending late (Claude Code ignores Ctrl+V
+//     on Windows, run 46128921672); Codex 0.157.1 31 to 120 ms. Run 46128921672 (a warm PowerShell cache): Claude Code
+//     926, 914, 1030 and 1250 ms after ESC v at 0 to 3 busy processes, no
+//     placeholder for Ctrl+V on Windows; Codex 31 to 76 ms after either key;
+//     every turn carried the picture by its decoded pixels. PW2 (the same
+//     runs and runs 46126339163, 46127035163): one write left PNG, CF_DIBV5,
+//     CF_BITMAP and CF_DIB, and GetImage read it. The gate ran with a wait of
+//     2 x 1250 ms = 2.5 s, from the warm run alone. Review round 1 (R1-1)
+//     applied the rule to every PW1 reading: the cold run's worst case is
+//     over 15 s, twice that is over the cap, so the wait is the cap, 10 s.
+//     The gate's clipboard-route presses stand at 10 s: the poll stops at
+//     the placeholder, and every one of them showed it within 2.5 s.
+//   GATE (one job, the Windows runner, --retries=0): the load grader at 0,
+//     1, 2 and 3 busy processes (node, normal priority), each early and late
+//     (GRADES), each count running BUSY_SETTLE_MS before its press (gate run
+//     46129823039 started them at the press, and every path-route press
+//     there pasted and sent, the paste meeting 61 to 75% total CPU). C2 on the path route (the test switch, CCC_E2E_PATH_ROUTE=1,
+//     in its own app and serial group): each press recorded as a reading,
+//     never asserted; then ONE assertion: at 3 busy processes at least one of
+//     its two presses reaches Codex as text (main's image rule read "the
+//     composer held N characters of the path, as text"; in run 46084512071
+//     both did). C2 on the clipboard route (its own app and group): every
+//     press asserted, as part two's C2 is. C4, Claude Code Snap on the
+//     clipboard route (its own app and group): every press asserted, its
+//     turn carrying the picture by its decoded pixels. A red on the clipboard
+//     route, or in C4, is diagnosed, never retried. C2's bounds are
+//     beta.20's (PRESS_TEST_MS, CODEX_TURN_MS); C4's are PRESS_TEST_MS plus 2
+//     times CLAUDE_TURN_MS, never raised. The CPU is read through every group
+//     (typeperf, once a second) for the diagnosis.
+//   CLAUDE CODE'S OWN READ, ON A WARM POWERSHELL CACHE: Claude Code reads the
+//     clipboard by Windows PowerShell 5.1 (WinForms Clipboard.GetImage). In
+//     probe run 46128029706, with the app on a fresh, empty module analysis
+//     cache (coldPowerShellEnv, beta.20's D1 condition for the first app), it
+//     took the key ("Pasting..." in its footer), and for ESC v its read
+//     showed no placeholder within the 15 s bound at 0, 1, 2 and 3 busy
+//     processes (4 of 4); the one placeholder seen, 13.7 s into the grade 1
+//     Ctrl+V row, is most likely that grade's ESC v read ending late (Claude
+//     Code ignores Ctrl+V on Windows, run 46128921672). A cold cmdlet lookup
+//     took 21.6 to 27.4 s on this runner
+//     (46040073797). A user's computer keeps that cache, so Claude Code's PW1
+//     and C4 run on the runner's own cache, warmed first by the same command
+//     (warmClaudeClipboardRead); the Codex groups keep beta.20's cold cache
+//     (Codex reads the clipboard without PowerShell). This condition was
+//     added after run 46128029706 measured, and it sets no wait: the app's
+//     wait follows every PW1 reading, the cold run's included (R1-1 above).
+
+const PASTE = process.env.SNAP_E2E_PASTE ?? ''
+/** The folder holding the job's Claude Code 2.1.332 (claude.exe), or ''. */
+const CLAUDE_DIR = process.env.SNAP_E2E_CLAUDE ? path.resolve(process.env.SNAP_E2E_CLAUDE) : ''
+const CLAUDE_VERSION_UNDER_TEST = '2.1.332'
+/** Fixed before PW1 runs (plan 2.3). */
+const CLAUDE_TURN_MS = 20_000
+/** PW1's bound on one key's placeholder (a measurement, not a wait the app keeps). */
+const PW1_PLACEHOLDER_BOUND_MS = 15_000
+/** The load grader, each count early and late. */
+const GRADES = [0, 1, 2, 3, 3, 2, 1, 0] as const
+/** How long each count of busy processes runs before its press, so the press
+ *  meets a steady load, not the processes' start. Gate run 46129823039
+ *  started them at the press: the paste met 61 to 75% total CPU at 3 busy
+ *  processes (94% only after it), where run 46084512071's path-route
+ *  failures met 86 to 94%. The same for every group, the clipboard route's
+ *  and Claude Code's included. */
+const BUSY_SETTLE_MS = 5_000
+const PASTE_OUT = path.join(OUT, 'paste')
+const CLAUDE_FAKE_KEY = 'sk-ant-e2e-fake-key-not-real-0000000000'
+const SYSTEM_ROOT = process.env.SystemRoot ?? 'C:\\Windows'
+const CTRL_V_KEY = '\u0016'
+const IMAGE_RE = /\[Image #\d{1,3}\]/g
+
+/** A minimal environment for a process this part starts (never the runner's whole one). */
+const minimalEnv = (extra: Record<string, string> = {}): Record<string, string> => ({
+  SystemRoot: SYSTEM_ROOT, windir: SYSTEM_ROOT, PATH: path.join(SYSTEM_ROOT, 'System32'), ...extra,
+})
+
+/** `count` busy processes (node, normal priority), until stopped. */
+function busy(count: number): () => number {
+  const kids = Array.from({ length: count }, () => spawn(process.execPath, ['-e', 'for(;;){}'], { windowsHide: true, stdio: 'ignore', env: minimalEnv() }))
+  return () => { let k = 0; for (const c of kids) { try { if (c.kill()) k++ } catch { /* gone */ } } return k }
+}
+
+/** The CPU read once a second into a CSV until stopped (typeperf). */
+function cpuSampler(name: string): () => void {
+  fs.mkdirSync(PASTE_OUT, { recursive: true })
+  const child = spawn(path.join(SYSTEM_ROOT, 'System32', 'typeperf.exe'), ['\\Processor(_Total)\\% Processor Time', '\\System\\Processor Queue Length', '-si', '1', '-f', 'CSV', '-o', path.join(PASTE_OUT, `${name}-cpu.csv`), '-y'], { windowsHide: true, stdio: 'ignore', env: minimalEnv() })
+  return () => { try { child.kill() } catch { /* gone */ } }
+}
+
+/** Run a PowerShell script (Windows PowerShell 5.1, -Sta) with a minimal
+ *  environment; answers its output. */
+function powershell(script: string): string {
+  const temp = path.join(PASTE_OUT, 'ps-temp')
+  fs.mkdirSync(temp, { recursive: true })
+  const r = spawnSync(path.join(SYSTEM_ROOT, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Sta', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    encoding: 'utf8', timeout: 60_000, windowsHide: true, env: minimalEnv({ TEMP: temp, TMP: temp, PSModulePath: path.join(SYSTEM_ROOT, 'System32', 'WindowsPowerShell', 'v1.0', 'Modules') }),
+  })
+  return `${r.stdout ?? ''}${r.stderr ? ` [stderr] ${r.stderr}` : ''}`.trim()
+}
+
+/** PW2's Win32 reading of the clipboard: its formats, and what GetImage reads. */
+function win32ClipboardReading(): { formats: string; getImage: string } {
+  const formats = powershell([
+    'Add-Type -TypeDefinition @"',
+    'using System; using System.Runtime.InteropServices; using System.Text;',
+    'public static class Clip {',
+    '  [DllImport("user32.dll")] public static extern bool OpenClipboard(IntPtr h);',
+    '  [DllImport("user32.dll")] public static extern bool CloseClipboard();',
+    '  [DllImport("user32.dll")] public static extern uint EnumClipboardFormats(uint f);',
+    '  [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClipboardFormatName(uint f, StringBuilder s, int n);',
+    '}',
+    '"@',
+    '$out = @()',
+    'if ([Clip]::OpenClipboard([IntPtr]::Zero)) { try { $f = 0; while (($f = [Clip]::EnumClipboardFormats($f)) -ne 0) { $sb = New-Object System.Text.StringBuilder 256; $n = [Clip]::GetClipboardFormatName($f, $sb, 256); $out += ("{0}={1}" -f $f, $(if ($n -gt 0) { $sb.ToString() } else { "" })) } } finally { [void][Clip]::CloseClipboard() } } else { $out += "not opened" }',
+    '$out -join ","',
+  ].join('\n'))
+  const getImage = powershell('Add-Type -AssemblyName System.Windows.Forms; $i = [System.Windows.Forms.Clipboard]::GetImage(); if ($i) { "{0}x{1} {2}" -f $i.Width, $i.Height, $i.PixelFormat } else { "none" }')
+  return { formats, getImage }
+}
+
+/** Write a picture onto the clipboard in main as the app's writer does (one
+ *  clipboard.write of one image/png item): a 320 by 200 pattern of its own
+ *  for `seed`, opaque. Answers the PNG read back (the reference). */
+async function writePicture(app: ElectronApplication, seed: number): Promise<Buffer> {
+  await app.evaluate(async ({ clipboard, nativeImage, ClipboardItem }, k) => {
+    const width = 320
+    const height = 200
+    const bgra = Buffer.alloc(width * height * 4)
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      const i = (y * width + x) * 4
+      bgra[i] = (x * 3 + k * 41) & 0xff; bgra[i + 1] = (y * 5 + k * 17) & 0xff; bgra[i + 2] = ((x ^ y) + k * 29) & 0xff; bgra[i + 3] = 255
+    }
+    const png = nativeImage.createFromBitmap(bgra, { width, height }).toPNG()
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([new Uint8Array(png)], { type: 'image/png' }) })])
+  }, seed)
+  const back = await clipboardPng(app)
+  if (!back) throw new Error('no picture on the clipboard after the write')
+  return back
+}
+
+/** How many "[Image #N]" the tab on screen shows. */
+const placeholdersOnScreen = async (): Promise<number> => ((await terminalRows(ctx!.page)).join('\n').match(IMAGE_RE) ?? []).length
+
+/** Every request the stand-in saw since `from` that carries `rgba` (a
+ *  picture by its decoded pixels). */
+const requestsWith = (from: number, api: '/v1/responses' | '/v1/messages', rgba: string) => standInEvents.slice(from).filter((e) => e.ev === 'request' && e.path === api && (e.images ?? []).some((i) => i.rgbaSha256 === rgba))
+
+/** Claude Code's config folder for the app's tab: onboarding done, the
+ *  made-up key approved, the project trusted (as probe P11 seeds it). */
+function seedClaudeConfig(dir: string, projectDir: string): void {
+  fs.mkdirSync(dir, { recursive: true })
+  const proj = { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true, projectOnboardingSeenCount: 1, allowedTools: [] }
+  // Every spelling of the folder: the temp folder can be named by its short
+  // name (RUNNER~1) here and by its long one in Claude Code (probe run
+  // 46127035163), each with either separator.
+  const spellings = new Set<string>([projectDir])
+  try { spellings.add(fs.realpathSync.native(projectDir)) } catch { /* the name given */ }
+  try { spellings.add(fs.realpathSync(projectDir)) } catch { /* the name given */ }
+  const projects: Record<string, typeof proj> = {}
+  for (const p of spellings) { projects[p] = proj; projects[p.replace(/\\/g, '/')] = proj }
+  fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({
+    hasCompletedOnboarding: true, lastOnboardingVersion: CLAUDE_VERSION_UNDER_TEST, theme: 'dark', numStartups: 1, autoUpdates: false,
+    hasAcknowledgedCostThreshold: true, customApiKeyResponses: { approved: [CLAUDE_FAKE_KEY.slice(-20)], rejected: [] },
+    projects,
+  }, null, 2))
+}
+
+/** Launch an app with a Codex tab on the job's Codex 0.157.1, as part two's;
+ *  `pathRoute` sets the test switch (the app is not packaged). */
+async function launchCodexPasteApp(name: string, pathRoute: boolean): Promise<{ port: number; standIn: StandIn; projectDir: string }> {
+  ctx = undefined
+  codexSent.length = 0
+  standInEvents.length = 0
+  mainLines.length = 0
+  expect(CODEX_PREFIX, 'SNAP_E2E_CODEX names the Codex the job installed').not.toBe('')
+  const standIn = createModelStandIn({ onEvent: (e) => { standInEvents.push(e) } })
+  const port = await standIn.listen()
+  let projectDir = ''
+  ctx = await launchIsolatedApp({
+    seedExtra: (dataDir) => {
+      chooseSnap(dataDir, 'new')
+      seedCodexAccount(dataDir, { fake: false, domTerminal: true, method: 'apiKey' })
+      projectDir = path.join(dataDir, 'codex-project')
+      fs.mkdirSync(projectDir, { recursive: true })
+      const realm = realmDirOf(dataDir)
+      fs.writeFileSync(path.join(realm, 'config.toml'), codexConfigToml(port, projectDir))
+      const login = runCodexCli(dataDir, realm, ['login', '--with-api-key'], `${CODEX_FAKE_KEY}\n`)
+      if (login.status !== 0) throw new Error(`the made-up key's sign-in failed (exit ${login.status}): ${login.stderr}`)
+    },
+    env: (dataDir) => ({
+      PATH: [CODEX_PREFIX, ...pathWithoutCodex(process.env.PATH ?? '')].join(path.delimiter),
+      CODEX_HOME: (() => { const d = path.join(dataDir, 'codex-home'); fs.mkdirSync(d, { recursive: true }); return d })(),
+      CCC_E2E_SNAP_HELPER: HELPER,
+      ...DEAD_PROXY,
+      ...coldPowerShellEnv(dataDir),
+      CCC_E2E_PATH_ROUTE: pathRoute ? '1' : undefined,
+    }),
+  })
+  ctx.app.on('console', (m) => { mainLines.push(m.text()) })
+  await placeAppWindow()
+  readings[`paste_${name}_launched`] = true
+  return { port, standIn, projectDir }
+}
+
+/** Open the Codex tab and wait for Codex at rest with its warning count (part two's C1). */
+async function openCodexPasteTab(projectDir: string, label: string): Promise<void> {
+  const page = ctx!.page
+  await createCodexConfig(page, { label, dir: projectDir })
+  await openSession(page, label)
+  codexSid = await activeSessionId(page)
+  await expect(snapButton()).toBeVisible({ timeout: TAB_MS })
+  const answered: FirstScreenAnswer[] = []
+  const deadline = Date.now() + CODEX_START_MS
+  while (Date.now() < deadline) {
+    const next = nextFirstScreen(await terminalRows(page), answered)
+    if (next.act === 'answer') { answered.push({ kind: next.kind, screen: await answerFirstScreen(page, codexSid, next.kind) }); continue }
+    if (atRestWithCount(await codexScreen())) { await sleep(300); if (atRestWithCount(await codexScreen())) return }
+    await sleep(250)
+  }
+  throw new Error(`no Codex composer with its count within ${CODEX_START_MS} ms:\n${await codexScreen()}`)
+}
+
+/** Claude Code's clipboard read, run once outside the app on the runner's
+ *  own module analysis cache (the default one, under the runner's
+ *  LOCALAPPDATA, which the app's Claude Code reads too), so the cache is
+ *  warm as on a user's computer. Answers the time it took and its output. */
+function warmClaudeClipboardRead(): { ms: number; out: string } {
+  const temp = path.join(PASTE_OUT, 'ps-warm-temp')
+  fs.mkdirSync(temp, { recursive: true })
+  const t0 = Date.now()
+  const r = spawnSync(path.join(SYSTEM_ROOT, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoProfile', '-NonInteractive', '-Sta', '-Command', 'Add-Type -AssemblyName System.Windows.Forms; $i = [System.Windows.Forms.Clipboard]::GetImage(); if ($i) { "image" } else { "none" }'], {
+    encoding: 'utf8', timeout: 180_000, windowsHide: true,
+    env: minimalEnv({ TEMP: temp, TMP: temp, ...(process.env.LOCALAPPDATA ? { LOCALAPPDATA: process.env.LOCALAPPDATA } : {}), ...(process.env.USERPROFILE ? { USERPROFILE: process.env.USERPROFILE } : {}), ...(process.env.PSModulePath ? { PSModulePath: process.env.PSModulePath } : {}) }),
+  })
+  return { ms: Date.now() - t0, out: `${r.stdout ?? ''}`.trim().slice(0, 200) }
+}
+
+/** Launch an app whose Claude Code is the job's 2.1.332, pointed at the stand-in. */
+async function launchClaudePasteApp(name: string): Promise<{ standIn: StandIn; projectDir: string }> {
+  ctx = undefined
+  standInEvents.length = 0
+  mainLines.length = 0
+  expect(CLAUDE_DIR, 'SNAP_E2E_CLAUDE names the Claude Code the job installed').not.toBe('')
+  expect(fs.existsSync(path.join(CLAUDE_DIR, 'claude.exe')), `no claude.exe in ${CLAUDE_DIR}`).toBe(true)
+  // Twice: the first run writes the cache, the second reads it (both timed).
+  readings[`paste_${name}_warmup`] = [warmClaudeClipboardRead(), warmClaudeClipboardRead()]
+  const standIn = createModelStandIn({ onEvent: (e) => { standInEvents.push(e) } })
+  const port = await standIn.listen()
+  let projectDir = ''
+  ctx = await launchIsolatedApp({
+    seedExtra: (dataDir) => {
+      chooseSnap(dataDir, 'new')
+      seedDomTerminal(dataDir)
+      projectDir = path.join(dataDir, 'claude-project')
+      fs.mkdirSync(projectDir, { recursive: true })
+      seedClaudeConfig(path.join(dataDir, 'claude-config'), projectDir)
+    },
+    env: (dataDir) => ({
+      PATH: pathWith(CLAUDE_DIR),
+      CLAUDE_CONFIG_DIR: path.join(dataDir, 'claude-config'),
+      ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`,
+      ANTHROPIC_API_KEY: CLAUDE_FAKE_KEY,
+      DISABLE_AUTOUPDATER: '1',
+      DISABLE_TELEMETRY: '1',
+      DISABLE_ERROR_REPORTING: '1',
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      CCC_E2E_SNAP_HELPER: HELPER,
+      ...DEAD_PROXY,
+      // No coldPowerShellEnv: the runner's own, warmed cache (see the header).
+    }),
+  })
+  ctx.app.on('console', (m) => { mainLines.push(m.text()) })
+  await placeAppWindow()
+  readings[`paste_${name}_launched`] = true
+  return { standIn, projectDir }
+}
+
+/** Claude Code's prompt box on screen: a rule, the pointer row, a rule. */
+const CLAUDE_READY_RE = /(?:^|\n) {0,2}\u2500{8,} *\n {0,2}[\u276f>](?: [^\n]*)?\n {0,2}\u2500{8,}/u
+/** Claude Code's first screens and what answers each (as probe P11 answers them). */
+const CLAUDE_FIRST_SCREENS: Array<{ re: RegExp; keys: string[] }> = [
+  // 2.1.332's folder trust (probe run 46127035163): "No, exit" first and
+  // highlighted, "Yes, I trust this folder" under it.
+  { re: /No, exit[\s\S]*Yes, I trust this folder/, keys: ['\u001b[B', '\r'] },
+  { re: /text style|Dark mode/i, keys: ['\r'] },
+  { re: /use this API key/i, keys: ['\u001b[A', '\r'] },
+  { re: /trust (the files in )?this folder/i, keys: ['\r'] },
+  { re: /Press Enter to continue/i, keys: ['\r'] },
+  // A picker not recorded yet: its own default, as Enter takes it.
+  { re: /Enter to (?:confirm|select|continue)/i, keys: ['\r'] },
+]
+let claudeSid = ''
+/** Claude Code at its prompt, at rest (no turn running), on two reads. */
+async function claudeAtRest(): Promise<boolean> {
+  const read = async () => { const t = await terminalText(ctx!.page); return CLAUDE_READY_RE.test(t) && !/esc to interrupt/i.test(t) }
+  if (!(await read())) return false
+  await sleep(300)
+  return read()
+}
+
+/** Open a Claude Code tab (as D1 does) and wait for its prompt, answering its first screens. */
+async function openClaudePasteTab(projectDir: string, label: string): Promise<void> {
+  const page = ctx!.page
+  await page.locator('[data-testid="panel-tab-saved"]').click()
+  await page.locator('[data-testid="new-button"]').click()
+  await page.locator('[data-testid="new-menu-config"]').click()
+  await expect(page.locator('text=New saved config')).toBeVisible({ timeout: TAB_MS })
+  await page.locator('[role="radiogroup"][aria-label="Provider"] label:has(input[value="claude"])').click()
+  await page.locator('[role="radiogroup"][aria-label="Connection"] label:has(input[value="local"])').click()
+  await page.locator('input[placeholder*="path"]').first().fill(projectDir)
+  await page.locator('input[placeholder="e.g. App Dev"]').fill(label)
+  await page.locator('[data-testid="session-dialog-submit"]').click()
+  await expect(page.locator('text=New saved config')).toHaveCount(0, { timeout: TAB_MS })
+  await expect(snapButton()).toBeVisible({ timeout: TAB_MS })
+  claudeSid = await activeSessionId(page)
+  const answered: string[] = []
+  const shots: Array<{ atMs: number; screen: string[] }> = []
+  const started = Date.now()
+  let nextShot = 0
+  const deadline = Date.now() + CODEX_START_MS
+  let atRest = false
+  try {
+    while (Date.now() < deadline) {
+      const text = await terminalText(page)
+      if (Date.now() >= nextShot) { shots.push({ atMs: Date.now() - started, screen: text.split('\n').filter((l) => l.trim()).slice(-30) }); nextShot = Date.now() + 5_000 }
+      const first = CLAUDE_FIRST_SCREENS.find((s) => s.re.test(text) && answered.filter((a) => a === s.re.source).length < 3)
+      if (first && !CLAUDE_READY_RE.test(text)) {
+        answered.push(first.re.source)
+        for (const k of first.keys) { await ptyWrite(page, claudeSid, k); await sleep(300) }
+        await sleep(700)
+        continue
+      }
+      if (await claudeAtRest()) { atRest = true; return }
+      await sleep(250)
+    }
+    throw new Error(`no Claude Code prompt within ${CODEX_START_MS} ms; the screen:\n${(await terminalText(page).catch(() => 'unread')).split('\n').filter((l) => l.trim()).slice(-25).join('\n')}`)
+  } finally {
+    const start = {
+      atRest,
+      startMs: Date.now() - started,
+      answered,
+      shots,
+      screenAtEnd: (await terminalText(page).catch((e: Error) => `unread: ${e.message}`)).split('\n').filter((l) => l.trim()),
+      requests: standInEvents.filter((e) => e.ev === 'request').map(({ t, path: p, kind, model, tools, stream }) => ({ t, path: p, kind, model, tools, stream })),
+      mainLines: mainLines.filter((l) => /claude|paste|launch|pty|spawn|refus/i.test(l)).slice(-80),
+    }
+    readings.claudeStart = start
+    savePaste(`${label.replace(/\s+/g, '-').toLowerCase()}-start`, start)
+  }
+}
+
+/** One PW1 press: a picture written, the key typed, the time to a new
+ *  placeholder; then the sentence and Enter, and whether the turn carried
+ *  the picture by its pixels. */
+async function pw1Press(cli: 'codex' | 'claude', key: string, seed: number, grade: number): Promise<Record<string, unknown>> {
+  const sid = cli === 'codex' ? codexSid : claudeSid
+  const api = cli === 'codex' ? '/v1/responses' : '/v1/messages'
+  const r: Record<string, unknown> = { cli, key: key === ESC_V ? 'ESC v' : 'Ctrl+V', grade }
+  const ref = pngPixelHashes(await writePicture(ctx!.app, seed))
+  r.refUnread = ref.unread ?? null
+  const before = await placeholdersOnScreen()
+  const requestsBefore = standInEvents.length
+  const stop = busy(grade)
+  if (grade > 0) await sleep(BUSY_SETTLE_MS)
+  const t0 = performance.now()
+  try {
+    await ptyWrite(ctx!.page, sid, key)
+    let shownMs: number | null = null
+    while (performance.now() - t0 < PW1_PLACEHOLDER_BOUND_MS) {
+      if ((await placeholdersOnScreen()) > before) { shownMs = Math.round(performance.now() - t0); break }
+      await sleep(25)
+    }
+    r.placeholderMs = shownMs
+    if (shownMs === null) {
+      r.screen = (await terminalRows(ctx!.page)).filter((l) => l.trim()).slice(-12)
+      return r
+    }
+    await ptyWrite(ctx!.page, sid, ` p11 probe pw-${cli}-${seed}`)
+    await sleep(500)
+    await ptyWrite(ctx!.page, sid, '\r')
+    const turnT0 = performance.now()
+    while (performance.now() - turnT0 < (cli === 'codex' ? CODEX_TURN_MS : CLAUDE_TURN_MS)) {
+      if (ref.rgbaSha256 && requestsWith(requestsBefore, api, ref.rgbaSha256).length > 0) break
+      await sleep(100)
+    }
+    const carried = ref.rgbaSha256 ? requestsWith(requestsBefore, api, ref.rgbaSha256).length > 0 : false
+    r.turnCarriedPicture = carried
+    r.turnMs = Math.round(performance.now() - turnT0)
+    const sent = standInEvents.slice(requestsBefore).filter((e) => e.ev === 'request' && e.path === api).map((e) => (e.images ?? []).slice(-1).map((i) => ({ kind: i.kind, width: i.width, height: i.height, rgb: i.rgbSha256 === ref.rgbSha256, unread: i.pixelsUnread })))
+    r.turnImages = sent
+    const restT0 = performance.now()
+    while (performance.now() - restT0 < 20_000) {
+      if (cli === 'codex' ? atRestWithCount(await codexScreen()) : await claudeAtRest()) break
+      await sleep(250)
+    }
+    return r
+  } finally {
+    r.busyKilled = stop()
+  }
+}
+
+function savePaste(name: string, value: unknown): void {
+  fs.mkdirSync(PASTE_OUT, { recursive: true })
+  fs.writeFileSync(path.join(PASTE_OUT, `${name}.json`), JSON.stringify(value, null, 2))
+  console.log(`[snap-e2e] paste ${name} ${JSON.stringify(value)}`)
+}
+
+const pasteSkips = (want: 'probe' | 'gate') => {
+  test.skip(process.platform !== 'win32', 'Snap on Windows: the runner is Windows')
+  test.skip(!HELPER || PASTE !== want, `the snap-e2e job with snap_e2e_paste=${want} only (ci.yml)`)
+}
+
+test.describe('PW2: one Electron clipboard write of image/png, read back as Win32 formats', () => {
+  test.describe.configure({ mode: 'serial' })
+  pasteSkips('probe')
+  let stopCpu: () => void = () => {}
+  test.beforeAll(async () => {
+    test.setTimeout(LAUNCH_MS + 30_000)
+    stopCpu = cpuSampler('pw2')
+    await launchCodexPasteApp('pw2', false)
+  })
+  test.afterAll(async () => { stopCpu(); await closeIsolatedApp(ctx); ctx = undefined })
+
+  test('PW2: the formats one write leaves, and what GetImage reads', async () => {
+    test.setTimeout(120_000)
+    const png = await writePicture(ctx!.app, 7)
+    const reading = { pngBytes: png.length, size: pngSize(png), ...win32ClipboardReading() }
+    const names = reading.formats.split(',')
+    const out = { ...reading, cfDib: names.some((f) => f.startsWith('8=')), cfDibV5: names.some((f) => f.startsWith('17=')), registeredPng: names.some((f) => /=PNG$/.test(f)) }
+    savePaste('pw2', out)
+    readings.pw2 = out
+  })
+})
+
+for (const cli of ['codex', 'claude'] as const) {
+  test.describe(`PW1 ${cli}: the time from the paste key to the placeholder, at 0 to 3 busy processes`, () => {
+    test.describe.configure({ mode: 'serial' })
+    pasteSkips('probe')
+    const rows: Array<Record<string, unknown>> = []
+    let standIn: StandIn | undefined
+    let stopCpu: () => void = () => {}
+    test.beforeAll(async () => {
+      test.setTimeout(LAUNCH_MS + CODEX_START_MS + 60_000)
+      stopCpu = cpuSampler(`pw1-${cli}`)
+      if (cli === 'codex') {
+        const a = await launchCodexPasteApp('pw1-codex', false)
+        standIn = a.standIn
+        await openCodexPasteTab(a.projectDir, 'PW1 Codex')
+      } else {
+        const a = await launchClaudePasteApp('pw1-claude')
+        standIn = a.standIn
+        await openClaudePasteTab(a.projectDir, 'PW1 Claude')
+      }
+    })
+    test.afterAll(async () => {
+      test.setTimeout(120_000)
+      stopCpu()
+      savePaste(`pw1-${cli}`, { rows, warmup: readings[`paste_pw1-${cli}_warmup`] ?? null, mainLines: mainLines.filter((l) => /paste|codex|claude/i.test(l)).slice(-80) })
+      await closeIsolatedApp(ctx)
+      ctx = undefined
+      await standIn?.close()
+    })
+
+    test(`PW1 ${cli}: ESC v and Ctrl+V at each grade`, async () => {
+      test.setTimeout(4 * 2 * (PW1_PLACEHOLDER_BOUND_MS + CLAUDE_TURN_MS + 25_000) + 60_000)
+      let seed = cli === 'codex' ? 10 : 50
+      for (const grade of [0, 1, 2, 3]) {
+        for (const key of [ESC_V, CTRL_V_KEY]) {
+          rows.push(await pw1Press(cli, key, ++seed, grade))
+        }
+      }
+    })
+  })
+}
+
+/** One press of the load grader: Snap, Rectangle, at `grade` busy processes,
+ *  the drag moved a step a run so each press's picture is its own. */
+async function gradedRectangle(i: number, grade: number, body: (p: { before: string[]; turnsBefore: number; answeredAt: number; width: number; height: number; from: Mark }) => Promise<void>): Promise<void> {
+  const stop = busy(grade)
+  try {
+    if (grade > 0) await sleep(BUSY_SETTLE_MS)
+    const before = jpegs()
+    const turnsBefore = codexTurns().length
+    const { overlay, display, start, from } = await pressNew({ prefix: 'paste' })
+    const at = { x: start.x + (i % 4) * PICTURE_STEP, y: start.y + Math.floor(i / 4) * PICTURE_STEP }
+    const { width, height } = rectangleSize(at, DRAG, display.scaleFactor)
+    await overlay.mouse.move(at.x, at.y)
+    await overlay.mouse.down()
+    await overlay.mouse.move(at.x + DRAG.width / 2, at.y + DRAG.height / 2, { steps: 4 })
+    await overlay.mouse.move(at.x + DRAG.width, at.y + DRAG.height, { steps: 4 })
+    await overlay.mouse.up()
+    const answeredAt = performance.now()
+    await answer(overlay, () => overlay.keyboard.press('Enter'))
+    await expectOverlayGone()
+    await body({ before, turnsBefore, answeredAt, width, height, from })
+  } finally {
+    stop()
+  }
+}
+
+test.describe('GATE C2 on the path route (the test switch): each press a reading, then one assertion', () => {
+  test.describe.configure({ mode: 'serial' })
+  pasteSkips('gate')
+  const rows: Array<Record<string, unknown>> = []
+  let standIn: StandIn | undefined
+  let stopCpu: () => void = () => {}
+  test.beforeAll(async () => {
+    test.setTimeout(LAUNCH_MS + CODEX_START_MS + 60_000)
+    stopCpu = cpuSampler('gate-c2-path')
+    const a = await launchCodexPasteApp('gate-c2-path', true)
+    standIn = a.standIn
+    await openCodexPasteTab(a.projectDir, 'Gate C2 path')
+  })
+  test.afterAll(async () => {
+    test.setTimeout(120_000)
+    stopCpu()
+    savePaste('gate-c2-path', rows)
+    await closeIsolatedApp(ctx)
+    ctx = undefined
+    await standIn?.close()
+  })
+
+  GRADES.forEach((grade, i) => {
+    test(`C2 path route, press ${i + 1}, ${grade} busy: a reading`, async () => {
+      test.setTimeout(PRESS_TEST_MS + 2 * CODEX_TURN_MS)
+      const r: Record<string, unknown> = { press: i + 1, grade, startedAt: Date.now() }
+      try {
+        await expectCodexAtRestWithCount()
+        await gradedRectangle(i, grade, async ({ before, turnsBefore, from }) => {
+          await expect.poll(() => jpegs().filter((f) => !before.includes(f)).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(1)
+          const file = path.join(shotsDir(), jpegs().find((f) => !before.includes(f))!)
+          const sha = sha256Of(file)
+          await expect.poll(() => linesSince(from, '[codex-image]').some((l) => / pasted and sent; | not pasted /.test(l)), { timeout: CODEX_TURN_MS, intervals: [100] }).toBe(true)
+          const lines = linesSince(from, '[codex-image]')
+          r.lines = lines
+          r.pasted = lines.some((l) => / pasted and sent; /.test(l))
+          r.asText = lines.some((l) => /characters of the path, as text/.test(l))
+          await expect.poll(() => codexTurns().length, { timeout: CODEX_TURN_MS, intervals: [100] }).toBeGreaterThan(turnsBefore)
+          r.turnCarriedPicture = (codexTurns()[turnsBefore].images ?? []).some((im) => im.sha256 === sha)
+        })
+      } catch (e) {
+        r.error = (e as Error).message.split('\n')[0].slice(0, 300)
+      } finally {
+        r.endedAt = Date.now()
+        rows.push(r)
+        await expect.poll(async () => atRestWithCount(await codexScreen()), { timeout: CODEX_TURN_MS, intervals: [250] }).toBe(true).catch(() => { r.notAtRestAfter = true })
+      }
+    })
+  })
+
+  test('C2 path route: at 3 busy processes at least one of its two presses reaches Codex as text', () => {
+    const at3 = rows.filter((r) => r.grade === 3)
+    expect(at3.length, 'both presses at 3 busy processes were read').toBe(2)
+    expect(at3.some((r) => r.asText === true), `the path route's presses at 3 busy processes: ${JSON.stringify(at3)}`).toBe(true)
+  })
+})
+
+test.describe('GATE C2 on the clipboard route: every press at every grade reaches Codex as its picture', () => {
+  test.describe.configure({ mode: 'serial' })
+  pasteSkips('gate')
+  let standIn: StandIn | undefined
+  let stopCpu: () => void = () => {}
+  test.beforeAll(async () => {
+    test.setTimeout(LAUNCH_MS + CODEX_START_MS + 60_000)
+    stopCpu = cpuSampler('gate-c2-clipboard')
+    const a = await launchCodexPasteApp('gate-c2-clipboard', false)
+    standIn = a.standIn
+    await openCodexPasteTab(a.projectDir, 'Gate C2 clipboard')
+  })
+  test.afterAll(async () => {
+    test.setTimeout(120_000)
+    stopCpu()
+    savePaste('gate-c2-clipboard', { readings: Object.fromEntries(Object.entries(readings).filter(([k]) => k.startsWith('codex'))), requests: standInEvents.filter((e) => e.ev === 'request').map(({ t, path: p, kind, images }) => ({ t, path: p, kind, images })) })
+    await closeIsolatedApp(ctx)
+    ctx = undefined
+    await standIn?.close()
+  })
+
+  GRADES.forEach((grade, i) => {
+    test(`C2 clipboard route, press ${i + 1}, ${grade} busy: one turn carrying the picture by its pixels`, async () => {
+      test.setTimeout(PRESS_TEST_MS + 2 * CODEX_TURN_MS)
+      await expectCodexAtRestWithCount()
+      await gradedRectangle(i, grade, async ({ before, turnsBefore, answeredAt, width, height, from }) => {
+        await expectSentToCodex(before, turnsBefore, answeredAt, width, height, from, /^\[snap\] new engine: a rectangle of display \d+, /)
+      })
+    })
+  })
+})
+
+test.describe('GATE C4: Claude Code Snap on the clipboard route, every press at every grade', () => {
+  test.describe.configure({ mode: 'serial' })
+  pasteSkips('gate')
+  let standIn: StandIn | undefined
+  let stopCpu: () => void = () => {}
+  const rows: Array<Record<string, unknown>> = []
+  test.beforeAll(async () => {
+    test.setTimeout(LAUNCH_MS + CODEX_START_MS + 60_000)
+    stopCpu = cpuSampler('gate-c4')
+    const a = await launchClaudePasteApp('gate-c4')
+    standIn = a.standIn
+    await openClaudePasteTab(a.projectDir, 'Gate C4 Claude')
+  })
+  test.afterAll(async () => {
+    test.setTimeout(120_000)
+    stopCpu()
+    savePaste('gate-c4', { rows, warmup: readings['paste_gate-c4_warmup'] ?? null, mainLines: mainLines.filter((l) => /paste|claude/i.test(l)).slice(-80) })
+    await closeIsolatedApp(ctx)
+    ctx = undefined
+    await standIn?.close()
+  })
+
+  const sent: string[] = []
+  GRADES.forEach((grade, i) => {
+    test(`C4 press ${i + 1}, ${grade} busy: the picture on the clipboard, Claude Code's key, and a turn carrying the picture by its pixels`, async () => {
+      test.setTimeout(PRESS_TEST_MS + 2 * CLAUDE_TURN_MS)
+      const r: Record<string, unknown> = { press: i + 1, grade }
+      rows.push(r)
+      await expect.poll(claudeAtRest, { timeout: CLAUDE_TURN_MS, intervals: [250] }).toBe(true)
+      const requestsBefore = standInEvents.length
+      await gradedRectangle(i, grade, async ({ before, answeredAt, width, height, from }) => {
+        await expect.poll(() => jpegs().filter((f) => !before.includes(f)).length, { timeout: OVERLAY_MS, intervals: [50] }).toBe(1)
+        r.enterToFileMs = Math.round(performance.now() - answeredAt)
+        await expect.poll(() => linesSince(from, `[paste] ${claudeSid}: Snap:`).length, { timeout: PRESS_TEST_MS, intervals: [100] }).toBe(1)
+        r.pasteLine = linesSince(from, `[paste] ${claudeSid}: Snap:`)[0]
+        expect(r.pasteLine).toBe(`[paste] ${claudeSid}: Snap: sent`)
+        const png = await clipboardPng(ctx!.app)
+        expect(png, 'a picture on the clipboard').not.toBeNull()
+        expect(pngSize(png!)).toEqual({ width, height })
+        const ref = pngPixelHashes(png!)
+        expect(ref.unread, 'the clipboard picture decodes').toBeUndefined()
+        expect(sent, 'this press\'s picture differs from every earlier press\'s').not.toContain(ref.rgbaSha256)
+        sent.push(ref.rgbaSha256!)
+        const turnT0 = performance.now()
+        try {
+          await expect.poll(() => requestsWith(requestsBefore, '/v1/messages', ref.rgbaSha256!).length, { timeout: CLAUDE_TURN_MS, intervals: [100] }).toBeGreaterThan(0)
+        } finally {
+          r.fileToTurnMs = Math.round(performance.now() - turnT0)
+          r.turnImages = standInEvents.slice(requestsBefore).filter((e) => e.ev === 'request' && e.path === '/v1/messages').map((e) => (e.images ?? []).slice(-1).map((im) => ({ kind: im.kind, width: im.width, height: im.height, rgbaEqual: im.rgbaSha256 === ref.rgbaSha256, rgbEqual: im.rgbSha256 === ref.rgbSha256, unread: im.pixelsUnread })))
+        }
+      })
+    })
+  })
 })

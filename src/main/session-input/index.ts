@@ -57,6 +57,15 @@
 // the submit primitive is; what that rule cannot paste the renderer types by
 // its own Codex rule, written at submitImage.
 //
+// Since 2.1.3-beta.21 phase 2 (ADR-032, aicc_planning#447) every picture goes
+// in through the CLI's own clipboard paste instead: a new door,
+// pasteFromClipboard, types the CLI's paste key as one write for the paste
+// module (src/main/paste), then reads its placeholder and, for a press from
+// outside the terminal and for Snap, types the sentence and Enter, through
+// the run screen's `clipboard` member. No path. submitImage stays, unchanged,
+// for the path route behind the test switch only (pty:submitPrompt refuses
+// an image path otherwise), and goes in 2.1.3-beta.22.
+//
 // Since 2.1.3-beta.10 section A2 the Watchdog's retry comes in through one
 // door, submitRetry: a Codex session's goes through the Codex package's
 // submit primitive, as a canvas marker's does, instead of the raw writer
@@ -98,7 +107,7 @@
 import type { BrowserWindow } from 'electron'
 import type { IPty } from 'node-pty'
 import { getProvider } from '../providers'
-import type { ExitKey, RunScreenTyping, SessionRunScreen } from '../providers/types'
+import type { ExitKey, RunScreenClipboardResult, RunScreenTyping, SessionRunScreen } from '../providers/types'
 import type { ProviderId } from '../../shared/types'
 import { PROVIDER_IDS } from '../../shared/providers'
 import { IPC } from '../../shared/ipc-channels'
@@ -564,6 +573,119 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
   const screen = screenOf(sessionId)
   const before = promptChains.get(sessionId)
   const go = (): Promise<ImageSubmitResult> => typeImage(sessionId, imagePath, sentence, pressedFor, screen).then(({ result, why }) => done(result, why))
+  const next = before ? before.then(go, go) : go()
+  promptChains.set(sessionId, next)
+  void next.then(() => { if (promptChains.get(sessionId) === next) promptChains.delete(sessionId) })
+  return next
+}
+
+/** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.3): how long the clipboard
+ *  paste waits for the CLI's image placeholder after its key. The rule, fixed
+ *  in PW1's header before it ran: PW1's worst case at 3 busy processes, for
+ *  the key the app sends on Windows (ESC v), over both CLIs, times 2, at most
+ *  10 s. Applied to every PW1 reading (review round 1, R1-1), so 10 s, the
+ *  cap. Probe run 46128029706 (GitHub's Windows runner, 4 CPUs, the app's
+ *  bundled ConPTY, the app on a fresh, empty PowerShell module analysis
+ *  cache): Claude Code 2.1.332's own clipboard read (Windows PowerShell),
+ *  for ESC v, showed no placeholder within PW1's 15 s bound at 0, 1, 2 and
+ *  3 busy processes (4 of 4); the one placeholder seen, 13.7 s into the
+ *  grade 1 Ctrl+V row, is most likely that grade's ESC v read ending late
+ *  (Claude Code ignores Ctrl+V on Windows, run 46128921672). So its worst
+ *  case is over 15 s and twice that is over the cap. On a warm cache (probe run 46128921672) it showed
+ *  "[Image #1]" 926, 914, 1030 and 1250 ms after ESC v at 0, 1, 2 and 3 busy
+ *  processes; Codex 0.157.1 31 to 76 ms there and 31 to 120 ms on the cold
+ *  cache (it reads the clipboard without PowerShell); every turn carried
+ *  the picture by its decoded pixels. (Claude Code ignored Ctrl+V on Windows
+ *  at every grade, as its table says.) The gate's presses (runs 46129823039
+ *  and 46130805592, at 2.5 s) stand: the poll stops at the placeholder, so
+ *  the longer wait changes only a press whose CLI shows none, which then
+ *  waits up to 10 s before it says so, instead of saying so while a slower
+ *  computer's CLI is still reading the picture. */
+export const CLIPBOARD_PLACEHOLDER_WAIT_MS = 10_000
+/** ADR-032: how long the Enter follows the sentence typed after the picture
+ *  (the image door's own, IMAGE_ENTER_DELAY_MS). */
+export const CLIPBOARD_ENTER_DELAY_MS = IMAGE_ENTER_DELAY_MS
+/** ADR-032: how long a press from outside the terminal, or Snap, waits for
+ *  a CLI's ready, empty composer before its key, where the CLI's rule reads
+ *  one (Codex's), as an image's path did. */
+export const CLIPBOARD_READY_WAIT_MS = IMAGE_CODEX_READY_WAIT_MS
+
+/** What the clipboard paste door did (pasteFromClipboard): the run screen's
+ *  answer, or `refused-key` (a key that is not one of the paste keys a
+ *  provider table names, or a sentence it refuses: nothing typed), or
+ *  `not-taken` (an SSH Persistent session, or a provider with no clipboard
+ *  member: nothing typed). */
+export type ClipboardPasteDoorResult = RunScreenClipboardResult | { outcome: 'refused-key' | 'not-taken' }
+
+/** The keys the door types: one control byte (Ctrl and a letter), or ESC and
+ *  one letter or control byte (Alt and a letter, Ctrl and Alt and a letter),
+ *  the shapes the provider tables' chord table makes. Never a bracketed paste
+ *  (ESC [ ...), never more than one key, and never Ctrl+C or Ctrl+D (which
+ *  end a CLI) or a byte a terminal reads as Backspace, Tab, a new line or
+ *  Enter. */
+export function isPasteKeyBytes(key: string): boolean {
+  return typeof key === 'string' && /^(?:\u001b?[\u0001\u0002\u0005-\u0007\u000b\u000c\u000e-\u001a]|\u001b[A-Za-z])$/.test(key)
+}
+
+/** The provider whose CLI runs `sessionId` now (the PTY manager's port), or
+ *  null: a plain shell, or no session. For the paste module, which reads that
+ *  provider's clipboard paste table (ADR-032 row 14) before it asks the door. */
+export function providerOfSession(sessionId: string): ProviderId | null {
+  try { return port().providerOf(sessionId) } catch { return null }
+}
+
+/**
+ * ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.3; aicc_planning#447): the CLI's
+ * own clipboard image paste into a session. The paste module (src/main/paste)
+ * has decided the press is an image paste and written this computer's
+ * clipboard if it had to; this door types the key the session's provider
+ * table names (`key`), as ONE write, never inside a bracketed paste, through
+ * the run screen of the provider that runs the session (its `clipboard`
+ * member): Codex's reads its placeholder on main's screen reading of the run,
+ * Claude Code's on the session's terminal view. `sentence` (a press from
+ * outside the terminal, and Snap) is typed after the placeholder, then Enter;
+ * null (a press in the terminal) types nothing after the key. No path is
+ * typed, and nothing is taken back.
+ *
+ * A key that is not a paste key's shape (isPasteKeyBytes), or a sentence over
+ * IMAGE_SENTENCE_MAX_CHARS or holding a control character, is refused
+ * (`refused-key`) and nothing is typed. An SSH Persistent session (tmux) and
+ * a provider with no clipboard member take nothing (`not-taken`). A session
+ * with no terminal process takes nothing (`session-gone`). Pastes, images
+ * and prompt presses for one session go one at a time, in order
+ * (promptChains). The log names no key, no picture and no path. Throws before
+ * the PTY manager registers its ports, as every door does; otherwise never
+ * rejects.
+ */
+export function pasteFromClipboard(sessionId: string, key: string, sentence: string | null): Promise<ClipboardPasteDoorResult> {
+  const p = port()
+  const done = (result: ClipboardPasteDoorResult): ClipboardPasteDoorResult => {
+    logInfo(`[clipboard-paste] ${sessionId}: ${sentence === null ? 'a press in the terminal' : 'a press from outside the terminal'}: ${result.outcome}`)
+    return result
+  }
+  if (!isPasteKeyBytes(key) || (sentence !== null && (sentence.length > IMAGE_SENTENCE_MAX_CHARS || hasControlChar(sentence)))) {
+    return Promise.resolve(done({ outcome: 'refused-key' }))
+  }
+  if (p.tmuxWrapped(sessionId)) return Promise.resolve(done({ outcome: 'not-taken' }))
+  const pressedFor = p.run(sessionId)
+  if (!pressedFor) return Promise.resolve(done({ outcome: 'session-gone' }))
+  const screen = screenOf(sessionId)
+  const go = async (): Promise<ClipboardPasteDoorResult> => {
+    try {
+      const typing = typingFor(sessionId, pressedFor)
+      if (!typing.live()) return done({ outcome: 'session-gone' })
+      if (!screen?.clipboard) {
+        notTaken(sessionId, 'a clipboard image paste')
+        return done({ outcome: 'not-taken' })
+      }
+      return done(await screen.clipboard(sessionId, key, sentence, {
+        readyWaitMs: CLIPBOARD_READY_WAIT_MS, placeholderWaitMs: CLIPBOARD_PLACEHOLDER_WAIT_MS, enterDelayMs: CLIPBOARD_ENTER_DELAY_MS,
+      }, typing))
+    } catch {
+      return done({ outcome: 'session-gone' })
+    }
+  }
+  const before = promptChains.get(sessionId)
   const next = before ? before.then(go, go) : go()
   promptChains.set(sessionId, next)
   void next.then(() => { if (promptChains.get(sessionId) === next) promptChains.delete(sessionId) })

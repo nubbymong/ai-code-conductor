@@ -7,6 +7,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * 4 there). The IPC handler reads the saved choice at each press and hands
  * captureRectangle the new engine on Windows unless Previous is saved.
  * Not checked here: the press itself (engine.test.ts, capture-rectangle-engine.test.ts).
+ * Since 2.1.3-beta.21 (ADR-032) a press names its session, and the saved
+ * picture goes to the paste module (snap-paste-hand-off.test.ts); a fake
+ * hand-off stands in for it here.
  */
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -36,14 +39,15 @@ const { registerScreenshotHandlers } = await import('../../../../src/main/ipc/sc
 const { snapEngineFor, savedSnapEngine, SNAP_ENGINE_DEFAULT_WINDOWS } = await import('../../../../src/shared/snap-engine')
 
 const win = { isDestroyed: () => false }
+const snapPaste = { pathRoute: () => false, pathRouteAnswer: vi.fn(), keep: vi.fn(() => 'token-0123456789') }
 
 /** Press Snap, Rectangle once on `platform`, and say whether the new engine was handed over. */
 async function press(platform: string): Promise<boolean> {
   handlers.clear()
-  registerScreenshotHandlers(() => win as never, platform)
+  registerScreenshotHandlers(() => win as never, platform, snapPaste)
   captureRectangle.mockClear()
   snapOnWindows.mockClear()
-  await handlers.get('screenshot:captureRectangle')!({})
+  await handlers.get('screenshot:captureRectangle')!({}, 'tab-1')
   expect(captureRectangle).toHaveBeenCalledTimes(1)
   const engine = captureRectangle.mock.calls[0][2] as undefined | (() => Promise<unknown>)
   if (engine === undefined) return false
@@ -105,9 +109,9 @@ describe('the Snap handler: the new engine reaches captureRectangle on Windows u
 
   it('no window: no press at all', async () => {
     handlers.clear()
-    registerScreenshotHandlers(() => null, 'win32')
+    registerScreenshotHandlers(() => null, 'win32', snapPaste)
     captureRectangle.mockClear()
-    expect(await handlers.get('screenshot:captureRectangle')!({})).toBeNull()
+    expect(await handlers.get('screenshot:captureRectangle')!({}, 'tab-1')).toBeNull()
     expect(captureRectangle).not.toHaveBeenCalled()
   })
 })

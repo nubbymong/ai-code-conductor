@@ -50,6 +50,7 @@ import type { HookEvent, HooksGatewayStatus } from '../../shared/hook-types'
 export type { HookEvent, HookEventKind, HooksGatewayStatus } from '../../shared/hook-types'
 import type { AccountPaneStateView, CodexWebSessionView, CodexWebSignInState } from '../../shared/account-web-session'
 import type { ModelRegistry } from '../../shared/model-registry'
+import type { PasteKeyPress, PasteKeyResult, SnapPasteAnswer, SnapPathRouteAnswer } from '../../shared/clipboard-paste'
 export type { ModelRegistry } from '../../shared/model-registry'
 import type {
   AccountsSnapshot as ProviderAccountsSnapshot, AccountsResult as ProviderAccountsResult, ProviderInstallationView, InstallRecipeView, PathHintView,
@@ -209,6 +210,12 @@ export interface ElectronAPI {
     saveImage: () => Promise<{ path: string; posixShell?: 'sh' | 'other' } | { error: 'no-image' | 'too-large' }>
     /** Focus-independent clipboard text read, retried for Windows delayed-render (#145). */
     readText: () => Promise<string>
+  }
+  /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.4): the image paste key (or
+   *  the text paste chord with no text on the clipboard) was pressed in a
+   *  session. No clipboard content and no path go to main. */
+  paste: {
+    imageKey: (press: PasteKeyPress) => Promise<PasteKeyResult>
   }
   /** Input diagnostics (#145), gated on CCC_INPUT_DEBUG=1 in the main process. */
   inputDebug: {
@@ -713,9 +720,15 @@ export interface ElectronAPI {
     captureGlyph: (payload: unknown) => Promise<{ ok: boolean; jsonPath?: string; imagePath?: string; error?: string }>
   }
   screenshot: {
-    /** The picture's file; a press that captured nothing and says why (no desktop to capture); or null. */
-    captureRectangle: () => Promise<string | { notCaptured: 'no-desktop' } | null>
-    captureWindow: (sourceId: string) => Promise<string | null>
+    /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.5): the capture names the
+     *  session it is for. Its answer: a one-shot token for the picture main
+     *  keeps, bound to that session (SnapPasteAnswer, no path), which the
+     *  renderer reports on paste:imageKey (chord 'snap'); a press that
+     *  captured nothing and says why (no desktop to capture); null; or, on
+     *  the path route behind the test switch only, the picture's file and
+     *  the session's image line. */
+    captureRectangle: (sessionId: string) => Promise<SnapPasteAnswer | SnapPathRouteAnswer | { notCaptured: 'no-desktop' } | null>
+    captureWindow: (sourceId: string, sessionId: string) => Promise<SnapPasteAnswer | SnapPathRouteAnswer | null>
     listWindows: () => Promise<Array<{ id: string; name: string; thumbnail: string }>>
     cleanup: (maxAgeDays: number) => Promise<number>
   }

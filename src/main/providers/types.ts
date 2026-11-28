@@ -843,6 +843,11 @@ export interface SessionProvider {
    *  nothing there), and for Codex (P4.1, PB9) main's own reading of each
    *  run's screen and the submit primitive that types into its composer. */
   readonly runScreen?: SessionRunScreen
+  /** Optional (ADR-032 row 14; plan 2.1.3-beta.21 phase 2, 2.1.2): this
+   *  CLI's own clipboard image paste: its key per OS, the formats its read
+   *  takes, and whether it reads a copied file itself. Absent: the paste
+   *  module pastes no picture into this provider's sessions. */
+  readonly clipboardPaste?: ClipboardPasteRule
   /** Subscribe to live telemetry for a spawned session (see TelemetryOptions). */
   ingestSessionTelemetry(
     sessionId: string,
@@ -920,6 +925,11 @@ export interface SessionRunScreen {
    *  waits up to `readyWaitMs` for the ready, empty composer. Never rejects.
    *  Absent: the package has no image rule of this kind. */
   submitImage?(sessionId: string, imagePath: string, sentence: string, opts: { readyWaitMs: number }): Promise<RunScreenImageResult>
+  /** ADR-032 (plan 2.1.3-beta.21 phase 2): the CLI's own clipboard image
+   *  paste on the package's own screen reading, after anything already in
+   *  flight for the run (the door member `clipboard` says what it does).
+   *  Never rejects. Absent: the package reads no screen of its own. */
+  submitClipboard?(sessionId: string, key: string, sentence: string | null, opts: { readyWaitMs: number; placeholderWaitMs: number }): Promise<RunScreenClipboardResult>
 
   // 2.1.3-beta.18 section 4: the doors' members. The session input module
   // calls each for a session this provider runs, with the door's own waits
@@ -959,6 +969,14 @@ export interface SessionRunScreen {
    *  out first, when any were, because the prompt would drop them. Logs the
    *  question by its length only. Never rejects. */
   ask?(sessionId: string, question: string, opts: { readyWaitMs: number; removed: (count: number) => void }): Promise<SubmitTextResult>
+  /** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.3): the CLI's own clipboard
+   *  image paste (pasteFromClipboard). `key` goes as ONE write through
+   *  `typing`, never inside a bracketed paste; then the rule reads the CLI's
+   *  image placeholder within `placeholderWaitMs`. With a `sentence` (a press
+   *  from outside the terminal, and Snap) it then types the sentence and
+   *  Enter; without one it types nothing more (the user is writing). No path
+   *  is typed, and nothing is taken back. Never rejects. */
+  clipboard?(sessionId: string, key: string, sentence: string | null, opts: { readyWaitMs: number; placeholderWaitMs: number; enterDelayMs: number }, typing: RunScreenTyping): Promise<RunScreenClipboardResult>
   /** 2.1.3-beta.19 section 6.2 (aicc_planning#440): how long, in ms, a lone
    *  Enter typed while one of this provider's held terminals was detached
    *  waits behind the frame before it once the terminal is attached again
@@ -1012,6 +1030,49 @@ export type RunScreenImageNotPasted = 'session-gone' | 'refused-text' | 'busy-ti
 export type RunScreenImageResult =
   | { pasted: true }
   | { pasted: false; reason: RunScreenImageNotPasted; left: boolean }
+
+/** ADR-032: what a run screen's clipboard paste member did. `placeholder`:
+ *  the key went and the CLI showed its image placeholder; `sent`: and then
+ *  the sentence and Enter. Otherwise why not: the session gone; the ready
+ *  composer not seen in the wait before the key (`busy`, a press from outside
+ *  the terminal only); no placeholder within the wait; the sentence not
+ *  confirmed (the picture is at the prompt, unsent, and nothing was taken
+ *  back); a prompt up after the placeholder, before the sentence was sent
+ *  (`prompt-on-screen`: Enter would answer the prompt, so the hint does not
+ *  ask for it; review round 2, R2-1); main reads no screen for the session
+ *  (`no-screen`). */
+export type RunScreenClipboardResult =
+  | { outcome: 'placeholder' | 'sent' }
+  | { outcome: 'session-gone' | 'busy' | 'no-placeholder' | 'sentence-not-sent' | 'prompt-on-screen' | 'no-screen' }
+
+/** ADR-032 (row 14): a CLI's image paste key, as the bytes of one write, or
+ *  none: `unbound`, the account's keybindings took the default away and
+ *  bound nothing; `unexpressible`, it bound a chord the fixed chord table
+ *  cannot send. `from` says where the chord came from. */
+export type PasteKey =
+  | { bytes: string; chord: string; from: 'default' | 'keybindings' }
+  | { bytes: null; chord: string | null; why: 'unbound' | 'unexpressible' }
+
+/** ADR-032 (row 14; plan 2.1.3-beta.21 phase 2, 2.1.2): one CLI's own
+ *  clipboard image paste, per OS. It replaces the renderer's per-provider
+ *  image line (session-capabilities.ts IMAGE_LINES), which only the path
+ *  route behind the test switch still reads, through `pathRouteLine`. */
+export interface ClipboardPasteRule {
+  /** The key the app sends for the CLI's image paste in a session on this
+   *  computer: `accountDir` is the config folder the session's launch gave
+   *  the CLI (its account's own folder; null on this computer's own
+   *  sign-in), whose own keybindings a CLI may read. */
+  key(ctx: { platform: NodeJS.Platform; accountDir: string | null }): PasteKey
+  /** Whether the CLI's clipboard read takes a copied image file itself, so
+   *  the app writes nothing for one. */
+  readsCopiedFile(platform: NodeJS.Platform): boolean
+  /** The clipboard formats the CLI's read takes on `platform` (what the
+   *  writer for that OS must leave on the clipboard). */
+  formats(platform: NodeJS.Platform): readonly string[]
+  /** The path route only (plan Q5, deleted in 2.1.3-beta.22): the line the
+   *  renderer typed when main did not paste the path. */
+  readonly pathRouteLine: 'enter' | 'composer'
+}
 
 export interface SshCapableProvider extends SessionProvider {
   getSshSettingsPath(sessionId: string): string

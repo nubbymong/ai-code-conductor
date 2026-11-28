@@ -18,7 +18,8 @@ on:
   # pinned ones every run checks. On a dispatch the codex-conformance job runs,
   # with the always-on changelog check, probe-p19, probe-p21, snap-e2e and
   # remote-helper-e2e when the dispatch names them (probe_p19, probe_p21,
-  # snap_e2e, remote_helper_e2e), the
+  # snap_e2e, remote_helper_e2e; snap_e2e_paste adds the Snap spec's clipboard
+  # paste part to snap-e2e), the
   # claude-conformance job when
   # claude_rc_version is set, and
   # the Helper job too when the `helper` input is set; every other job's
@@ -72,6 +73,11 @@ on:
         type: boolean
         required: false
         default: false
+      snap_e2e_paste:
+        description: 'With snap_e2e: also run the clipboard image paste''s part of the Snap spec (ADR-032): probe runs probes PW1 and PW2, gate runs C2 on the path route and the clipboard route and C4 under the load grader; empty runs neither'
+        type: string
+        required: false
+        default: ''
       remote_helper_e2e:
         description: 'Run the remote helper device check (remote-helper-e2e) on the Linux runner: a localhost sshd, the static helper and the fake CLI built here, and the app''s remote-helper code adding the machine, holding a session, carrying its status line, hook events and tool calls, re-attaching and removing it; the readings and the two programs are uploaded'
         type: boolean
@@ -1292,11 +1298,25 @@ jobs:
   # shim as it finds a user's npm install. Its model is a stand-in on a
   # loopback port (probe P11's) and its config names one tool server that
   # cannot start, so Codex shows its warning count.
+  #
+  # The clipboard image paste (plan 2.1.3-beta.21 phase 2; ADR-032): with
+  # snap_e2e_paste set, Claude Code 2.1.332 is installed as well, from its
+  # platform package with scripts off into a prefix of its own (as the
+  # claude-conformance job installs it), and the spec's part three runs:
+  # `probe` (PW2, then PW1 for Codex and for Claude Code) or `gate` (C2 on
+  # the path route, C2 on the clipboard route and C4, eight presses each under
+  # the load grader). The job's timeout is set from the press count times each
+  # test's bound plus the build: 45 minutes for the build and parts one and
+  # two; `probe` adds PW2 (2 min) and two PW1 groups, each its start (3.5 min)
+  # and its one test's bound (9 min) and close (2 min), so 70; `gate` adds
+  # three groups, each its start (3.5 min), 8 presses of 70 s (9.3 min) and
+  # its close (2 min), so 45 + 3 x 14.8, rounded up to 95. Never raised to
+  # answer a red run.
   snap-e2e:
     if: github.event_name == 'workflow_dispatch' && inputs.snap_e2e == true
     name: Snap e2e (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: ${{ inputs.snap_e2e_paste == 'gate' && 95 || inputs.snap_e2e_paste == 'probe' && 70 || 45 }}
     permissions:
       contents: read
     strategy:
@@ -1354,6 +1374,31 @@ jobs:
           NPM_CACHE: ${{ runner.temp }}/npm-snap-codex-cache
         run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "@openai/codex@$CODEX_VERSION"
 
+      # The Claude Code part three's PW1 and C4 run (see the job's comment above).
+      - name: Resolve this runner's Claude Code package
+        id: claudepkg
+        if: ${{ inputs.snap_e2e_paste != '' }}
+        run: node tests/integration/claude-conformance-ci.mjs package
+
+      - name: Install Claude Code 2.1.332 into its own prefix
+        if: ${{ inputs.snap_e2e_paste != '' }}
+        shell: bash
+        env:
+          CLAUDE_VERSION: '2.1.332'
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/snap-claude
+          NPM_CACHE: ${{ runner.temp }}/npm-snap-claude-cache
+        run: npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"
+
+      - name: Locate the installed Claude Code
+        id: claudebin
+        if: ${{ inputs.snap_e2e_paste != '' }}
+        shell: bash
+        env:
+          CLAUDE_PACKAGE: ${{ steps.claudepkg.outputs.package }}
+          PREFIX: ${{ runner.temp }}/snap-claude
+        run: node tests/integration/claude-conformance-ci.mjs bin "$PREFIX" "$CLAUDE_PACKAGE"
+
       # A measurement: it prints what the run read and is red only when the
       # script itself could not run. "not measured" (the runner refused the
       # token) is a reading.
@@ -1369,6 +1414,8 @@ jobs:
           SNAP_E2E_OUT: ${{ runner.temp }}/snap-e2e
           SNAP_E2E_HELPER: ${{ github.workspace }}\helper\target\release\aicc-helper.exe
           SNAP_E2E_CODEX: ${{ runner.temp }}/snap-codex
+          SNAP_E2E_PASTE: ${{ inputs.snap_e2e_paste }}
+          SNAP_E2E_CLAUDE: ${{ steps.claudebin.outputs.dir }}
           PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ runner.temp }}/snap-e2e/playwright-report.json
         run: npx playwright test tests/e2e/snap-windows.spec.ts --retries=0 --workers=1 --reporter=list,json
 

@@ -722,8 +722,10 @@ export interface CanvasMarkerUndelivered {
  *  canvas marker (src/main/canvas/claude-marker-typing.ts): 'probe' reads it
  *  and types nothing; 'type' types the line and its Enter (the line alone
  *  when the request says `enterApart`) only if it reads ready and empty
- *  then. */
-export type ClaudeMarkerMode = 'probe' | 'type'
+ *  then. ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.3): 'read' types nothing
+ *  and answers how many image placeholders ("[Image #N]") the prompt shows,
+ *  for the clipboard paste's placeholder read (its line is not read). */
+export type ClaudeMarkerMode = 'probe' | 'type' | 'read'
 
 /** One such request (main -> renderer, canvas:claudeMarkerAsk). */
 export interface ClaudeMarkerAsk {
@@ -754,6 +756,9 @@ export interface ClaudeMarkerAnswer {
   requestId: string
   ok: boolean
   reason?: string
+  /** A 'read' only: the image placeholders the prompt shows, when `ok` (the
+   *  prompt box was found). A count, never the prompt's text. */
+  images?: number
 }
 
 /** Whether a session's launch had the Agent Canvas and vision skills in its

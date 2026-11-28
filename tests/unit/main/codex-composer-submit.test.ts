@@ -235,6 +235,22 @@ describe('take-back: Ctrl+U only, after the ingestion window', () => {
     expect(s.writes[1].at - s.writes[0].at).toBeGreaterThanOrEqual(SUBMIT_EXACT_CONFIRM_MS)
   })
 
+  it('takeBack false (the clipboard route, ADR-032 decision 6): a write never drawn is reported not drawn, and no Ctrl+U is sent', async () => {
+    const s = sim({ held: true })
+    const r = await submitToCodexComposer(MARKER, s.deps, { readyWaitMs: 10_000, takeBack: false })
+    expect(r).toEqual({ delivered: false, reason: 'not-drawn' })
+    expect(s.writes.map((w) => w.data)).toEqual([MARKER])
+    expect(s.now - s.writes[0].at).toBeGreaterThanOrEqual(SUBMIT_EXACT_CONFIRM_MS)
+    noCtrlC(s.writes)
+  })
+
+  it('green on 713c585f too: takeBack true is the default for every other caller, so the same write is taken back', async () => {
+    const s = sim({ held: true })
+    const r = await submitToCodexComposer(MARKER, s.deps, { readyWaitMs: 10_000, takeBack: true })
+    expect(r).toEqual({ delivered: false, reason: 'not-drawn' })
+    expect(s.writes.map((w) => w.data)).toEqual([MARKER, TAKE_BACK_KEY])
+  })
+
   it('the ingestion window grows with the text (PB9: up to about 2.9 s at 8,000 code points)', () => {
     expect(submitIngestionWindowMs(200)).toBeGreaterThanOrEqual(250)
     expect(submitIngestionWindowMs(8_000)).toBeGreaterThanOrEqual(2_900)

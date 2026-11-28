@@ -58,6 +58,67 @@ function constrainToMaxDim(img: ReturnType<typeof nativeImage.createFromBuffer>,
 const SCREENSHOT_MAX_DIM = 1920
 const SCREENSHOT_JPEG_QUALITY = 85
 
+/** ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.5): each saved Snap picture's
+ *  bitmap (at the same 1920 cap as its JPEG), kept by its file until the
+ *  paste module takes it, so the clipboard gets the picture itself, not its
+ *  JPEG decoded again. The last few only. */
+const keptPictures = new Map<string, Electron.NativeImage>()
+const KEPT_PICTURES_MAX = 4
+
+function keepPicture(file: string, picture: Electron.NativeImage): void {
+  keptPictures.set(file, picture)
+  while (keptPictures.size > KEPT_PICTURES_MAX) {
+    const oldest = keptPictures.keys().next().value
+    if (oldest === undefined) break
+    keptPictures.delete(oldest)
+  }
+}
+
+/** The picture saved as `file`, once (the paste module's), or null when it
+ *  is not kept any more. */
+export function takeSnapPicture(file: string): Electron.NativeImage | null {
+  const picture = keptPictures.get(file) ?? null
+  keptPictures.delete(file)
+  return picture
+}
+
+/** ADR-032 (plan 2.1.5): a saved Snap picture's file, by the one-shot token
+ *  the capture answers the renderer with (never the path). The renderer hands
+ *  the token back on the paste channel, so the capture's answer does not wait
+ *  for the paste. Each token is bound to the session its capture named
+ *  (review round 1, R1-2): it is taken only for that session. The last few
+ *  only, each for SNAP_TOKEN_MS. */
+const snapTokens = new Map<string, { file: string; sessionId: string; at: number }>()
+const SNAP_TOKENS_MAX = 8
+export const SNAP_TOKEN_MS = 120_000
+
+/** A token for the picture saved as `file`, for the session `sessionId`
+ *  the capture named. */
+export function keepSnapForPaste(file: string, sessionId: string): string {
+  const token = randomBytes(16).toString('hex')
+  snapTokens.set(token, { file, sessionId, at: Date.now() })
+  while (snapTokens.size > SNAP_TOKENS_MAX) {
+    const oldest = snapTokens.keys().next().value
+    if (oldest === undefined) break
+    snapTokens.delete(oldest)
+  }
+  return token
+}
+
+/** The picture a token names, once, for the session `sessionId`: its file
+ *  and its bitmap (kept at the capture, else read back from the file); null
+ *  for a token that is unknown, used, older than SNAP_TOKEN_MS, or kept for
+ *  another session (that token is used up too). */
+export function takeSnapForPaste(token: string, sessionId: string): { file: string; picture: Electron.NativeImage } | null {
+  const kept = typeof token === 'string' ? snapTokens.get(token) : undefined
+  if (!kept) return null
+  snapTokens.delete(token)
+  if (typeof sessionId !== 'string' || kept.sessionId !== sessionId) return null
+  if (Date.now() - kept.at > SNAP_TOKEN_MS) return null
+  const picture = takeSnapPicture(kept.file) ?? nativeImage.createFromPath(kept.file)
+  return picture.isEmpty() ? null : { file: kept.file, picture }
+}
+
 /**
  * The previous Snap's capture of a rectangle region of the screen: Snap on
  * macOS and Linux; on Windows a setting away (the new Snap is the default)
@@ -200,7 +261,9 @@ export function saveSnapPicture(picture: { width: number; height: number; bgra: 
   const filePath = uniquePath(generateFilename())
   const img = nativeImage.createFromBitmap(picture.bgra, { width: picture.width, height: picture.height })
   if (img.isEmpty()) throw new Error('an empty picture')
-  writeFileSync(filePath, constrainToMaxDim(img, SCREENSHOT_MAX_DIM).toJPEG(SCREENSHOT_JPEG_QUALITY))
+  const constrained = constrainToMaxDim(img, SCREENSHOT_MAX_DIM)
+  writeFileSync(filePath, constrained.toJPEG(SCREENSHOT_JPEG_QUALITY))
+  keepPicture(filePath, constrained)
   return filePath
 }
 
@@ -308,6 +371,7 @@ function previousSnapPress(library: Screenshots): Promise<string | null> {
         // captures land under Claude's image-size budget every time.
         const constrained = constrainToMaxDim(img, SCREENSHOT_MAX_DIM)
         writeFileSync(filePath, constrained.toJPEG(SCREENSHOT_JPEG_QUALITY))
+        keepPicture(filePath, constrained)
         finish(filePath)
       } catch (err) {
         console.error('[screenshot] save failed:', err)
@@ -356,6 +420,7 @@ export async function captureWindow(sourceId: string): Promise<string | null> {
     // Cap longest edge, preserving aspect ratio
     const constrained = constrainToMaxDim(source.thumbnail, SCREENSHOT_MAX_DIM)
     writeFileSync(filePath, constrained.toJPEG(SCREENSHOT_JPEG_QUALITY))
+    keepPicture(filePath, constrained)
     return filePath
   } catch (err) {
     console.error('[screenshot] captureWindow error:', err)

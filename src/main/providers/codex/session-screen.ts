@@ -44,7 +44,7 @@ import { Terminal } from '@xterm/headless'
 import { readXtermScreen, readCodexScreen, codexComposerDraft, type ScreenLine } from '../../../shared/codex-screen'
 import { codexImagePlaceholderShown, codexDraftIsImagePlaceholder, codexScreenPastPlaceholder } from '../../../shared/codex-image-screen'
 import type { SubmitTextResult } from '../../../shared/types'
-import type { HeldScreenRows, RunScreenImageNotPasted, RunScreenImageResult } from '../types'
+import type { HeldScreenRows, RunScreenClipboardResult, RunScreenImageNotPasted, RunScreenImageResult } from '../types'
 import {
   submitToCodexComposer, submitTextRefusal, submitIngestionWindowMs, TAKE_BACK_KEY,
   SUBMIT_READY_POLL_MS, SUBMIT_READY_SECOND_READ_MS, SUBMIT_CONFIRM_POLL_MS, SUBMIT_CLEAR_VERIFY_MS,
@@ -584,6 +584,147 @@ export function submitCodexImage(sessionId: string, imagePath: string, sentence:
     } catch (err) {
       logWarn(`[codex-image] ${sessionId}: the image failed (the rule read ${screen.from()}): ${(err as Error)?.message ?? err}`)
       return { pasted: false, reason: 'session-gone', left: true }
+    }
+  })
+}
+
+/** How many image placeholders a composer draft holds (codexComposerDraft's
+ *  reading: every space dropped). */
+function draftPlaceholders(draft: string | null): number {
+  return typeof draft === 'string' ? (draft.match(/\[Image#\d{1,3}\]/g) ?? []).length : 0
+}
+
+/**
+ * ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.3): Codex's own clipboard image
+ * paste into its composer. PURE, as the path rule above is: the screen, the
+ * writer, liveness and the clock come in `deps`. The path rule above stays
+ * as it was in 2.1.3-beta.20, reached only by the path route behind the test
+ * switch (src/main/paste, pathRouteOn); this one types no path and takes
+ * nothing back.
+ *
+ * With a `sentence` (a press from outside the terminal, and Snap):
+ * 1. waits within `readyWaitMs` for Codex's ready, EMPTY composer, ready on
+ *    two reads SUBMIT_READY_SECOND_READ_MS apart, as the path rule does
+ *    (`busy` when it is not seen; nothing typed);
+ * 2. the key, as ONE write (never inside a bracketed paste): Codex then
+ *    reads the clipboard itself;
+ * 3. polls for Codex's image placeholder alone in the ready composer within
+ *    `placeholderWaitMs` (`no-placeholder` when it does not show: nothing
+ *    more typed, nothing taken back);
+ * 4. the sentence, after a space, through the submit primitive past the
+ *    placeholder, as the path rule's step 5: Enter only once the screen
+ *    shows the placeholder and the whole sentence. Not confirmed: nothing
+ *    is taken back (the primitive is asked for `takeBack: false`, since its
+ *    Ctrl+U would clear the placeholder too: review round 2, R2-1), no
+ *    further key is sent, and the answer is `sentence-not-sent` (the picture
+ *    is at the prompt, unsent). A prompt up before the sentence was sent:
+ *    `prompt-on-screen`, whose hint asks for no Enter (Enter would answer
+ *    the prompt).
+ * Without one (a press in the terminal: the user is writing): the key at
+ * once, whatever the composer holds, then a placeholder more than the
+ * composer held before the key, within the wait; nothing more is typed.
+ * A prompt up after the key: nothing more typed (`no-placeholder`). Never
+ * sends Ctrl+C. A run that ends meanwhile: `session-gone`.
+ */
+export async function pasteClipboardIntoCodexComposer(key: string, sentence: string | null, deps: ComposerSubmitDeps, opts: { readyWaitMs: number; placeholderWaitMs: number }): Promise<RunScreenClipboardResult> {
+  const models = deps.models ?? null
+  const read = async (): Promise<ImageShot> => {
+    if (deps.settle) {
+      let drawn = false
+      try { drawn = (await deps.settle()) === true } catch { drawn = false }
+      if (!drawn) return { lines: null, title: null }
+    }
+    let title: string | null = null
+    try { title = deps.readTitle?.() ?? null } catch { title = null }
+    try { return { lines: deps.readScreen(), title } } catch { return { lines: null, title } }
+  }
+  const state = ({ lines, title }: ImageShot): 'ready' | 'blocked' | 'waiting' => {
+    const shown = readCodexScreen(lines, models, { title })
+    if (shown.screen === 'blocked') return 'blocked'
+    return shown.screen === 'ready' && shown.text === '' ? 'ready' : 'waiting'
+  }
+
+  // 1. With a sentence: the ready, empty composer, on two reads.
+  let before = 0
+  if (sentence !== null) {
+    const waitUntil = deps.now() + Math.max(0, opts.readyWaitMs)
+    for (;;) {
+      if (!deps.live()) return { outcome: 'session-gone' }
+      if (state(await read()) === 'ready') {
+        await deps.sleep(SUBMIT_READY_SECOND_READ_MS)
+        if (!deps.live()) return { outcome: 'session-gone' }
+        if (state(await read()) === 'ready') break
+      }
+      if (deps.now() >= waitUntil) return { outcome: 'busy' }
+      await deps.sleep(SUBMIT_READY_POLL_MS)
+    }
+  } else {
+    if (!deps.live()) return { outcome: 'session-gone' }
+    const shot = await read()
+    let draft: string | null = null
+    try { draft = codexComposerDraft(shot.lines, models) } catch { draft = null }
+    before = draftPlaceholders(draft)
+  }
+
+  // 2. The key, in one write.
+  deps.write(key)
+  const keyAt = deps.now()
+
+  // 3. Codex's placeholder for the picture.
+  let placeholder: string | null = null
+  for (;;) {
+    await deps.sleep(SUBMIT_CONFIRM_POLL_MS)
+    if (!deps.live()) return { outcome: 'session-gone' }
+    const shot = await read()
+    if (state(shot) === 'blocked') return { outcome: 'no-placeholder' }
+    if (sentence !== null) {
+      placeholder = codexImagePlaceholderShown(shot.lines, models, shot.title)
+      if (placeholder) break
+    } else {
+      let draft: string | null = null
+      try { draft = codexComposerDraft(shot.lines, models) } catch { draft = null }
+      if (draftPlaceholders(draft) > before) return { outcome: 'placeholder' }
+    }
+    if (deps.now() >= keyAt + Math.max(0, opts.placeholderWaitMs)) return { outcome: 'no-placeholder' }
+  }
+
+  // 4. The sentence, through the primitive, past the placeholder.
+  if (sentence === null || placeholder === null) return { outcome: 'placeholder' }
+  const shown = placeholder
+  let typed = false
+  const past: ComposerSubmitDeps = {
+    ...deps,
+    readScreen: () => codexScreenPastPlaceholder(deps.readScreen(), shown, typed, models),
+    write: (data) => { typed = true; deps.write(data) },
+    log: (msg) => { try { deps.log?.(`the sentence: ${msg}`) } catch { /* a log line never breaks the rule */ } },
+  }
+  const result = await submitToCodexComposer(` ${sentence}`, past, { readyWaitMs: IMAGE_SENTENCE_READY_WAIT_MS, takeBack: false })
+  if (result.delivered) return { outcome: 'sent' }
+  if (result.reason === 'session-gone') return { outcome: 'session-gone' }
+  if (result.reason === 'prompt-on-screen') return { outcome: 'prompt-on-screen' }
+  return { outcome: 'sentence-not-sent' }
+}
+
+/**
+ * ADR-032: the clipboard paste into the session's Codex composer
+ * (pasteClipboardIntoCodexComposer), after anything already in flight for
+ * this run, as one submission. `session-gone` when the session has no
+ * reading or its run ends meanwhile. Never rejects. One log line says what
+ * came of it and where the rule read the screen; it names no picture and no
+ * path.
+ */
+export function submitCodexClipboard(sessionId: string, key: string, sentence: string | null, opts: { readyWaitMs: number; placeholderWaitMs: number }): Promise<RunScreenClipboardResult> {
+  return onRun<RunScreenClipboardResult>(sessionId, 'codex-paste', { outcome: 'session-gone' }, async (deps, screen) => {
+    try {
+      const result = await pasteClipboardIntoCodexComposer(key, sentence, deps, opts)
+      const what = result.outcome === 'sent' ? 'pasted and sent'
+        : result.outcome === 'placeholder' ? 'pasted (a press in the terminal: nothing more typed)'
+          : `not pasted (${result.outcome})`
+      logInfo(`[codex-paste] ${sessionId}: the clipboard picture ${what}; ${readFrom(screen)}`)
+      return result
+    } catch (err) {
+      logWarn(`[codex-paste] ${sessionId}: the paste failed (the rule read ${screen.from()}): ${(err as Error)?.message ?? err}`)
+      return { outcome: 'session-gone' }
     }
   })
 }

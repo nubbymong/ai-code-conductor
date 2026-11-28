@@ -125,6 +125,12 @@ function rememberTyped(typed: Set<string>, key: string): void {
 
 const idOk = (v: unknown): v is string => typeof v === 'string' && v.length > 0 && v.length <= MAX_ID
 
+/** How many of Claude Code's image placeholders ("[Image #N]") a prompt's
+ *  text holds (ADR-032: the clipboard paste reads a new one after its key). */
+export function claudeImagePlaceholders(text: string): number {
+  return (text.match(/\[Image #\d{1,3}\]/g) ?? []).length
+}
+
 /**
  * Answer one of main's canvas marker requests (canvas:claudeMarkerAsk) from
  * the session's live screen. 'probe': whether Claude Code's prompt reads
@@ -143,6 +149,15 @@ export function answerClaudeMarkerAsk(raw: unknown, deps: ClaudePromptDeps = def
   const ask = raw as Record<string, unknown>
   if (!idOk(ask.requestId)) return null
   const requestId = ask.requestId
+  // ADR-032 (plan 2.1.3-beta.21 phase 2, 2.1.3): a 'read' for the clipboard
+  // paste types nothing and answers only how many image placeholders the
+  // prompt shows; ok when the prompt box is found (ready, or busy with a
+  // turn). Its line is not read.
+  if (ask.mode === 'read' && idOk(ask.sessionId) && idOk(ask.markerId)) {
+    const read = readClaudeScreen(deps.readScreen(ask.sessionId))
+    if (read.screen !== 'ready' && read.screen !== 'busy') return { requestId, ok: false, reason: CLAUDE_NOT_AT_PROMPT }
+    return { requestId, ok: true, images: claudeImagePlaceholders(read.text) }
+  }
   if (!idOk(ask.sessionId) || !idOk(ask.markerId) || (ask.mode !== 'probe' && ask.mode !== 'type') || !canvasMarkerLineOk(ask.line)
     || (ask.enterApart !== undefined && typeof ask.enterApart !== 'boolean')) {
     return { requestId, ok: false, reason: CLAUDE_MARKER_REFUSED }

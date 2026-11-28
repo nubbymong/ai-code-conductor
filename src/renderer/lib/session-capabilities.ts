@@ -19,7 +19,6 @@
  * the same machine on every session type.
  */
 import type { Session } from '../stores/sessionStore'
-import type { ProviderId } from '../../shared/providers'
 
 export type CommandTarget = 'claude' | 'partner'
 export type AgentId = 'claude' | 'codex'
@@ -30,7 +29,10 @@ export type LogsEmptyReason = 'shell-only' | 'ssh'
  *  Code reads one write of a line and its Enter as a submission); `composer`,
  *  typed only into the agent's ready, empty composer and confirmed before its
  *  Enter, by the renderer's composer rule, which says why when it types
- *  nothing (Codex submits no such one write, PB3). */
+ *  nothing (Codex submits no such one write, PB3). Since 2.1.3-beta.21
+ *  (ADR-032) only the path route behind the test switch types a line, and
+ *  each provider's comes from its own table in main (ClipboardPasteRule
+ *  pathRouteLine), in main's path-route answer; IMAGE_LINES is gone. */
 export type ImageLine = 'enter' | 'composer'
 
 export type CapabilitySource = Pick<Session, 'provider' | 'sessionType' | 'shellOnly' | 'configId' | 'sshConfig' | 'kind'>
@@ -61,10 +63,6 @@ export interface SessionCapabilities {
   canIndexLogs: boolean
   /** Snap types an English prompt into the main pane -- nonsense on a shell. */
   canSendImageToAgent: boolean
-  /** How the main pane's agent takes a saved image's line when main did not
-   *  paste the image (ImageLine); null for a plain shell, or for a provider
-   *  with no line of its own, which get none. */
-  imageLine: ImageLine | null
   /** A session with no saved config has no "this config" to scope to. */
   hasConfig: boolean
   /** True when this is the Ask Conductor help session. */
@@ -81,10 +79,6 @@ export interface SessionCapabilities {
 }
 
 const AGENT_NAMES: Record<AgentId, string> = { claude: 'Claude', codex: 'Codex' }
-/** Each provider's image line (ImageLine), or null for one with none. Keyed
- *  by ProviderId, so a provider added to PROVIDER_IDS is a compile error here
- *  until its line is decided; a provider is never given another's line. */
-const IMAGE_LINES: Readonly<Record<ProviderId, ImageLine | null>> = { claude: 'enter', codex: 'composer' }
 
 export function sessionCapabilities(session: CapabilitySource | null | undefined): SessionCapabilities {
   const provider: AgentId = session?.provider === 'codex' ? 'codex' : 'claude'
@@ -109,12 +103,6 @@ export function sessionCapabilities(session: CapabilitySource | null | undefined
     logsEmptyReason,
     canIndexLogs: logsEmptyReason === null,
     canSendImageToAgent: !shellOnly,
-    // By the record's own provider, not `agent` (which reads every provider
-    // that is not Codex as Claude Code): a record with no provider is read as
-    // `provider` reads it (Claude Code), and a provider with no line here gets
-    // none. (`provider`, not a provider's name, as the fallback: the
-    // provider-name ratchet counts an id defaulted to a name.)
-    imageLine: shellOnly ? null : (IMAGE_LINES[session?.provider ?? provider] ?? null),
     hasConfig: !!session?.configId,
     isAsk: session?.kind === 'ask',
     runsOn,

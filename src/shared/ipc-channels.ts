@@ -32,6 +32,11 @@ export const IPC = {
   // renderer's navigator.clipboard.readText(), and retried for Windows
   // delayed-render. Used by the terminal paste keybinding.
   CLIPBOARD_READ_TEXT: 'clipboard:readText',
+  // ADR-032 (plan 2.1.3-beta.21 phase 2): renderer -> main, PasteKeyPress ->
+  // PasteKeyResult. The image paste key (or the text paste chord with no text
+  // on the clipboard) was pressed in a session, focused or not. No clipboard
+  // content and no path: main reads the clipboard itself (src/main/paste).
+  PASTE_IMAGE_KEY: 'paste:imageKey',
   // Input diagnostics (#145): identify what an external tool actually sends.
   // Enabled only when CCC_INPUT_DEBUG=1 is set for the main process.
   DEBUG_INPUT_ENABLED: 'debug:inputEnabled',

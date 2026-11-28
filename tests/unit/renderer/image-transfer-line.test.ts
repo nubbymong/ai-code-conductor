@@ -14,6 +14,12 @@
  *    or an ask that fails, types nothing.
  *  - The sender reads no provider: no 'claude' or 'codex' string in
  *    imageTransfer.ts.
+ * Since 2.1.3-beta.21 (ADR-032; plan phase 2, 2.1.2) the provider tables in
+ * main hold each provider's line (ClipboardPasteRule pathRouteLine), and only
+ * the path route behind the test switch types one: main names it in its
+ * path-route answer, and the sender takes it as a parameter. The capability
+ * no longer carries an image line (IMAGE_LINES is gone); a session given no
+ * line gets nothing typed, as before.
  * Red on d0be048e: the capability had no imageLine; the sender typed Claude
  * Code's line (the sentence, the path and Enter) for every session it did
  * not read as Codex in the store, and compared the provider to 'codex'.
@@ -47,17 +53,18 @@ beforeEach(() => {
   h.sendImagePathToCodex.mockReset()
 })
 
-describe('the image line, as sessionCapabilities says it', () => {
-  it('Claude Code enter, Codex composer, a plain shell none, no provider read as Claude Code', () => {
-    expect(sessionCapabilities({ provider: 'claude', sessionType: 'local' } as never).imageLine).toBe('enter')
-    expect(sessionCapabilities({ provider: 'codex', sessionType: 'local' } as never).imageLine).toBe('composer')
-    expect(sessionCapabilities({ provider: 'claude', sessionType: 'local', shellOnly: true } as never).imageLine).toBeNull()
-    expect(sessionCapabilities({ sessionType: 'local' } as never).imageLine).toBe('enter')
-    expect(sessionCapabilities(undefined).imageLine).toBe('enter')
+describe('the image line is no longer the renderer\'s (2.1.3-beta.21, ADR-032 row 14)', () => {
+  it('the capability carries no image line for any provider', () => {
+    for (const provider of ['claude', 'codex', 'third', undefined]) {
+      expect('imageLine' in sessionCapabilities({ provider, sessionType: 'local' } as never), String(provider)).toBe(false)
+    }
   })
 
-  it('a provider with no line of its own gets none, never Claude Code\'s', () => {
-    expect(sessionCapabilities({ provider: 'third', sessionType: 'local' } as never).imageLine).toBeNull()
+  it('each provider\'s line is its own table\'s in main: Claude Code enter, Codex composer', async () => {
+    const { CLAUDE_CLIPBOARD_PASTE } = await import('../../../src/main/providers/claude/clipboard-paste')
+    const { CODEX_CLIPBOARD_PASTE } = await import('../../../src/main/providers/codex/clipboard-paste')
+    expect(CLAUDE_CLIPBOARD_PASTE.pathRouteLine).toBe('enter')
+    expect(CODEX_CLIPBOARD_PASTE.pathRouteLine).toBe('composer')
   })
 })
 
