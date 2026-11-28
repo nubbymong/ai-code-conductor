@@ -69,7 +69,7 @@ describe('matchesShortcut on macOS: a shortcut with Alt matches by the physical 
   })
 })
 
-describe('a focused Option+V in a Claude Code or Codex session on macOS', () => {
+describe('a focused Option+V in an agent session on macOS', () => {
   it('is claimed before xterm (no √ typed) and reported to main as one focused press', async () => {
     ;(window as unknown as { electronPlatform?: string }).electronPlatform = 'darwin'
     const textarea = document.createElement('textarea')

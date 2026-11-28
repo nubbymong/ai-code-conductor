@@ -4,8 +4,9 @@
 // (tests/e2e/paste-unix.spec.ts).
 //
 // macOS: public.png and public.tiff, the two in one item. Claude Code reads
-// the clipboard as «class PNGf» (public.png) only; Codex's arboard reads
-// NSPasteboardTypeTIFF (public.tiff) only. Each is written as the platform's
+// the clipboard as «class PNGf» (public.png) only; the other CLI's read
+// (arboard) takes NSPasteboardTypeTIFF (public.tiff) only, as each
+// provider's table says (formats). Each is written as the platform's
 // own format through Electron 44's raw format key (`electron
 // application/osclipboard;format="<name>"`), so nothing re-encodes either.
 // Electron has no TIFF encoder, so the TIFF is made here from the PNG's own
@@ -16,7 +17,8 @@
 // reads it, and the picture is never refused for its TIFF.
 //
 // Linux: image/png, through the W3C-shaped key as on Windows. Claude Code's
-// xclip or wl-paste and Codex's arboard all ask the clipboard for image/png.
+// xclip or wl-paste and the other CLI's arboard all ask the clipboard for
+// image/png.
 import { inflateSync } from 'zlib'
 
 /** The key Electron 44's clipboard.write takes for a platform format by its
