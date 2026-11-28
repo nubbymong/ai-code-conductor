@@ -667,6 +667,7 @@ test.describe('paste readings: the app\'s own route into Claude Code and Codex',
     expect(hint).toContain(PASTE_NOTES['no-clipboard-tool'])
     await sleep(2_000)
     expect(await placeholders(), 'no key: no placeholder').toBe(before)
-    expect(standInEvents.slice(from).filter((e) => e.ev === 'request' && e.path === '/v1/messages'), 'no turn').toEqual([])
+    // Claude Code may ask its model things of its own; none of them carries a picture.
+    expect(standInEvents.slice(from).filter((e) => e.ev === 'request' && e.path === '/v1/messages' && (e.images ?? []).length > 0), 'no turn with a picture').toEqual([])
   })
 })
