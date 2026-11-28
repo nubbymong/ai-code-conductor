@@ -436,9 +436,7 @@ impl<'a> Deadline<'a> {
     /// in time is read whole under the ordinary 60 s (`IDLE_TIMEOUT`) from
     /// that byte, so the wait running out never cuts a frame in two.
     fn new(stream: &'a mut Stream, limit: Duration, quiet: bool) -> Deadline<'a> {
-        // MUTANT M4 (round 3 F10, the fix taken out): no frame gets its rest.
-        let _ = quiet;
-        Deadline { stream, until: Instant::now() + limit, read: 0, rest: None }
+        Deadline { stream, until: Instant::now() + limit, read: 0, rest: quiet.then_some(IDLE_TIMEOUT) }
     }
 }
 

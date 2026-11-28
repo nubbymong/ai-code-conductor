@@ -78,9 +78,6 @@ fn refuse<T>(code: &'static str, re: Option<u64>, text: &str) -> Result<T, Refus
 /// (`image/png`) or `paste-<n>.jpg` (`image/jpeg`), `<n>` 1 to 9 decimal
 /// digits with no leading zero. None for any other name.
 pub fn picture_name(name: &str) -> Option<(u32, &'static str)> {
-    // MUTANT M2 (plan 4.3, a name outside paste/): only the part after the
-    // last separator is checked, so ../paste-1.png is taken.
-    let name = name.rsplit(|c: char| c == '/' || c == '\\').next().unwrap_or(name);
     let rest = name.strip_prefix("paste-")?;
     let (digits, kind) = if let Some(d) = rest.strip_suffix(".png") {
         (d, "image/png")
@@ -372,8 +369,7 @@ impl Upload {
             Err(e) => return Err(io_refusal(e)),
         }
         let held = clear_parts_and_measure(dir).map_err(io_refusal)?;
-        // MUTANT M1 (plan 4.3, a cap skipped): the folder's 100 MiB is not checked.
-        if false && held.saturating_add(put.size) > MAX_HELD {
+        if held.saturating_add(put.size) > MAX_HELD {
             return refuse(CODE_TOO_LARGE, re, "with what the session's picture folder holds, this picture is over 100 MiB (104857600 bytes)");
         }
         let part = dir.join(format!("{PART_PREFIX}{}", put.number));
@@ -450,8 +446,7 @@ impl Drop for Upload {
     /// its partial file goes.
     fn drop(&mut self) {
         drop(self.file.take());
-        // MUTANT M3 (plan 4.3, a partial file kept): it is never removed.
-        if false && !self.stored {
+        if !self.stored {
             let _ = fs::remove_file(&self.part);
         }
     }
