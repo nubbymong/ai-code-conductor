@@ -9,7 +9,7 @@
 //! session's end each leave nothing behind.
 
 use aicc_helper::client::Client;
-use aicc_helper::frame::{Body, Frame};
+use aicc_helper::frame::{self, Body, Direction, Frame};
 use aicc_helper::hello;
 use aicc_helper::json::Value;
 use aicc_helper::paste::{self, Sha256};
@@ -460,6 +460,42 @@ fn a_stalled_upload_ends_with_timeout_and_the_connection_goes_on() {
     let id = app.put("paste-2.png", 1000, &sha_of(&bytes)).expect("taken after the timeout");
     app.chunks(&bytes);
     assert_eq!(t_of(&app.answer_to(id, WAIT)), "file.stored");
+}
+
+#[test]
+fn a_frame_begun_before_the_next_chunk_is_due_is_read_whole_and_the_overdue_upload_ends_with_the_link_up() {
+    let _serial = one_at_a_time();
+    let folder = Folder::new("midframe");
+    let sid = "paste-midframe-01";
+    let held = Held(hold(&folder, sid));
+    let dir = folder.pictures(sid);
+    let mut app = App::connect(&held.0, &TAB_CAPS);
+    launch_and_attach(&mut app, &folder.0);
+    let bytes = picture(1000);
+    let id = app.put("paste-1.png", 1000, &sha_of(&bytes)).expect("taken");
+    // The holder takes the chunk once it is sent, so the next one is due no
+    // earlier than CHUNK_WAIT (CHUNK_WAIT_TEST in this build) after this.
+    let sent = Instant::now();
+    app.chunks(&bytes[..400]);
+    // 64 KiB of typed input in one frame on the terminal channel, as a large
+    // text paste sends it: lines of 256 bytes, each ended by Enter.
+    let mut typed = Vec::with_capacity(frame::MAX_RAW);
+    for i in 0..frame::MAX_RAW / 256 {
+        typed.extend_from_slice(format!("{:<255}\r", format!("typed while a picture waits {i:03}")).as_bytes());
+    }
+    let whole = frame::encode(&Frame::raw(1, typed), Direction::AppToHelper).expect("a frame");
+    // Its 9 header bytes 500 ms before the chunk is due, the rest 1 s later:
+    // the frame is still arriving when the chunk wait runs out.
+    std::thread::sleep((sent + paste::CHUNK_WAIT - Duration::from_millis(500)).saturating_duration_since(Instant::now()));
+    app.client.send_bytes(&whole[..9]).expect("send the frame's header");
+    std::thread::sleep(Duration::from_secs(1));
+    let rest = app.client.send_bytes(&whole[9..]);
+    // The upload's own timeout answer, not a close: the frame was read whole.
+    let answer = app.answer_to(id, WAIT);
+    assert_eq!((t_of(&answer), code_of(&answer)), ("error", "timeout"), "{}", answer.to_json());
+    rest.expect("send the rest of the frame");
+    assert_eq!(names(&dir), Vec::<String>::new());
+    assert!(app.pings(), "the connection did not go on after the overdue upload's timeout");
 }
 
 #[test]

@@ -2809,6 +2809,48 @@ mod tests {
         assert_eq!(idle_limit(false, Duration::from_secs(61)), IDLE_TIMEOUT);
     }
 
+    /// A read with `quiet` (a picture's chunk wait) whose frame began within
+    /// its limit reads that frame whole, though the rest came after the
+    /// limit; any other read keeps its limit for the whole frame, so a frame
+    /// sent slowly never stretches it. Over this OS's own transport.
+    #[test]
+    fn a_frame_begun_within_a_pictures_chunk_wait_is_read_whole_and_any_other_read_keeps_its_limit() {
+        let sent = Frame::raw(TERMINAL_CHANNEL, vec![b'x'; 1000]);
+        let whole = frame::encode(&sent, Direction::AppToHelper).expect("encode");
+        for (quiet, sid) in [(true, "serve-deadline-01"), (false, "serve-deadline-02")] {
+            let listener = Arc::new(Listener::bind(sid).expect("listen"));
+            let server = Arc::clone(&listener);
+            let bytes = whole.clone();
+            let (go, start) = std::sync::mpsc::channel::<()>();
+            // The header at once, the rest 2 s later: after the 800 ms limit.
+            let sender = thread::spawn(move || {
+                let mut s = server.accept().expect("accept");
+                start.recv().expect("the reader is ready");
+                s.write_all_within(&bytes[..9], Duration::from_secs(5)).expect("send the header");
+                thread::sleep(Duration::from_secs(2));
+                let _ = s.write_all_within(&bytes[9..], Duration::from_secs(5));
+                s
+            });
+            let mut stream = transport::connect(listener.endpoint(), Duration::from_secs(10)).expect("connect");
+            let mut timed = Deadline::new(&mut stream, Duration::from_millis(800), quiet);
+            go.send(()).expect("start the sender");
+            let got = frame::read_frame_within(&mut timed, Direction::AppToHelper, frame::MAX_RAW);
+            let read = timed.read;
+            let _kept = sender.join().expect("the sender");
+            if quiet {
+                match got {
+                    Ok(Some(f)) => assert_eq!(f, sent),
+                    other => panic!("a frame begun within the chunk wait was cut off when the wait ran out ({read} bytes read): {other:?}"),
+                }
+            } else {
+                match got {
+                    Err(FrameError::Io(e)) if transport::is_timeout(&e) => assert_eq!(read, 9, "the read stopped elsewhere than after the header"),
+                    other => panic!("a read without quiet waited past its limit for the rest of a frame: {other:?}"),
+                }
+            }
+        }
+    }
+
     fn full() -> io::Result<()> {
         Err(io::Error::new(io::ErrorKind::WouldBlock, "full"))
     }
