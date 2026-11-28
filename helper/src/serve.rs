@@ -116,11 +116,13 @@
 //! connection's own: it ends, its partial file removed, when the connection
 //! closes, detaches or is replaced, and when no chunk comes in time
 //! (`paste::CHUNK_WAIT`, answered `timeout`). A read of the next frame waits
-//! only until that time; one that passes before a byte of a frame came ends
-//! the upload and the connection goes on, its 60 s with no frame
-//! (`IDLE_TIMEOUT`) running on from the last frame, not anew. The folder
-//! goes at the session's end. The holder never reads a picture and decides
-//! nothing from one.
+//! only until that time for a frame to begin; one that passes before a byte
+//! of a frame came ends the upload and the connection goes on, its 60 s with
+//! no frame (`IDLE_TIMEOUT`) running on from the last frame, not anew. A
+//! frame that began in time is read whole under the ordinary 60 s from its
+//! first byte, and an upload overdue by then ends the same way at the next
+//! read, the connection still up. The folder goes at the session's end. The
+//! holder never reads a picture and decides nothing from one.
 //!
 //! Locks: a connection's stream gate (`Conn::live`) first (the attached
 //! connection's before a relay's, which guards that relay's tool messages),
@@ -416,12 +418,26 @@ struct State {
 }
 
 /// A stream read that must finish by `until`: each read waits only for what
-/// is left, so a frame sent a byte at a time cannot stretch a limit.
+/// is left, so a frame sent a byte at a time cannot stretch a limit. With
+/// `rest`, the limit is only for a frame to begin: once its first byte has
+/// come, it has until at least `rest` after that byte to finish.
 struct Deadline<'a> {
     stream: &'a mut Stream,
     until: Instant,
     /// Bytes read so far: while none, the stream is still between frames.
     read: usize,
+    /// The least time a frame has from its first byte, used once.
+    rest: Option<Duration>,
+}
+
+impl<'a> Deadline<'a> {
+    /// A read of one frame within `limit`. With `quiet` (a picture's chunk
+    /// wait) the limit is for the frame to begin: one whose first byte came
+    /// in time is read whole under the ordinary 60 s (`IDLE_TIMEOUT`) from
+    /// that byte, so the wait running out never cuts a frame in two.
+    fn new(stream: &'a mut Stream, limit: Duration, quiet: bool) -> Deadline<'a> {
+        Deadline { stream, until: Instant::now() + limit, read: 0, rest: quiet.then_some(IDLE_TIMEOUT) }
+    }
 }
 
 impl Read for Deadline<'_> {
@@ -432,6 +448,11 @@ impl Read for Deadline<'_> {
         }
         self.stream.set_read_timeout(Some(left.max(Duration::from_millis(1))))?;
         let n = self.stream.read(buf)?;
+        if self.read == 0 && n > 0 {
+            if let Some(rest) = self.rest.take() {
+                self.until = self.until.max(Instant::now() + rest);
+            }
+        }
         self.read += n;
         Ok(n)
     }
@@ -1720,10 +1741,13 @@ impl Serve {
 
     /// `next_frame`, and with `quiet` a limit that passes before a byte of a
     /// frame came is `Next::Quiet`: nothing is said, and the stream is still
-    /// whole. A limit that passes inside a frame closes the connection, as
-    /// any other limit does (a frame cannot be read on from its middle).
+    /// whole. With `quiet` a frame whose first byte came in time is read
+    /// whole under the ordinary 60 s from that byte (`Deadline::new`), so the
+    /// next read, its limit gone, is `Next::Quiet`. A limit that passes
+    /// inside a frame closes the connection, as any other limit does (a frame
+    /// cannot be read on from its middle).
     fn read_next(&self, conn: &Conn, reader: &mut Stream, limit: Duration, waited: &str, max_json: usize, quiet: bool) -> Next {
-        let mut timed = Deadline { stream: reader, until: Instant::now() + limit, read: 0 };
+        let mut timed = Deadline::new(reader, limit, quiet);
         let got = frame::read_frame_within(&mut timed, Direction::AppToHelper, max_json);
         match got {
             Ok(Some(f)) => Next::Frame(f),
@@ -1869,7 +1893,8 @@ impl Serve {
         let mut after_stall = false;
         loop {
             let next = match &upload {
-                // The next chunk is due: a read waits only until then.
+                // The next chunk is due: a read waits only until then for a
+                // frame to begin.
                 Some(u) => {
                     let limit = u.due().saturating_duration_since(Instant::now()).min(IDLE_TIMEOUT);
                     self.read_next(conn, reader, limit, "a chunk of the picture did not arrive in time", self.max_json(allowed.mcp), true)
