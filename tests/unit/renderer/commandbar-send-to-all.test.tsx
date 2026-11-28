@@ -439,4 +439,9 @@ describe('the one-off rule: broadcastBlocker without its Global line (#450)', ()
     expect(sendToAllOffer({ ...BROADCAST, scope: 'config', configId: 'cfg' } as never, caps)).toEqual({ blockedBy: null })
     expect(sendToAllOffer({ ...BROADCAST, defaultArgs: ['--strict'] } as never, caps)).toEqual({ blockedBy: ARGS_REASON })
   })
+
+  it('a hand-edited prompt record aimed at the partner shell gets no item', () => {
+    const caps = sessionCapabilities(OPEN[0] as never)
+    expect(sendToAllOffer({ ...GLOBAL_PROMPT, target: 'partner' } as never, caps)).toBeNull()
+  })
 })

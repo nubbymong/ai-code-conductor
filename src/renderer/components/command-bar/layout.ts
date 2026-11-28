@@ -77,9 +77,10 @@ export interface SendToAllOffer {
  * broadcast button, whose own press already asks. Else why it cannot be
  * chosen here, as the Run item says why a button cannot run: Ask Conductor
  * and a terminal-only tab send to no other session, and only a prompt with no
- * arguments goes (oneOffBroadcastBlocker, so a Session prompt goes too). The
- * bar's own check at the press and at the chooser's answer is the same rule
- * (CommandBar's canBroadcastOnce).
+ * arguments goes (oneOffBroadcastBlocker, so a Session prompt goes too). Its
+ * enabled state matches CommandBar's canBroadcastOnce, the check at the
+ * chooser's answer; keep the two in step. This one also hides the item on a
+ * broadcast button, a shell line and a page.
  */
 export function sendToAllOffer(cmd: CustomCommand, caps: SessionCapabilities): SendToAllOffer | null {
   if (effectiveKind(cmd, caps) !== 'prompt' || cmd.target === 'partner' || isBroadcastButton(cmd)) return null

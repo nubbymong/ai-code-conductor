@@ -650,8 +650,9 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
    * aicc_planning#450: whether this button's prompt can go to all sessions
    * ONCE, from its right-click menu's "Send to all sessions…": canBroadcast
    * with broadcastBlocker's Global line left out (oneOffBroadcastBlocker), so
-   * a Session prompt can too. The menu shows the item by the same rule
-   * (layout.ts sendToAllOffer).
+   * a Session prompt can too. The menu's enabled state (layout.ts
+   * sendToAllOffer) must stay in step with this rule; the menu also hides the
+   * item on a broadcast button, a shell line and a page.
    */
   const canBroadcastOnce = (cmd: CustomCommand): boolean =>
     !!caps.agent && !caps.isAsk && oneOffBroadcastBlocker(cmd) === null && typeof window.electronAPI?.pty?.submitPrompt === 'function'
