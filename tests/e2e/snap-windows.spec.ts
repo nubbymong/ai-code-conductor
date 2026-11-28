@@ -1665,10 +1665,18 @@ const requestsWith = (from: number, api: '/v1/responses' | '/v1/messages', rgba:
 function seedClaudeConfig(dir: string, projectDir: string): void {
   fs.mkdirSync(dir, { recursive: true })
   const proj = { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true, projectOnboardingSeenCount: 1, allowedTools: [] }
+  // Every spelling of the folder: the temp folder can be named by its short
+  // name (RUNNER~1) here and by its long one in Claude Code (probe run
+  // 46127035163), each with either separator.
+  const spellings = new Set<string>([projectDir])
+  try { spellings.add(fs.realpathSync.native(projectDir)) } catch { /* the name given */ }
+  try { spellings.add(fs.realpathSync(projectDir)) } catch { /* the name given */ }
+  const projects: Record<string, typeof proj> = {}
+  for (const p of spellings) { projects[p] = proj; projects[p.replace(/\\/g, '/')] = proj }
   fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({
     hasCompletedOnboarding: true, lastOnboardingVersion: CLAUDE_VERSION_UNDER_TEST, theme: 'dark', numStartups: 1, autoUpdates: false,
     hasAcknowledgedCostThreshold: true, customApiKeyResponses: { approved: [CLAUDE_FAKE_KEY.slice(-20)], rejected: [] },
-    projects: { [projectDir]: proj, [projectDir.replace(/\\/g, '/')]: proj },
+    projects,
   }, null, 2))
 }
 
@@ -1769,6 +1777,9 @@ async function launchClaudePasteApp(name: string): Promise<{ standIn: StandIn; p
 const CLAUDE_READY_RE = /(?:^|\n) {0,2}\u2500{8,} *\n {0,2}[\u276f>](?: [^\n]*)?\n {0,2}\u2500{8,}/u
 /** Claude Code's first screens and what answers each (as probe P11 answers them). */
 const CLAUDE_FIRST_SCREENS: Array<{ re: RegExp; keys: string[] }> = [
+  // 2.1.332's folder trust (probe run 46127035163): "No, exit" first and
+  // highlighted, "Yes, I trust this folder" under it.
+  { re: /No, exit[\s\S]*Yes, I trust this folder/, keys: ['\u001b[B', '\r'] },
   { re: /text style|Dark mode/i, keys: ['\r'] },
   { re: /use this API key/i, keys: ['\u001b[A', '\r'] },
   { re: /trust (the files in )?this folder/i, keys: ['\r'] },
