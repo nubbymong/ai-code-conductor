@@ -101,7 +101,7 @@ describe('the review check\'s tool host: one review tool on a tool stream, serve
     expect((early[0] as { result?: { serverInfo?: { name?: string } } }).result?.serverInfo?.name).toBe('conductor')
   })
 
-  it('the stream ending from the far side is recorded, and the server sends nothing after it', async () => {
+  it('the stream ending from the far side is recorded, and the link is not closed from this side', async () => {
     const p = pair()
     const seen = newToolHostSeen()
     serveReviewTool(p.link, TOOL(async () => ({ text: 'x', isError: false })), seen)

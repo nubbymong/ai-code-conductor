@@ -584,11 +584,13 @@ answering probe P11's model stand-in (`p11-model-stand-in.cjs`): on the marked
 prompt (run `review-tool-1`) the stand-in sends a tool_use of
 `mcp__conductor__codex_review` (mode working), Claude Code calls it through
 the session's relay, and the stand-in answers the request that carries the
-result with fixed text. The check reads, from that result as Claude Code sent
-it back, that the footer names the machine (the runner's sshd host), and,
-from the stand-in Codex's record of its own process, that the review started
-under that sshd by the helper's run mode and never under the check's own
-process (the runner's app side).
+result with fixed text. P11 never sees a Codex review turn here: the stand-in
+Codex writes its own fixed review text, part of the one recorded change below.
+The check reads, from that result as Claude Code sent it back, that the
+footer names the machine (the runner's sshd host), and, from the one record
+the stand-in Codex wrote for the ask (the record whose byte count the result
+names), that the review started under that sshd by the helper's run mode and
+never under the check's own process (the runner's app side).
 
 ## Status
 

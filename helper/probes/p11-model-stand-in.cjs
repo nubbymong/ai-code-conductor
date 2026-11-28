@@ -38,17 +38,19 @@
 // One scripted turn (2.1.3-beta.21, plan 6.3's CI line; the review check,
 // tests/live/remote-review.live.ts): a Claude Code turn whose run is
 // `review-tool-<n>` and whose latest user turn (every user message after the
-// last assistant message) names it is the call. It is
-// answered, once per run, with a tool_use of the app's review tool as Claude
-// Code names a `conductor` tool (REVIEW_TOOL, input REVIEW_INPUT: mode
-// working), when the request lists that tool; when it does not, with text
-// that says so. The next request, whose latest user turn carries that
-// tool_use's result, is the answer: it gets the fixed text REVIEW_DONE_TEXT,
-// and its event keeps the result's text (16 KiB at most) and its error flag,
-// which is what the check reads the review's footer from. Each of these
-// events carries `script`: the step, and the tool_use sent or the result read;
-// a step it does not script (`again`, `other`), the request's shape (each
-// message's role and part types, never its text).
+// last assistant message) names it is the call. It is answered, once per run,
+// with a tool_use of the app's review tool as Claude Code names a `conductor`
+// tool (REVIEW_TOOL, input REVIEW_INPUT: mode working), when the request lists
+// that tool; when it does not, with text that says so. The next request,
+// whose latest user turn carries that tool_use's result, is the answer: it
+// gets the fixed text REVIEW_DONE_TEXT, and its event keeps the result's text
+// (16 KiB at most) and its error flag, which is what the check reads the
+// review's footer from. Each of these events carries `script`: the step, and
+// the tool_use sent or the result read; a step it does not script (`again`,
+// `other`), the request's shape (each message's role and part types, never
+// its text). It never sees a Codex review turn there: the check's stand-in
+// Codex writes its own fixed review text, part of the one recorded change from
+// that CI line (helper/probes/README.md, "Probes PV1 and PV2").
 const http = require('http');
 const crypto = require('crypto');
 const { pngPixelHashes } = require('./png-rgba.cjs');
@@ -242,14 +244,11 @@ function anthropicReply(res, body, id, text) {
   res.end();
 }
 
-/** The review call: one tool_use block, its input as one JSON delta, stopped for the tool. */
+/** The review call: one tool_use block, its input as one JSON delta, stopped
+ *  for the tool. Always streamed: a scripted turn is a Claude Code turn, which
+ *  classify makes a turn only when it asked for a stream. */
 function anthropicToolUseReply(res, body, id, toolUse) {
   const model = typeof body.model === 'string' ? body.model : 'p11-probe';
-  if (body.stream !== true) {
-    res.writeHead(200, { 'content-type': 'application/json', 'request-id': `req_p11_${id}` });
-    res.end(JSON.stringify({ id: `msg_p11_${id}`, type: 'message', role: 'assistant', model, content: [{ type: 'tool_use', id: toolUse.id, name: toolUse.name, input: toolUse.input }], stop_reason: 'tool_use', stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } }));
-    return;
-  }
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive', 'request-id': `req_p11_${id}` });
   sse(res, 'message_start', { type: 'message_start', message: { id: `msg_p11_${id}`, type: 'message', role: 'assistant', model, content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } });
   sse(res, 'content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: toolUse.id, name: toolUse.name, input: {} } });

@@ -5,9 +5,11 @@
  * its own, connected to the stream's link as the app's ToolStreamTransport
  * connects one (conductor-mcp-server.ts serveToolStream), serving the one
  * review tool the check hands it, with the arguments the app's review tools
- * take (reviewToolShape). The app's own tool host cannot load here: it reads
- * Electron. The tool's run is the check's: the app's remote review, as the
- * running app wires it.
+ * take (reviewToolShape). The app's own tool host (conductor-mcp-server.ts)
+ * loads here only with Electron, its config and its data folders mocked, as
+ * statusline-harness.ts does; this check serves the one tool it needs
+ * instead, with the app's remote review as its run, as the running app wires
+ * it.
  *
  * What it saw is kept in a ToolHostSeen for the readings: every method the
  * CLI sent, each call's arguments and its answer, and whether the stream
