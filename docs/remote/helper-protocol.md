@@ -1186,8 +1186,10 @@ version `proto-mismatch`, anything else `bad-field`; then the holder closes the
 connection. With no `hello.ack` in 10 s it sends `timeout` and
 closes; after that, with no frame from the app in 60 s it sends `timeout` and
 closes (the app pings every 15 s). Each limit is for the whole frame: one sent
-a byte at a time must still be whole in time. A frame's JSON is at most 4 KiB
-before the `hello.ack`, at most 64 KiB once the session is launched or a launch
+a byte at a time must still be whole in time. (One exception: a frame begun
+within a picture's chunk wait, the session's pictures, below.) A frame's JSON
+is at most 4 KiB before the `hello.ack`, at most 64 KiB once the session is
+launched or a launch
 is under way (on a connection that acked `mcp`, which may carry a tool result,
 16 MiB then too), and otherwise 16 MiB as section 6 allows: a larger one is
 `bad-frame` and a close, refused on its header before its payload is read, and
@@ -1889,6 +1891,13 @@ sends `file.put`.
   for one whose connection closes, detaches or is replaced. `paste/` goes with
   the session folder at the session's end (`unsession`, section 1; the Check's
   `sweep`).
+- **A frame begun in the chunk wait.** A frame whose first byte comes within
+  the holder's 30 s chunk wait is read whole, within 60 s of that byte, even
+  when the wait runs out meanwhile, and the connection stays up. When the wait
+  did run out meanwhile, a chunk of the picture with bytes in it is still
+  taken as usual; after any other frame, an empty chunk among them, the upload
+  then ends with `timeout`. This is an exception to the rule above (a
+  connection) that each limit is for the whole frame.
 - **What it is not.** The reply carries no path, and nothing is pasted or
   typed from it: the app then sends the CLI's own paste key as typed input on
   channel 1 (ADR-032 decision 3), and the CLI reads the picture through the
