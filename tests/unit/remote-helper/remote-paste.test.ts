@@ -25,7 +25,7 @@ import * as path from 'path'
 import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../../src/main/remote-helper/session'
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
 import { PASTE_CHANNEL, PASTE_NAME_RE } from '../../../src/main/session-helper/protocol'
-import { FakeHolder } from '../main/session-helper-fake-holder'
+import { FakeHolder, type FakeConn } from '../main/session-helper-fake-holder'
 import { FakeSsh, result } from './fake-ssh'
 
 const SHA = 'a'.repeat(64)
@@ -60,29 +60,37 @@ async function until(what: string, ok: () => boolean, ms = 5000): Promise<void> 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
 const picture = (n: number, seed = 1) => Buffer.from(Array.from({ length: n }, (_, i) => (i * 13 + seed) & 0xff))
 
-/** The fake host for one holder: the hold starts it, a bridge reaches it, and
- *  each `unsession` is counted (its session id). */
-function hostOf(holder: FakeHolder): { ssh: FakeSsh; unsessions: string[] } {
+/** The fake host for one holder: the hold starts it (one that runs until it
+ *  is ended, for `kept`), a bridge reaches it, each connection a bridge made
+ *  is kept in order, and each `unsession` is counted (its session id). */
+function hostOf(holder: FakeHolder, kept = false): { ssh: FakeSsh; unsessions: string[]; links: FakeConn[] } {
   const unsessions: string[] = []
+  const links: FakeConn[] = []
   const ssh = new FakeSsh({
     answer: (c) => {
       const n = c.values[0]
-      if (c.script === 'hold') return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify({ ...holder.record(), endpoint: `/tmp/aicc-1000/${holder.sid}-0123456789abcdef.sock` })}\n` }
+      const record = { ...holder.record(), endpoint: `/tmp/aicc-1000/${holder.sid}-0123456789abcdef.sock`, ...(kept ? { away: null, lifetime: 'until-ended' } : {}) }
+      if (c.script === 'hold') return { stdout: `AICC-HASH ${n} ok ${SHA}\n${JSON.stringify(record)}\n` }
       if (c.script === 'unsession') unsessions.push(c.values[3])
       return { stdout: result(n, {}) }
     },
-    bridge: () => (holder.ended ? null : holder.connect()),
+    bridge: () => {
+      if (holder.ended) return null
+      const end = holder.connect()
+      links.push([...holder.conns].at(-1)!)
+      return end
+    },
   })
-  return { ssh, unsessions }
+  return { ssh, unsessions, links }
 }
 
-function tab(id: string, caps = OFFERS) {
+function tab(id: string, caps = OFFERS, kept = false) {
   const holder = new FakeHolder(remoteSessionId(id), id, store)
   holder.caps = caps
-  const { ssh, unsessions } = hostOf(holder)
+  const { ssh, unsessions, links } = hostOf(holder, kept)
   const spec = remoteLaunchSpec(MACHINE, { program: MACHINE.claudePath!, args: [], env: {} }, {}, '~', 100, 30)
-  const pty = new RemoteHelperPty({ appPtyId: id, machine: MACHINE, installId: INSTALL, runner: ssh, spec, log: (m) => logs.push(m) })
-  return { holder, ssh, unsessions, pty }
+  const pty = new RemoteHelperPty({ appPtyId: id, machine: MACHINE, installId: INSTALL, runner: ssh, spec, log: (m) => logs.push(m), ...(kept ? { kind: 'until-ended' as const } : {}) })
+  return { holder, ssh, unsessions, links, pty }
 }
 
 describe('a helper tab sends a picture to its machine by file.put', () => {
@@ -130,6 +138,17 @@ describe('a helper tab sends a picture to its machine by file.put', () => {
     expect(t.holder.pictureChunks).toEqual([])
     t.pty.kill()
     await t.pty.ended
+  })
+
+  it('only the tab\'s own connection asks for paste: the link of an End asks for none', async () => {
+    const t = tab('paste-end-link', OFFERS, true)
+    await until('attached', () => t.holder.attached !== null)
+    const acks = () => t.links.map((c) => c.ackedCaps)
+    expect(acks()[0]).toContain('paste')
+    await expect(t.pty.end()).resolves.toEqual({ ok: true })
+    expect(t.holder.ended).toBe(true)
+    expect(t.links.length).toBe(2)
+    expect(acks()[1]).toEqual(['core', 'local'])
   })
 
   it('refused before the tab reached its holder', async () => {
