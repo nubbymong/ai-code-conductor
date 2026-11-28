@@ -340,7 +340,7 @@ go on aicc_planning#320.
   only into `sessions/<sid>/paste/` (folder 0700, files 0600). 20 MiB each and
   100 MiB per session. The hash is checked, a partial file is removed, and the
   folder goes at session end. A host never names a local path. Threat model
-  3.6 (`docs/remote/helper-threat-model.md:330-335`) is amended: the reply
+  3.6 (`docs/remote/helper-threat-model.md:358-365`, at `:330-335` before this ADR) is amended: the reply
   carries the hash only and nothing is pasted.
 - **The stand-in.** It is reached through a two-line fixed sh script per name
   in `sessions/<sid>/bin/` (folder 0700, each script 0700, not the 0600 of the
