@@ -70,11 +70,13 @@
  *      (./review-tool-host.ts, the app's MCP SDK) that runs the app's remote
  *      review, and sends the result back to the stand-in, which answers with
  *      fixed text. Read from that result, what Claude Code received: the
- *      footer names the machine (this runner's sshd host) and the review
- *      process started under that sshd by the helper's run mode, never under
- *      this check's own process (this runner's app side); every process this
- *      computer started for it was ssh. On a host line the fake CLI is the
- *      tab's program and this file sends the call itself, as phase 6 shipped.
+ *      footer names the machine (this runner's sshd host); the ask wrote
+ *      exactly one stand-in Codex record, the one whose byte count the result
+ *      names, and that review process started under that sshd by the helper's
+ *      run mode, never under this check's own process (this runner's app
+ *      side); every process this computer started for it was ssh. On a host
+ *      line the fake CLI is the tab's program and this file sends the call
+ *      itself, as phase 6 shipped.
  * Then: the tab ends, the fixture folders, the config folder, the env file
  * and the machine's device folder go; a ~/.codex it did not make stays.
  *
@@ -102,9 +104,17 @@
  *     vitest < bash < Runner.Worker; on the machine (PV1's run in the same
  *     dispatch) it is aicc-helper < sshd-session < sshd-session < sshd <
  *     systemd.
- *   - 849ca94e reverts the mutant; its tree equals 8cf0d1b4's. The green
- *     run on the commit that records these readings is reported where this
- *     branch is merged: a file cannot name the run of its own commit.
+ *   - 849ca94e reverts the mutant; its tree equals 8cf0d1b4's.
+ *   - run 46157330372, head a2935b38 (849ca94e's code, these readings added
+ *     as comment lines): green, the device check 20 of 20, this check 6 of 6,
+ *     the paste check 4 of 4. Read there: the version banner
+ *     `2.1.332 (Claude Code)`; the same tool_use and input; the footer byte
+ *     for byte the one above; the review process (pid 10003, not PV1's
+ *     9280) under aicc-helper < sshd-session < sshd-session < sshd <
+ *     systemd; no permission dialog shown.
+ *   - The later change that reads only the record the ask itself wrote
+ *     (exactly one new name in the stand-in's record folder, the result
+ *     naming its byte count, 821 in that run) is not in that run.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
@@ -244,7 +254,8 @@ let machines: RemoteMachines
 let machine: RemoteMachineRecord
 let inUse = 0
 /** The run's own folder on the host, inside the home folder (a review there
- *  refuses the home folder itself): the fixtures, the fake CLI. */
+ *  refuses the home folder itself): the fixtures, Claude Code's config folder
+ *  in CI, the fake CLI on a host line. */
 let hostDir = ''
 /** The run's own folder here, under the system's temporary folder, for the
  *  fixture made the same: made when the file loads, so afterAll (which runs
@@ -475,9 +486,27 @@ afterAll(async () => {
   }
 })
 
+/** The stand-in Codex's record folder on the host, one file for each exec (CI only). */
+const STAND_IN_RUNS = '"$HOME/aicc-e2e-bin/codex-runs"'
+
 /** The stand-in's newest record (CI only). */
 function standInRecord(): Record<string, unknown> {
-  const r = sshRun('f=$(ls -1 "$HOME/aicc-e2e-bin/codex-runs" 2>/dev/null | sort | tail -n 1); [ -n "$f" ] && cat "$HOME/aicc-e2e-bin/codex-runs/$f"')
+  const r = sshRun(`f=$(ls -1 ${STAND_IN_RUNS} 2>/dev/null | sort | tail -n 1); [ -n "$f" ] && cat ${STAND_IN_RUNS}/"$f"`)
+  return JSON.parse(r.out.trim().split('\n').pop() ?? '{}') as Record<string, unknown>
+}
+
+/** Every name in the stand-in's record folder now (CI only): none when it is
+ *  not there yet; a listing that did not run fails. */
+function standInRuns(): string[] {
+  const r = sshRun(`ls -1 ${STAND_IN_RUNS} 2>/dev/null; echo RUNS-LISTED`)
+  const lines = r.out.split('\n').map((l) => l.trim())
+  if (!lines.includes('RUNS-LISTED')) throw new Error(`the stand-in's records did not list: ${r.err}`)
+  return lines.filter((l) => l !== '' && l !== 'RUNS-LISTED')
+}
+
+/** One record of the stand-in's, by its name in that folder (CI only). */
+function standInRecordOf(file: string): Record<string, unknown> {
+  const r = sshRun(`cat ${STAND_IN_RUNS}/${q(file)}`)
   return JSON.parse(r.out.trim().split('\n').pop() ?? '{}') as Record<string, unknown>
 }
 
@@ -697,6 +726,9 @@ async function reviewAskedByClaudeCode(id: string): Promise<void> {
     await until('Claude Code to list the tools of its conductor server', () => toolHost.methods.includes('tools/list'), 60_000)
       .catch(() => { note('tools-list-wait', 'no tools/list from Claude Code within 60 s of its prompt; the prompt was typed anyway') })
     note('start-screen', await screenText(pty))
+    // The stand-in's records before the ask (PV1's among them): the review's
+    // own is the one name new after it.
+    const runsBefore = standInRuns()
     const before = spawned.length
     const from = modelEvents.length
     pty.write(ASK)
@@ -748,19 +780,25 @@ async function reviewAskedByClaudeCode(id: string): Promise<void> {
     // The footer names the machine, this runner's sshd host, and its own sign-in; the effort the caller chose.
     expect(got.text).toContain(`\n\n---\nCodex review on ${name()}, with ${name()}'s own Codex sign-in, on `)
     expect(got.text).toContain('effort low (caller')
-    // No review process on this runner's app side: the review process (the
-    // stand-in Codex's record of its own run) was started by the helper's run
-    // mode under the machine's sshd, and this check's own process, where the
-    // app's code runs, is none of its ancestors.
-    const rec = standInRecord()
+    // No review process on this runner's app side. Every review process the
+    // stand-in Codex runs writes a record in one folder, wherever it started
+    // (this runner is the machine, so a run here writes there too): the ask
+    // wrote exactly one, and the result is that one's review (its byte count).
+    // That process was started by the helper's run mode under the machine's
+    // sshd, and this check's own process, where the app's code runs, is none
+    // of its ancestors.
+    const fresh = standInRuns().filter((f) => !runsBefore.includes(f))
+    note('review-records', { before: runsBefore, fresh })
+    expect(fresh, `the review wrote ${fresh.length} stand-in Codex records, not one: ${fresh.join(', ')}`).toHaveLength(1)
+    const rec = standInRecordOf(fresh[0])
+    expect(got.text, 'the result is not the review of that record').toContain(`PV stand-in review of ${String(rec.promptBytes)} bytes. `)
     const chain = Array.isArray(rec.ancestors) ? (rec.ancestors as Array<{ pid: number; comm: string }>) : []
-    note('review-process', { pid: rec.pid, parent: rec.parent, ancestors: chain, appSide: process.pid })
+    note('review-process', { file: fresh[0], pid: rec.pid, parent: rec.parent, ancestors: chain, appSide: process.pid })
     expect(chain.length, 'the review process\'s ancestors did not read').toBeGreaterThan(0)
     expect(chain.map((a) => a.pid), `the review process (pid ${String(rec.pid)}) descends from this check's own process (pid ${process.pid}): it started on this computer's app side, not on the machine`).not.toContain(process.pid)
     expect(chain[0].comm, 'the review process was not started by the helper\'s run mode').toBe('aicc-helper')
     expect(chain.some((a) => /^sshd/.test(a.comm)), `the review process did not come through the machine's sshd: ${chain.map((a) => a.comm).join(' < ')}`).toBe(true)
     // The material was the host's change: the stand-in names its first diff line, and ran the review's argv.
-    expect(got.text).toContain('PV stand-in review of ')
     expect(got.text).toContain('First change line: diff --git a/a.ts b/a.ts')
     expect(rec.argv).toEqual([...(codexRemoteReview.args({ effort: 'low' }) as readonly string[])])
     // This computer started nothing for the review but ssh (the host read and the run).
