@@ -14,15 +14,13 @@
 //
 // macOS and Linux (plan 3.1): ./unix-writers.ts, in the formats each OS's
 // CLIs read (macOS public.png and public.tiff, Linux image/png;
-// ./picture-formats.ts), measured by PM1 and PL1. No writer answers
-// `not-yet` since then, so plan s6's "not available on this computer in
-// this beta" lines for Snap and a copied file no longer show; the paste
-// module (./index.ts) still reads the result.
+// ./picture-formats.ts), measured by PM1 and PL1. Each OS has its writer
+// (clipboardWriterFor), so a write answers only `written` or `failed`.
 import { clipboard, ClipboardItem, type NativeImage } from 'electron'
 import { writeLinuxClipboardPicture, writeMacClipboardPicture } from './unix-writers'
 
 /** What one write did. */
-export type ClipboardWriteResult = 'written' | 'failed' | 'not-yet'
+export type ClipboardWriteResult = 'written' | 'failed'
 
 /** The writer for one OS: the picture's PNG bytes onto the clipboard. */
 export type PlatformClipboardWriter = (png: Buffer) => Promise<ClipboardWriteResult>

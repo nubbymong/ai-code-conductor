@@ -208,7 +208,7 @@ describe('Snap into a helper tab', () => {
   })
 
   it('a picture this computer\'s clipboard did not take still goes to the tab', async () => {
-    const r = route.helperPasteRoute({ ...deps(), write: async () => 'not-yet' })
+    const r = route.helperPasteRoute({ ...deps(), write: async () => 'failed' })
     expect(await r.paste('h1', { snap: { picture: picture(), sentence: SNAP_RECTANGLE_SENTENCE } })).toEqual({ outcome: 'sent' })
     expect(puts).toHaveLength(1)
   })

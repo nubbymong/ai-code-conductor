@@ -258,7 +258,6 @@ export async function pasteImageKey(press: PasteKeyPress): Promise<PasteKeyResul
       const picture = deps.decodeFile(holds.path)
       if (!picture) return logged(sessionId, what, notPasted('no-picture'))
       const written = await deps.write(picture)
-      if (written === 'not-yet') return logged(sessionId, what, { outcome: 'not-pasted', reason: 'not-available', note: COPIED_FILE_NOT_AVAILABLE_NOTE })
       if (written !== 'written') return logged(sessionId, what, notPasted('not-written'))
     }
     return logged(sessionId, what, await sendKey(sessionId, rule, focused ? null : PASTE_SENTENCE))
@@ -276,15 +275,6 @@ export function pathRouteLineOf(sessionId: string): 'enter' | 'composer' | null 
     return (provider ? deps.rule(provider)?.pathRouteLine : undefined) ?? null
   } catch { return null }
 }
-
-/** Snap's answer when the writer answers `not-yet`. Not shown since plan
- *  phase 3: no writer answers `not-yet` (clipboard-writer.ts), and this
- *  note goes with this file's two `not-yet` branches (pasteImageKey's
- *  copied file, pasteSnapPicture's write). */
-export const SNAP_NOT_AVAILABLE_NOTE = 'Snap into a session is not available on this computer in this beta.'
-/** A copied image file's answer there, the same: not shown since plan
- *  phase 3, and it goes with them. */
-export const COPIED_FILE_NOT_AVAILABLE_NOTE = 'Pasting a copied image file is not available on this computer in this beta.'
 
 /**
  * Snap's picture (plan 2.1.5): main's capture keeps it and answers the
@@ -307,7 +297,6 @@ export async function pasteSnapPicture(sessionId: string, picture: NativeImage, 
     if (where === 'helper' && remoteRoute) return logged(sessionId, what, await remoteRoute.paste(sessionId, { snap: { picture, sentence } }))
     const written = await deps.write(picture)
     if (where !== 'local') return logged(sessionId, what, { outcome: 'fetch', filename: basename(file) })
-    if (written === 'not-yet') return logged(sessionId, what, { outcome: 'not-pasted', reason: 'not-available', note: SNAP_NOT_AVAILABLE_NOTE })
     if (written !== 'written') return logged(sessionId, what, notPasted('not-written'))
     const provider = deps.provider(sessionId)
     const rule = provider ? deps.rule(provider) : undefined
