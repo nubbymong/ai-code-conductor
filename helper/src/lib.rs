@@ -9,6 +9,7 @@
 #[cfg(unix)]
 pub mod bridge;
 pub mod capture;
+pub mod clip;
 pub mod client;
 pub mod cmdline;
 pub mod consoles;
