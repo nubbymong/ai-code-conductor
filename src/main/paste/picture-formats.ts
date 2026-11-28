@@ -33,9 +33,15 @@ export interface PictureFormat {
   bytes: Buffer
 }
 
-/** The largest picture made into a TIFF (a TIFF is 4 bytes a pixel). A Snap
- *  is at most 1920 pixels on its longer side, far under it. */
-export const MAX_TIFF_PIXELS = 40 * 1000 * 1000
+/** The largest picture made into a TIFF: a Snap's bound, 1920 pixels on its
+ *  longer side (SCREENSHOT_MAX_DIM, src/main/screenshot-capture.ts), so at
+ *  most 1920 by 1920. Only a Snap needs the TIFF: it is written for both
+ *  CLIs, and Codex reads TIFF only on macOS. A copied image file is written
+ *  for Claude Code alone, which reads public.png only, and it can be a photo
+ *  of tens of megapixels, whose TIFF (4 bytes a pixel, built on the main
+ *  thread) would stall every terminal's output for hundreds of milliseconds
+ *  (review round 1, N3). A larger picture is written as public.png alone. */
+export const MAX_TIFF_PIXELS = 1920 * 1920
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 

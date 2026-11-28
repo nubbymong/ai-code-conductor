@@ -5,7 +5,9 @@
 //    reads TIFF only there, through arboard), both in ONE clipboard.write of
 //    one item, so the two can never belong to two different pictures. The
 //    TIFF is made here from the PNG's own pixels (Electron has no TIFF
-//    encoder), so its pixels are the PNG's exactly.
+//    encoder), so its pixels are the PNG's exactly. Only up to a Snap's size,
+//    1920 by 1920 pixels: a larger picture (a copied photo, written for
+//    Claude Code alone) is public.png alone (review round 1, N3).
 //  - Linux: image/png, one write of one item (Claude Code's xclip or
 //    wl-paste and Codex's arboard all ask for image/png).
 //  - Each registered provider's formats for that OS are written.
@@ -13,7 +15,8 @@
 //    any more (plan s6's lines go where 3.1 makes the route work).
 // Red on e89996bb: both writers answered `not-yet` and wrote nothing.
 // Mutants this must catch: TIFF dropped on macOS; the TIFF's pixels not the
-// PNG's (an RGBA order swapped); two writes in place of one.
+// PNG's (an RGBA order swapped); two writes in place of one; the TIFF's size
+// bound back at 40 megapixels.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { deflateSync } from 'node:zlib'
 import { createRequire } from 'node:module'
@@ -73,6 +76,15 @@ function makePng(width: number, height: number, rgba: Buffer, color: 2 | 6 = 6):
   }
   const ihdr = Buffer.alloc(13)
   ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = color; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0
+  return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))])
+}
+/** An 8-bit greyscale PNG (colour type 0), every pixel the same and every
+ *  row filter 0: cheap to make at a Snap's full size. */
+function greyPng(width: number, height: number): Buffer {
+  const raw = Buffer.alloc(height * (width + 1), 0x80)
+  for (let y = 0; y < height; y++) raw[y * (width + 1)] = 0
+  const ihdr = Buffer.alloc(13)
+  ihdr.writeUInt32BE(width, 0); ihdr.writeUInt32BE(height, 4); ihdr[8] = 8; ihdr[9] = 0
   return Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', ihdr), chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))])
 }
 /** A pattern with every channel different and some alpha. */
@@ -190,6 +202,12 @@ describe('the macOS writer', () => {
   it('a write that throws answers failed', async () => {
     failWrite = true
     expect(await writer.writeMacClipboardPicture(makePng(4, 4, pattern(4, 4)))).toBe('failed')
+  })
+
+  it('a TIFF only up to a Snap\'s size (1920 by 1920); a larger picture, such as a copied photo, is public.png alone (N3)', () => {
+    expect(formats.MAX_TIFF_PIXELS).toBe(1920 * 1920)
+    expect(formats.macPictureFormats(greyPng(1920, 1920)).map((f) => f.type), 'a Snap at its largest').toEqual([RAW('public.png'), RAW('public.tiff')])
+    expect(formats.macPictureFormats(greyPng(1921, 1920)).map((f) => f.type), 'one pixel column over').toEqual([RAW('public.png')])
   })
 })
 
