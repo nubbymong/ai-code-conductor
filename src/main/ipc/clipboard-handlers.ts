@@ -14,6 +14,7 @@ import { getResourcesDirectory } from './setup-handlers'
 import { logInfo } from '../debug-logger'
 import { IPC } from '../../shared/ipc-channels'
 import { isShFamilyShell, localSessionShell } from '../login-shell'
+import { pathRouteOn } from '../paste/path-route'
 
 /** PR-level ADR-009 round 1 (A1): what a saved image's answer says, off
  *  Windows, of the shell a local plain terminal and a partner shell run
@@ -70,8 +71,11 @@ export function registerClipboardHandlers(): void {
   // asks for it on the path route behind the test switch only; the old SSH
   // path's fetch request saves through saveClipboardImage in main (the paste
   // module), and no other session gets a file for a picture already on the
-  // clipboard.
+  // clipboard. Main holds that line itself (review round 1, R1-5): without
+  // the test switch (a packaged app always) it saves nothing and answers no
+  // image.
   ipcMain.handle(IPC.CLIPBOARD_SAVE_IMAGE, async (): Promise<SavedImage> => {
+    if (!pathRouteOn()) return { error: 'no-image' }
     return withShell(await saveClipboardImage())
   })
 }
