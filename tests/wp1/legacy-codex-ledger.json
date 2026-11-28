@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "45df41a73325f530f2f1bf8dd44fabfae4b76f5e1f2aa68c87600ab35fcd53f6",
-  "manifestHead": "6eb905e8482f75fe581daa2a5449b2f55f5b45f1",
+  "manifestPathDigest": "de45268318549f99994cf0198239ba8c4f4f22af3c76a8fba5639669d77b01e6",
+  "manifestHead": "c47d47640b0690adb42bc66169dc9b68ef15dc89",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -10652,6 +10652,16 @@
       "disposition": "added",
       "evidence": "2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446): the modules the review live file imports (the host read and run, the registration, the remote review and the Codex package's remote review) load with no Electron, as remote-helper-e2e runs them under plain Node (WP1.68); tests/unit/remote-helper/no-electron-import.test.ts",
       "note": "the P13 hits are two import paths"
+    },
+    {
+      "path": "tests/unit/remote-helper/remote-review-stand-in.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.21 phase 6 (nubbymong/aicc_planning#446) test (tests/unit/remote-helper/remote-review-stand-in.test.ts), split out of tests/unit/remote-helper/remote-review.test.ts so that file starts no process and stays host-runnable: the CI line's stand-in (helper/probes/pv-codex-stand-in.cjs), run under Node from a copy in a temp folder of its own with a minimal environment, reads as the package's remote review reads the real one (its version, its model list and its review events) and exits 2 on any other command line (WP1.38, WP1.68)",
+      "note": ""
     },
     {
       "path": "tests/unit/remote-helper/remote-review.test.ts",
