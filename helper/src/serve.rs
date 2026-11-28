@@ -1860,9 +1860,12 @@ impl Serve {
                 Next::Frame(f) => f,
                 Next::Quiet => {
                     // No chunk in time: the upload ends, nothing is kept, and
-                    // the connection goes on.
+                    // the connection goes on. Its partial file goes first, so
+                    // the answer never comes before it is gone.
                     if let Some(u) = upload.take() {
-                        let _ = conn.send_error(Some(u.id), request::CODE_TIMEOUT, "no chunk of the picture came in time: the upload ended and nothing was kept");
+                        let id = u.id;
+                        drop(u);
+                        let _ = conn.send_error(Some(id), request::CODE_TIMEOUT, "no chunk of the picture came in time: the upload ended and nothing was kept");
                     }
                     continue;
                 }

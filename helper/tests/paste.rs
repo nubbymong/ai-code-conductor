@@ -282,16 +282,23 @@ impl App {
         }
     }
 
-    /// The terminal's output holds `text`, within `wait`.
+    /// The terminal's output holds `text`, within `wait`: looked at after
+    /// every frame, so it answers as soon as the text is there.
     fn shows(&mut self, text: &str, wait: Duration) -> bool {
         let until = Instant::now() + wait;
         loop {
             if String::from_utf8_lossy(&self.out).contains(text) {
                 return true;
             }
-            match self.read(until) {
-                Some(m) => self.got.push(m),
-                None => return String::from_utf8_lossy(&self.out).contains(text),
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            match self.client.recv(left) {
+                Ok(Some(Frame { channel: 0, body: Body::Json(v) })) => self.got.push(v),
+                Ok(Some(Frame { channel: 1, body: Body::Raw(b) })) => self.out.extend_from_slice(&b),
+                Ok(Some(_)) => {}
+                Ok(None) | Err(_) => return String::from_utf8_lossy(&self.out).contains(text),
             }
         }
     }
