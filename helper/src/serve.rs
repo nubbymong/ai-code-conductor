@@ -119,10 +119,10 @@
 //! only until that time for a frame to begin; one that passes before a byte
 //! of a frame came ends the upload and the connection goes on, its 60 s with
 //! no frame (`IDLE_TIMEOUT`) running on from the last frame, not anew. A
-//! frame that began in time is read whole under the ordinary 60 s from its
-//! first byte, and an upload overdue by then ends the same way at the next
-//! read, the connection still up. The folder goes at the session's end. The
-//! holder never reads a picture and decides nothing from one.
+//! frame that began in time is read whole within 60 s (`IDLE_TIMEOUT`) of
+//! its first byte, and an upload overdue by then ends the same way at the
+//! next read, the connection still up. The folder goes at the session's end.
+//! The holder never reads a picture and decides nothing from one.
 //!
 //! Locks: a connection's stream gate (`Conn::live`) first (the attached
 //! connection's before a relay's, which guards that relay's tool messages),
@@ -433,8 +433,8 @@ struct Deadline<'a> {
 impl<'a> Deadline<'a> {
     /// A read of one frame within `limit`. With `quiet` (a picture's chunk
     /// wait) the limit is for the frame to begin: one whose first byte came
-    /// in time is read whole under the ordinary 60 s (`IDLE_TIMEOUT`) from
-    /// that byte, so the wait running out never cuts a frame in two.
+    /// in time is read whole within 60 s (`IDLE_TIMEOUT`) of that byte, so
+    /// the wait running out never cuts a frame in two.
     fn new(stream: &'a mut Stream, limit: Duration, quiet: bool) -> Deadline<'a> {
         Deadline { stream, until: Instant::now() + limit, read: 0, rest: quiet.then_some(IDLE_TIMEOUT) }
     }
@@ -1742,10 +1742,11 @@ impl Serve {
     /// `next_frame`, and with `quiet` a limit that passes before a byte of a
     /// frame came is `Next::Quiet`: nothing is said, and the stream is still
     /// whole. With `quiet` a frame whose first byte came in time is read
-    /// whole under the ordinary 60 s from that byte (`Deadline::new`), so the
-    /// next read, its limit gone, is `Next::Quiet`. A limit that passes
-    /// inside a frame closes the connection, as any other limit does (a frame
-    /// cannot be read on from its middle).
+    /// whole, within 60 s (`IDLE_TIMEOUT`) of that byte (`Deadline::new`);
+    /// when it brought no byte of the picture, the converse loop's next read
+    /// for the overdue upload has no time left and is `Next::Quiet`. A limit
+    /// that passes inside a frame closes the connection, as any other limit
+    /// does (a frame cannot be read on from its middle).
     fn read_next(&self, conn: &Conn, reader: &mut Stream, limit: Duration, waited: &str, max_json: usize, quiet: bool) -> Next {
         let mut timed = Deadline::new(reader, limit, quiet);
         let got = frame::read_frame_within(&mut timed, Direction::AppToHelper, max_json);
