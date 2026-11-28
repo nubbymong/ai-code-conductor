@@ -182,6 +182,14 @@ export const HELPER_ENTER_DELAY_MS = 300
  * The Enter is not typed when the tab started again while it waited (main
  * pushes the tab's flow state at every start) or was closed. A preload with
  * no such bridge, or an ask that fails, gets the one write.
+ *
+ * Since 2.1.3-beta.21 phase 5 (ADR-032, plan block 5.1) a tab through the
+ * session helper gets no fetch request: main's paste route sends its picture
+ * by file.put and presses the CLI's own paste key (src/main/paste/
+ * helper-route.ts), and main answers `fetch` only for a tab on the old SSH
+ * path (plan Q9). The helper branch below is reached only by Snap on the
+ * path route behind the test switch, kept as 2.1.3-beta.20 had it (plan Q5),
+ * and goes with that route in 2.1.3-beta.22.
  */
 function sendFetchRequest(sessionId: string, request: string): void {
   const whole = (): void => writeSessionInput(sessionId, request + '\r')

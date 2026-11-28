@@ -33,10 +33,11 @@
 //   fetch tool, never its path. A press in the terminal is not reported
 //   there (xterm's, as today).
 // - A tab through the session helper on its machine: the remote route
-//   (file.put, then the key) is plan phase 5's. It registers here through
-//   setRemotePasteRoute. Until it does, a press from outside the terminal
-//   and Snap get the old path's request, as in 2.1.3-beta.20, and a press in
-//   the terminal says image paste there is not available yet.
+//   (file.put, then the key; ./helper-route.ts, plan phase 5), which the IPC
+//   layer registers here through setRemotePasteRoute. Until it does (a test
+//   that registers none), a press from outside the terminal and Snap get the
+//   old path's request, as in 2.1.3-beta.20, and a press in the terminal
+//   says image paste there is not available yet.
 // - A plain terminal or a partner shell: not reported (the renderer sends
 //   Alt+V to the program there as a key, plan Q3).
 //
@@ -55,6 +56,7 @@ import { pasteFromClipboard, providerOfSession, type ClipboardPasteDoorResult } 
 import { readClipboardImageWithRetry } from '../clipboard-image'
 import { readClipboardFilePaths, pickPasteableImage, type PasteableImage } from '../clipboard-file'
 import { writeClipboardPicture, type ClipboardWriteResult } from './clipboard-writer'
+import { fromDoor } from './door-result'
 import { logInfo } from '../debug-logger'
 import { pathRouteOn } from './path-route'
 import { statSync } from 'fs'
@@ -176,20 +178,7 @@ async function clipboardHolds(): Promise<Holds> {
   return { kind: 'none', reason: picked.error === 'too-large' ? 'too-large' : 'no-picture' }
 }
 
-/** The door's answer as the press's. */
-function fromDoor(result: ClipboardPasteDoorResult): PasteKeyResult {
-  switch (result.outcome) {
-    case 'sent': return { outcome: 'sent' }
-    case 'placeholder': return { outcome: 'pasted' }
-    case 'no-placeholder': return notPasted('no-placeholder')
-    case 'busy': return notPasted('busy')
-    case 'sentence-not-sent': return notPasted('sentence-not-sent')
-    case 'prompt-on-screen': return notPasted('prompt-on-screen')
-    case 'session-gone': return notPasted('session-gone')
-    case 'refused-key': return notPasted('no-key')
-    default: return notPasted('not-available')
-  }
-}
+// The door's answer as the press's: fromDoor, in ./door-result.ts (one mapping for this module and the helper tab's route).
 
 /** The key for `sessionId`'s CLI by its table, then the door. */
 async function sendKey(sessionId: string, rule: ClipboardPasteRule, sentence: string | null): Promise<PasteKeyResult> {

@@ -139,7 +139,8 @@ describe('readHostForStart: every start reads the host files and the account sid
     expect(field.stdin.length).toBe(0)
     expect(got.account).toEqual({ account: 'nick@example.com' })
     expect(told).toEqual([{ account: 'nick@example.com' }])
-    expect(got.files.map((f) => f.path)).toEqual(['.claude/settings.json', '.claude/settings.json', '.claude/settings.local.json', '.claude/settings.local.json'])
+    // 2.1.3-beta.21: then the keybindings file of the folder the CLI uses (its paste key).
+    expect(got.files.map((f) => f.path)).toEqual(['.claude/settings.json', '.claude/settings.json', '.claude/settings.local.json', '.claude/settings.local.json', '.claude/keybindings.json'])
   })
 
   it('a missing key or a missing file is no account; each exits 0 and prints nothing but the value', async () => {
@@ -170,7 +171,7 @@ describe('readHostForStart: every start reads the host files and the account sid
       expect(got.account, name).toEqual({ notShown: 'not-read' })
       expect(told, name).toEqual([{ notShown: 'not-read' }])
       expect(logs.filter((l) => l.includes('the account on rocky.lan was not read')), name).toHaveLength(1)
-      expect(got.files, name).toHaveLength(4)
+      expect(got.files, name).toHaveLength(5)
     }
   })
 

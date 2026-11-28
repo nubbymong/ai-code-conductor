@@ -149,6 +149,12 @@ export interface HelperPtyDriver {
    *  when report.html is written or at its time limit, and an output failure
    *  alone did not stop it on node-pty). Absent or true: ended, as a tab's is. */
   endsOnIoFailure?: boolean
+  /** False: a take-over does not read its holder's size before its attach,
+   *  though its connections ack `screen`, and its replay is shown as it
+   *  comes, at the tab's size (2.1.3-beta.21: a helper tab on another
+   *  machine, whose connection acks `screen` only for its clipboard paste's
+   *  placeholder read, ADR-032). Absent or true: read when acked, as before. */
+  sizeFromHolder?: boolean
 }
 
 /**
@@ -706,9 +712,10 @@ export class HelperPty implements IPty {
 
   /** The holder's size, by `screen.read` on `conn`. None when the holder
    *  offers no screen reads or the read fails: the replay is then shown as it
-   *  comes, at the tab's size, as before. */
+   *  comes, at the tab's size, as before; so is a driver's that reads none
+   *  (sizeFromHolder false). */
   private async holderSizeOf(conn: HolderConnection): Promise<{ cols: number; rows: number } | undefined> {
-    if (!conn.screen) return undefined
+    if (!conn.screen || this.driver.sizeFromHolder === false) return undefined
     try {
       const { cols, rows } = await conn.readScreen()
       return { cols, rows }

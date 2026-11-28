@@ -371,6 +371,8 @@ describe('the real Claude package carries the group', () => {
       { from: 'cwd', path: '.claude/settings.json' },
       { from: 'cwd', path: '.claude/settings.local.json' },
       { from: 'checkout', path: '.claude/settings.local.json' },
+      // 2.1.3-beta.21: the keybindings file of the folder the CLI uses, for its paste key.
+      { from: 'home', path: '.claude/keybindings.json' },
     ])
     const l = claudeRemoteLaunch.launch(o, MACHINE, remoteHelperCommands(MACHINE, 'rmx0123456789'), [])
     expect(l.files.map((f) => f.name)).toEqual(['settings.json', 'mcp.json'])

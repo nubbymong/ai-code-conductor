@@ -61,6 +61,12 @@ describe('the modules the remote helper device check imports', () => {
       import('../../../src/main/providers/codex/remote-review'),
       // 2.1.3-beta.21 (probe PH1): the holder connection the live file opens on a link of its own.
       import('../../../src/main/session-helper/connection'),
+      // 2.1.3-beta.21 (plan block 5.3's CI line): a helper tab's paste
+      // route, the Claude package's clipboard member and the prompt reader
+      // tests/live/remote-paste.live.ts runs against real Claude Code.
+      import('../../../src/main/paste/helper-route'),
+      import('../../../src/main/providers/claude/run-screen'),
+      import('../../../src/shared/claude-screen'),
     ])
     expect(typeof modules[0].remoteLaunchOf).toBe('function')
     expect(typeof modules[5].claudeRemoteLaunch.launch).toBe('function')
@@ -73,6 +79,29 @@ describe('the modules the remote helper device check imports', () => {
     expect(typeof modules[12].runRemoteCodexReview).toBe('function')
     expect(typeof modules[13].codexRemoteReview.args).toBe('function')
     expect(typeof modules[14].HolderConnection.open).toBe('function')
+    expect(typeof modules[15].helperPasteRoute).toBe('function')
+    expect(typeof modules[16].CLAUDE_RUN_SCREEN.clipboard).toBe('function')
+    expect(typeof modules[17].claudePromptImages).toBe('function')
+  })
+
+  it('the paste check\'s live file imports no other module of the app', async () => {
+    const { readFileSync } = await import('fs')
+    const { resolve } = await import('path')
+    const text = readFileSync(resolve(__dirname, '../../live/remote-paste.live.ts'), 'utf8')
+    const imported = [...text.matchAll(/from '(\.\.\/\.\.\/src\/[^']+)'/g)].map((m) => m[1]).sort()
+    expect(imported).toEqual([
+      '../../src/main/paste/helper-route',
+      '../../src/main/providers/claude/remote-launch',
+      '../../src/main/providers/claude/run-screen',
+      '../../src/main/providers/types',
+      '../../src/main/remote-helper',
+      '../../src/main/remote-helper/machines',
+      '../../src/main/remote-helper/manifest',
+      '../../src/main/remote-helper/session',
+      '../../src/main/remote-helper/ssh-exec',
+      '../../src/shared/claude-screen',
+      '../../src/shared/clipboard-paste',
+    ])
   })
 
   it('the live file imports no other module of the app', async () => {

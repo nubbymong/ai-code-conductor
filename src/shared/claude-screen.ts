@@ -219,3 +219,19 @@ export function readClaudeScreen(lines: readonly ScreenRow[] | null | undefined)
   if (near.some((l) => BUSY_NEAR_RE.some((re) => re.test(l.text)))) return { screen: 'busy', text }
   return { screen: 'ready', text }
 }
+
+/** How many of Claude Code's image placeholders ("[Image #N]") a prompt's
+ *  text holds (ADR-032: the clipboard paste reads a new one after its key,
+ *  from the session's terminal view on this computer and from the holder's
+ *  screen in a tab through the session helper on its machine). */
+export function claudeImagePlaceholders(text: string): number {
+  return (text.match(/\[Image #\d{1,3}\]/g) ?? []).length
+}
+
+/** The image placeholders Claude Code's prompt holds on a screen, or null
+ *  when no prompt box is found there (ready, or busy with a turn): a
+ *  question, a picker, the history view or anything else. */
+export function claudePromptImages(lines: readonly ScreenRow[] | null | undefined): number | null {
+  const read = readClaudeScreen(lines)
+  return read.screen === 'ready' || read.screen === 'busy' ? claudeImagePlaceholders(read.text) : null
+}

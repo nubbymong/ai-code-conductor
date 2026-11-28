@@ -45,7 +45,8 @@ vi.mock('../../../src/main/providers', async () => {
   const { CLAUDE_RUN_SCREEN } = await import('../../../src/main/providers/claude/run-screen')
   return { getProvider: () => ({ runScreen: CLAUDE_RUN_SCREEN }) }
 })
-vi.mock('../../../src/main/remote-helper', () => ({ isRemoteHelperTab: (sessionId: string) => h.helperTabs.has(sessionId) }))
+// 2.1.3-beta.21: these tabs' connections read no holder screen (the paste's placeholder read is not theirs).
+vi.mock('../../../src/main/remote-helper', () => ({ isRemoteHelperTab: (sessionId: string) => h.helperTabs.has(sessionId), remoteTabScreen: () => undefined }))
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: () => {}, logWarn: (m: string) => { h.warns.push(m) }, logError: () => {}, logDebug: () => {} }))
 // The renderer half's own reader and write path are the app's; here the
 // screen is a fixture and the write is the port's (the pty:write handler's
