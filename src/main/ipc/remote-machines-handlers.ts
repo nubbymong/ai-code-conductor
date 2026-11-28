@@ -33,6 +33,9 @@ import { peekSessionState, readDetachedRemotesRegistry } from '../session-state'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
 import { bundledHelperPaths, manifestSha256For, readBundledLinuxHelpers } from '../remote-helper/manifest'
 import { EXEC_TIMEOUT_MS, nodeSshRunner } from '../remote-helper/ssh-exec'
+import { readHostReviewMaterial, runOnHost } from '../remote-helper/review'
+import { hostRunEnv } from '../remote-helper/session'
+import { setRemoteReviewDeps } from '../codex-review-mcp-tool'
 import { MACHINES_NOT_APP, answer } from './machines-handlers'
 import { appWindowSender } from './trusted-sender'
 
@@ -178,6 +181,16 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
         const email = listProfiles().find((p) => p.id === id)?.accountEmail || undefined
         return { ...(email ? { email } : {}), method: getAuthMethod(id) }
       },
+    })
+    // 2.1.3-beta.21 (aicc_planning#446): a remote tab's codex_review runs on
+    // its machine: its record, the read of the change there and the run there.
+    const reviewMachines = machines
+    const reviewCtx = () => ({ runner, installId: reviewMachines.installId(), log: logInfo })
+    setRemoteReviewDeps({
+      machine: (did) => { try { return reviewMachines.get(did) ?? null } catch { return null } },
+      read: (rec, input) => readHostReviewMaterial(reviewCtx(), rec, input),
+      run: (rec, spec, input, timeoutMs, signal) => runOnHost(reviewCtx(), rec, spec, input, timeoutMs, signal),
+      env: hostRunEnv,
     })
     // At start-up, once: list mode on each machine listed (no daemon, no polling).
     const first = setTimeout(() => {

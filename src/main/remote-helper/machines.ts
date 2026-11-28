@@ -48,7 +48,10 @@ import { randomBytes } from 'crypto'
 import * as fs from 'fs'
 import * as path from 'path'
 import { parseSelfTestResult, parseVersionLine, readListing } from '../session-helper/protocol'
-import { DID_RE, INSTALL_ID_RE } from './scripts'
+import { CLI_READ_MAX, DID_RE, INSTALL_ID_RE } from './scripts'
+import { isCodexModelId, type InstalledCodexModels } from '../../shared/model-registry'
+import { classifyCodexVersion, parseCodexVersion } from '../providers/codex/cli-contract'
+import { codexModelListRead, parseCodexModelCatalogue } from '../providers/codex/model-catalogue'
 import {
   afterHashLine, newNonce, notStartedLogLine, readHashLine, readScriptResult, runScript, sshFailure, targetProblem,
   type ExecResult, type SshRunner, type SshTarget,
@@ -85,6 +88,67 @@ export interface RemoteMachineRecord {
    *  not read) and its KillExcludeUsers (user names). Absent on a record no
    *  Check of this build wrote: read as not known (logoutCleanUp). */
   logind?: { kill: string; exclude: string; linger: string }
+  /** 2.1.3-beta.21 (aicc_planning#446): where `codex` is there, from the
+   *  same `-il` lookup as Claude Code's (else the exec's PATH), its version
+   *  (`codex --version`; null when it did not read), and the models its own
+   *  picker lists there, read at the Check (absent when that read gave no
+   *  list). Absent: Codex was not found there, or no Check of this build
+   *  wrote the record (a machine added before 2.1.3-beta.21 gets it at its
+   *  next Check). A review on the machine runs this Codex. */
+  codex?: { path: string; version: string | null; models?: HostCodexModels }
+  /** The exec's git there, its version (`2.43.0`); absent when it did not read. */
+  git?: string
+  /** The probes PV1 and PV2's line there (scripts.ts REVIEW_PROBES_FILE), as
+   *  the last Check read it: the Codex and the git versions they passed with. */
+  reviewProbes?: { codex: string; git: string }
+}
+
+/** The model list a machine's Codex offers (installed-codex-models.ts's shape). */
+export type HostCodexModels = InstalledCodexModels
+
+/** A version as the record keeps it. */
+const RECORD_VERSION_RE = /^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,40})?$/
+/** A reasoning level's name, as the catalogue gives it (model-catalogue.ts). */
+const LEVEL_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/
+
+/** A model list as the record keeps it, read strictly; null when anything is off. */
+function readHostCodexModels(v: unknown): HostCodexModels | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  if (typeof o.version !== 'string' || !RECORD_VERSION_RE.test(o.version) || !Array.isArray(o.models) || o.models.length === 0 || o.models.length > 256) return null
+  const models: Array<{ id: string; label: string; efforts?: string[] }> = []
+  for (const m of o.models as unknown[]) {
+    if (!m || typeof m !== 'object') return null
+    const e = m as Record<string, unknown>
+    if (!isCodexModelId(e.id)) return null
+    const label = hostText(e.label, 64) ?? e.id
+    if (e.efforts !== undefined && (!Array.isArray(e.efforts) || e.efforts.length > 16 || !e.efforts.every((x) => typeof x === 'string' && LEVEL_NAME_RE.test(x)))) return null
+    models.push({ id: e.id, label, ...(Array.isArray(e.efforts) ? { efforts: [...(e.efforts as string[])] } : {}) })
+  }
+  return { version: o.version, models }
+}
+
+/** The record's Codex, read strictly; null when it names none or is off. */
+function readHostCodex(v: unknown): RemoteMachineRecord['codex'] | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  const p = hostPath(o.path, 4096)
+  if (!p) return null
+  const version = typeof o.version === 'string' && RECORD_VERSION_RE.test(o.version) ? o.version : null
+  const models = o.models === undefined ? null : readHostCodexModels(o.models)
+  return { path: p, version, ...(models ? { models } : {}) }
+}
+
+/** `git --version`'s first line (`git version 2.43.0`) as the record keeps it. */
+export function gitVersionOf(line: string | undefined): string | null {
+  const m = /^git version (\d{1,6}\.\d{1,6}(?:\.\d{1,6}){0,2})(?:[ .][\x21-\x7e ]{0,80})?$/.exec((line ?? '').trim())
+  return m ? m[1] : null
+}
+
+/** The probes' line (REVIEW_PROBES_FILE) as the record keeps it. */
+export function reviewProbesOf(line: string | undefined): { codex: string; git: string } | null {
+  const m = /^aicc-review-probes 1 codex (\S{1,64}) git (\S{1,64})$/.exec((line ?? '').trim())
+  return m && RECORD_VERSION_RE.test(m[1]) && /^\d{1,6}\.\d{1,6}(?:\.\d{1,6}){0,2}$/.test(m[2]) ? { codex: m[1], git: m[2] } : null
 }
 
 /** Whether a machine's logind ends the user's processes at logout, as its
@@ -226,7 +290,17 @@ function readRecord(v: unknown): RemoteMachineRecord | null {
     helper: { path: file, version: helper.version, sha256: helper.sha256, folder: helper.folder },
     check: { at: check.at, ok: check.ok, ...(typeof check.detail === 'string' ? { detail: check.detail.slice(0, 300) } : {}) },
     ...(r.logind && typeof r.logind === 'object' ? { logind: readLogind((r.logind as Record<string, unknown>).kill, (r.logind as Record<string, unknown>).exclude, (r.logind as Record<string, unknown>).linger) } : {}),
+    ...readReviewFields(r),
   }
+}
+
+/** 2.1.3-beta.21: a record's Codex, git and probes fields, read strictly;
+ *  each one off is left out. */
+function readReviewFields(r: Record<string, unknown>): Pick<RemoteMachineRecord, 'codex' | 'git' | 'reviewProbes'> {
+  const codex = readHostCodex(r.codex)
+  const git = typeof r.git === 'string' && /^\d{1,6}\.\d{1,6}(?:\.\d{1,6}){0,2}$/.test(r.git) ? r.git : null
+  const probes = r.reviewProbes && typeof r.reviewProbes === 'object' ? reviewProbesOf(`aicc-review-probes 1 codex ${String((r.reviewProbes as Record<string, unknown>).codex)} git ${String((r.reviewProbes as Record<string, unknown>).git)}`) : null
+  return { ...(codex ? { codex } : {}), ...(git ? { git } : {}), ...(probes ? { reviewProbes: probes } : {}) }
 }
 
 /** A saved session config, as much of it as Add reads. */
@@ -633,6 +707,12 @@ export class RemoteMachines {
     const ilPath = hostText(probe.values.get('il-path'), 32767)
     const execPath = hostText(probe.values.get('path'), 32767) ?? '/usr/local/bin:/usr/bin:/bin'
     const claudePath = hostPath(probe.values.get('il-claude'), 4096) ?? hostPath(probe.values.get('claude'), 4096)
+    // 2.1.3-beta.21 (aicc_planning#446): Codex there, by the same lookup, and
+    // its version; the exec's git; the probes PV1 and PV2's line.
+    const codexPath = hostPath(probe.values.get('il-codex'), 4096) ?? hostPath(probe.values.get('codex'), 4096)
+    const codexVersion = parseCodexVersion(probe.values.get('il-codex-version') || probe.values.get('codex-version') || '')
+    const git = gitVersionOf(probe.values.get('git'))
+    const reviewProbes = reviewProbesOf(probe.values.get('review-probes'))
     const lang = probe.values.get('lang')
     // 3. install, unless the machine has this helper already in place
     const inPlace = a.known && a.known.helper.sha256 === helper.sha256 && a.known.check.ok
@@ -675,9 +755,53 @@ export class RemoteMachines {
       helper: { path: helper.path, version: helper.version, sha256: helper.sha256, folder: helper.folder },
       check: { at: this.now(), ok: checked.ok, ...(checked.ok ? {} : { detail: checked.why }) },
       logind: readLogind(probe.values.get('logind-kill'), probe.values.get('logind-exclude'), probe.values.get('linger')),
+      ...(git ? { git } : {}),
+      ...(reviewProbes ? { reviewProbes } : {}),
+    }
+    if (codexPath) {
+      // The model list is read only from a Codex this app can use, with the helper checked there.
+      const usable = codexVersion !== null && classifyCodexVersion(codexVersion) !== 'too-old'
+      const models = checked.ok && usable ? await this.readCodexModels(target, did, install, codexVersion) : null
+      record.codex = { path: codexPath, version: codexVersion, ...(models ? { models } : {}) }
     }
     if (checked.ok && !claudePath) record.check = { at: record.check.at, ok: false, detail: 'Claude Code was not found on it (not on the PATH of its login shell)' }
     return { ok: true, record, installed: !inPlace }
+  }
+
+  /**
+   * 2.1.3-beta.21 (aicc_planning#446): the models Codex's own picker lists on
+   * the machine (the `cliread` script, with the Codex package's read: its list in
+   * a fresh, empty Codex home there), read by the Codex package's own reader
+   * (model-catalogue.ts parseCodexModelCatalogue), for `version`. Null, with
+   * one log line, when it gives no list: a review there then takes no model
+   * by name. Never throws.
+   */
+  private async readCodexModels(target: SshTarget, did: string, install: string, version: string): Promise<HostCodexModels | null> {
+    const nonce = newNonce()
+    const no = (why: string): null => {
+      this.deps.log(`[remote-helper] ${target.host}: the Codex model list there was not read (${why}); a review there takes no model by name until a Check reads it`)
+      return null
+    }
+    let r: ExecResult
+    try {
+      r = await runScript(this.deps.runner, target, 'cliread', [nonce, did, install, codexModelListRead.program, codexModelListRead.words.join(','), codexModelListRead.configVariable], { stdoutMax: 2 * CLI_READ_MAX + 64 * 1024 })
+    } catch (err) {
+      return no((err as Error).message)
+    }
+    const failed = this.sshFailed(target.host, r)
+    if (failed) return no(failed)
+    const res = readScriptResult(r.stdout, nonce)
+    if (!res) return no('no answer')
+    if (!res.ok) return no(refusalText(res.refused))
+    const hex = res.values.get('out') ?? ''
+    if (hex.length % 2 !== 0 || !/^[0-9a-f]*$/.test(hex)) return no('its output does not read')
+    const text = Buffer.from(hex, 'hex').toString('utf8')
+    const marker = `AICC-CLI ${nonce}\n`
+    const at = text.indexOf(marker)
+    if (at < 0) return no('Codex did not start through the login shell there')
+    const models = parseCodexModelCatalogue(text.slice(at + marker.length))
+    if (!models) return no('Codex did not print a model list this app reads')
+    return { version, models: models.map((m) => ({ id: m.id, label: m.label, ...(m.efforts ? { efforts: [...m.efforts] } : {}) })) }
   }
 
   /** sshFailure; an ssh that never started also logs the error its start got. */

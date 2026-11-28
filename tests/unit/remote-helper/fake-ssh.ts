@@ -30,7 +30,7 @@ export interface FakeAnswer {
   code?: number
 }
 
-const NAMES: ScriptName[] = ['probe', 'install', 'commit', 'discard', 'remove', 'version', 'selftest', 'list', 'hold', 'bridge', 'reads', 'files', 'unsession', 'sweep', 'sessions', 'field', 'accounts', 'account', 'signout']
+const NAMES: ScriptName[] = ['probe', 'install', 'commit', 'discard', 'remove', 'version', 'selftest', 'list', 'hold', 'bridge', 'reads', 'files', 'unsession', 'sweep', 'sessions', 'field', 'accounts', 'account', 'signout', 'run', 'reviewread', 'cliread']
 
 /** Which script and values a command line runs. */
 export function parseCommand(command: string): { script: ScriptName; values: string[] } {
