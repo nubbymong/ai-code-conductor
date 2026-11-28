@@ -162,9 +162,8 @@ export const PS_LEGACY_ARGUMENT_PASSING = "$PSNativeCommandArgumentPassing = 'Le
  *  AWS, Microsoft Graph and SQL Server modules) that look took over 20 s in
  *  Snap e2e run 46040073797, so Claude Code did not start within the check's
  *  30 s. Named with its module, the folder change took 36 to 43 ms there.
- *  On purpose, a Set-Location function or alias the user's profile defines
- *  is not used on these lines: a module-qualified name always runs the
- *  cmdlet itself. */
+ *  On purpose, a function or alias named Set-Location in the user's profile
+ *  is not used on these lines. */
 export const PS_SET_LOCATION = 'Microsoft.PowerShell.Management\\Set-Location'
 
 /** Whether Windows starts `program` itself, as an `.exe` file (a trailing dot

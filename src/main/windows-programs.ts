@@ -838,7 +838,9 @@ function assertProfileLookupNames(names: readonly string[]): void {
  *  named bare (Select-Object), and Get-Command does the same for each name
  *  it does not find, an application included. On a test PC with 600 modules
  *  on the path, a lookup that found nothing took 3.7 s that way and 0.4 s
- *  this way; one that found claude.exe answered the same path both ways. */
+ *  this way. A probe of the old command against this one in Windows
+ *  PowerShell 5.1 gave the same answers: the same path for a program it
+ *  found (cmd.exe), and the same empty answer for a missing name. */
 export function powerShellProfileLookupCommand(names: readonly string[]): string {
   assertProfileLookupNames(names)
   const list = names.map((n) => `'${n}'`).join(',')
