@@ -182,11 +182,14 @@ export const CLAUDE_CLIPBOARD_PASTE: ClipboardPasteRule = {
   readsCopiedFile: () => false,
   formats: (platform) => (platform === 'win32' ? ['CF_DIB', 'PNG'] : platform === 'darwin' ? ['public.png'] : ['image/png']),
   // Linux only: xclip under X11, wl-paste under Wayland, looked for where a
-  // local session's Claude Code runs it from. The session starts through
-  // the user's login shell (login-shell.ts, spawn.ts), whose profile builds
-  // its PATH, which the app's own PATH may not match: the app's PATH and the
-  // system folders are searched first, then the login shell is asked, and
-  // no answer from it sends the key (linux-clipboard-tools.ts).
+  // local session's Claude Code runs it from. The session starts through a
+  // login shell in its terminal (spawn.ts: `-l` in a PTY, the launch line
+  // typed into it), an interactive login shell, so its PATH is what the
+  // user's login profile builds and what .bashrc or .zshrc adds, which the
+  // app's own PATH may not match: the app's PATH and the system folders are
+  // searched first, then the login shell is asked (`-l -c`, and after its
+  // plain "not found" `-l -i -c`), and no answer from it sends the key
+  // (linux-clipboard-tools.ts).
   clipboardToolMissing: (platform) => claudeClipboardToolCheck(platform),
   // The path route behind the test switch only (plan Q5; deleted in
   // 2.1.3-beta.22): what the renderer types when main did not paste the path.

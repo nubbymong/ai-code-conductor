@@ -139,9 +139,11 @@ export function loginShellWithOwnPath(
  *  folder, with `env` as its whole environment. It is started directly (no
  *  shell parses `shell`). One form for every question the app asks a login
  *  shell this way (the PATH it builds, here; where a program is, in the
- *  providers). */
-export function loginShellRun(shell: string, command: string, env: NodeJS.ProcessEnv): { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
-  return { file: shell, args: ['-l', '-c', command], cwd: homedir(), env }
+ *  providers). `interactive` adds `-i` (`-l -i -c`): the shell then also
+ *  reads what an interactive shell reads (.bashrc past its interactive
+ *  guard, .zshrc), as a Claude session's launcher does in its terminal. */
+export function loginShellRun(shell: string, command: string, env: NodeJS.ProcessEnv, interactive = false): { file: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
+  return { file: shell, args: interactive ? ['-l', '-i', '-c', command] : ['-l', '-c', command], cwd: homedir(), env }
 }
 
 /** How the PATH question is put to `shell` (loginShellRun). */
@@ -149,9 +151,13 @@ function loginShellPathRun(shell: string, env: NodeJS.ProcessEnv): { file: strin
   return loginShellRun(shell, LOGIN_SHELL_PATH_COMMAND, env)
 }
 
+/** The longest a login shell outside the sh family is given to report the
+ *  PATH it builds (loginShellPathAsync, the launch's own question). */
+export const LOGIN_SHELL_PATH_TIMEOUT_MS = 8000
+
 /** The PATH `shell` (a login shell outside the sh family) builds, asked off
  *  the event loop (at most `timeoutMs`); null when it did not answer. */
-export function loginShellPathAsync(shell: string, env: NodeJS.ProcessEnv, timeoutMs = 8000): Promise<string | null> {
+export function loginShellPathAsync(shell: string, env: NodeJS.ProcessEnv, timeoutMs = LOGIN_SHELL_PATH_TIMEOUT_MS): Promise<string | null> {
   const run = loginShellPathRun(shell, env)
   return new Promise((resolve) => {
     try {
