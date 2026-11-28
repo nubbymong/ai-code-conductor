@@ -311,13 +311,20 @@ go on aicc_planning#320.
 
 - **The paste key IPC.** One new renderer-to-main channel carries "the paste key
   was pressed in session S, focused or not". It carries no clipboard content and
-  no path. Main reads the clipboard itself, and Snap's capture in main hands its
-  picture to the paste module itself, so the renderer sends no path (today it
-  gets one back, `src/renderer/components/ScreenshotButton.tsx:81-83`). The
-  attack lens: a renderer that
-  forges presses for a session it does not show. The old image branch of
-  `PTY_SUBMIT_PROMPT` stays for this beta, refused in main unless unpackaged
-  with the switch.
+  no path. Main reads the clipboard itself, and Snap's capture in main keeps
+  its picture, so the renderer sends no path (today it gets one back,
+  `src/renderer/components/ScreenshotButton.tsx:81-83`). As built (phase 2,
+  amended at its review round 1): the capture names its session and answers
+  the renderer a one-shot token for the kept picture, never its path. The
+  token is 16 random bytes, lives 120 s, only the last 8 are kept, and it is
+  bound to the session the capture named. The renderer hands it back on the
+  same channel (chord `snap`); main takes the picture by it for that session
+  only, and a token presented for any other session names nothing and is used
+  up. So the token is a new renderer-held capability on this channel, worth
+  one paste of one picture into one session. The attack lens: a renderer that
+  forges presses for a session it does not show, or replays or redirects a
+  Snap token. The old image branch of `PTY_SUBMIT_PROMPT` stays for this
+  beta, refused in main unless unpackaged with the switch.
 - **Writing the user's clipboard.** Only on the user's own Snap, or on Alt+V
   with a copied image file. The picture stays as an ordinary item, so Windows
   clipboard history and cloud sync follow the user's own settings, as Snipping

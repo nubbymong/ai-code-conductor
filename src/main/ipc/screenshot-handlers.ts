@@ -33,18 +33,20 @@ function savedSnapChoice(): unknown {
  * capture answers. The path route behind the test switch answers the saved
  * file and the session's image line, for 2.1.3-beta.20's path flow
  * (`pathRoute`). Every other press answers a one-shot token for the picture
- * main keeps, never its path (`snapToken`): the renderer hands the token to
- * the paste module on the paste channel (paste:imageKey, chord 'snap'),
- * which writes the picture to the clipboard and presses the CLI's own paste
- * key. So the capture ends, and the Snap button is usable again, while the
- * paste runs.
+ * main keeps, never its path (`snapToken`), bound to the session the capture
+ * named: the renderer hands the token to the paste module on the paste
+ * channel (paste:imageKey, chord 'snap'), which takes the picture by it for
+ * that session only, writes the picture to the clipboard and presses the
+ * CLI's own paste key. So the capture ends, and the Snap button is usable
+ * again, while the paste runs.
  */
 export interface SnapPaste {
   pathRoute(): boolean
   /** The path route's answer: the file and the session's image line. */
   pathRouteAnswer(sessionId: string, file: string): Promise<SnapPathRouteAnswer>
-  /** A token for the saved picture (screenshot-capture keepSnapForPaste). */
-  keep(file: string): string
+  /** A token for the saved picture, bound to the session the capture named
+   *  (screenshot-capture keepSnapForPaste). */
+  keep(file: string, sessionId: string): string
 }
 
 /** The real hand-off (the paste module is loaded at the first path-route
@@ -55,18 +57,19 @@ const realSnapPaste: SnapPaste = {
     const { pathRouteLineOf } = await import('../paste')
     return { pathRoute: { file, line: pathRouteLineOf(sessionId) } }
   },
-  keep: (file) => keepSnapForPaste(file),
+  keep: (file, sessionId) => keepSnapForPaste(file, sessionId),
 }
 
 /** `platform` and `snapPaste` are parameters for tests; the app passes none.
  *  Since 2.1.3-beta.21 (ADR-032) each capture names the session it is for;
  *  a capture that names none is not made. */
 export function registerScreenshotHandlers(getWindow: () => BrowserWindow | null, platform: string = process.platform, snapPaste: SnapPaste = realSnapPaste): void {
-  /** A saved picture's answer: its path on the path route only, else its token. */
+  /** A saved picture's answer: its path on the path route only, else its
+   *  token, bound to the capture's session. */
   const handOff = async (file: string | null, sessionId: string): Promise<SnapPathRouteAnswer | SnapPasteAnswer | null> => {
     if (typeof file !== 'string' || !file) return null
     if (snapPaste.pathRoute()) return snapPaste.pathRouteAnswer(sessionId, file)
-    return { snapToken: snapPaste.keep(file) }
+    return { snapToken: snapPaste.keep(file, sessionId) }
   }
 
   ipcMain.handle('screenshot:captureRectangle', async (_event, sessionId: unknown) => {

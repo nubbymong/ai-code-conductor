@@ -10,8 +10,12 @@
 // to write; the writer (./clipboard-writer.ts) writes only when needed; the
 // session input module's door (row 3, pasteFromClipboard) sends the key.
 // The renderer (row 2) only reports the press (paste:imageKey) and never
-// sends clipboard content or a path; Snap's capture in main hands its
-// picture here itself (pasteSnapPicture).
+// sends clipboard content or a path. Snap's capture in main keeps its
+// picture and answers the renderer a one-shot token for it
+// (SnapPasteAnswer), bound to the session the capture named; the renderer
+// reports that token on paste:imageKey (chord 'snap'), and this module
+// takes the picture by it, for that session only (takeSnap), then pastes
+// it (pasteSnapPicture).
 //
 // WHEN IT WRITES (ADR-032 decision 2). A picture already on the clipboard:
 // nothing. A copied image file: nothing when the CLI reads copied files
@@ -102,9 +106,10 @@ export interface PasteDeps {
   door(sessionId: string, key: string, sentence: string | null): Promise<ClipboardPasteDoorResult>
   /** The test switch. */
   pathRoute(): boolean
-  /** The picture a Snap token names, once (screenshot-capture
-   *  takeSnapForPaste): its file and bitmap, or null. */
-  takeSnap(token: string): { file: string; picture: NativeImage } | null
+  /** The picture a Snap token names, once, for the session `sessionId`
+   *  (screenshot-capture takeSnapForPaste): its file and bitmap, or null
+   *  (a token kept for another session included). */
+  takeSnap(token: string, sessionId: string): { file: string; picture: NativeImage } | null
 }
 
 const realDeps = (): PasteDeps => ({
@@ -225,10 +230,11 @@ function logged(sessionId: string, what: string, result: PasteKeyResult): PasteK
 export async function pasteImageKey(press: PasteKeyPress): Promise<PasteKeyResult> {
   if (!validPress(press)) return notPasted('session-gone')
   const { sessionId, chord, focused } = press
-  // Snap (plan 2.1.5): the picture its capture kept, by the token it answered.
+  // Snap (plan 2.1.5): the picture its capture kept, by the token it
+  // answered, for the session the capture named only.
   if (chord === 'snap' && press.snap) {
     let kept: { file: string; picture: NativeImage } | null = null
-    try { kept = deps.takeSnap(press.snap.token) } catch { kept = null }
+    try { kept = deps.takeSnap(press.snap.token, sessionId) } catch { kept = null }
     if (!kept) return logged(sessionId, 'Snap', notPasted('no-picture'))
     return pasteSnapPicture(sessionId, kept.picture, kept.file, press.snap.item === 'window' ? SNAP_WINDOW_SENTENCE : SNAP_RECTANGLE_SENTENCE)
   }

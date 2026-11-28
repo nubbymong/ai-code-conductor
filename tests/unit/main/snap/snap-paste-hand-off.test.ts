@@ -9,12 +9,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
  * usable again while the paste runs. The saved file is still saved (the
  * capture's own), and only the path route behind the test switch answers
  * it, with the session's image line. A capture that names no session is not
- * made. The token itself (keepSnapForPaste, takeSnapForPaste) is one-shot
- * and names no path.
+ * made. The token itself (keepSnapForPaste, takeSnapForPaste) is one-shot,
+ * names no path, and is kept for the session the capture named (review round
+ * 1, R1-2), so it is taken only for that session.
  *
  * Red on 0c54a1c6: both items answered the saved file's path to the
  * renderer, and named no session. Mutant this must catch: Window still sends
- * its path.
+ * its path. Red on 0fce95b6 (R1-2): the token was kept with no session.
  */
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
@@ -45,7 +46,7 @@ let pathRoute = false
 const snapPaste = {
   pathRoute: () => pathRoute,
   pathRouteAnswer: vi.fn(async (_sessionId: string, file: string) => ({ pathRoute: { file, line: 'composer' as const } })),
-  keep: vi.fn((_file: string) => TOKEN),
+  keep: vi.fn((_file: string, _sessionId: string) => TOKEN),
 }
 
 beforeEach(() => {
@@ -66,7 +67,7 @@ const windowItem = (sessionId?: unknown) => handlers.get('screenshot:captureWind
 describe('Snap keeps its picture for the paste module: no path reaches the renderer', () => {
   it('Rectangle: the saved picture is kept for the paste, and the answer is its token, with no path', async () => {
     const answer = await rectangle('tab-1')
-    expect(snapPaste.keep).toHaveBeenCalledWith(FILE)
+    expect(snapPaste.keep).toHaveBeenCalledWith(FILE, 'tab-1')
     expect(answer).toEqual({ snapToken: TOKEN })
     expect(JSON.stringify(answer)).not.toContain('screenshot-2026')
   })
@@ -74,7 +75,7 @@ describe('Snap keeps its picture for the paste module: no path reaches the rende
   it('Window: the same, with no path', async () => {
     const answer = await windowItem('tab-1')
     expect(captureWindow).toHaveBeenCalledWith('window:42:0')
-    expect(snapPaste.keep).toHaveBeenCalledWith(FILE)
+    expect(snapPaste.keep).toHaveBeenCalledWith(FILE, 'tab-1')
     expect(answer).toEqual({ snapToken: TOKEN })
     expect(JSON.stringify(answer)).not.toContain('screenshot-2026')
   })

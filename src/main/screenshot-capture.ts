@@ -85,15 +85,18 @@ export function takeSnapPicture(file: string): Electron.NativeImage | null {
 /** ADR-032 (plan 2.1.5): a saved Snap picture's file, by the one-shot token
  *  the capture answers the renderer with (never the path). The renderer hands
  *  the token back on the paste channel, so the capture's answer does not wait
- *  for the paste. The last few only, each for SNAP_TOKEN_MS. */
-const snapTokens = new Map<string, { file: string; at: number }>()
+ *  for the paste. Each token is bound to the session its capture named
+ *  (review round 1, R1-2): it is taken only for that session. The last few
+ *  only, each for SNAP_TOKEN_MS. */
+const snapTokens = new Map<string, { file: string; sessionId: string; at: number }>()
 const SNAP_TOKENS_MAX = 8
 export const SNAP_TOKEN_MS = 120_000
 
-/** A token for the picture saved as `file`. */
-export function keepSnapForPaste(file: string): string {
+/** A token for the picture saved as `file`, for the session `sessionId`
+ *  the capture named. */
+export function keepSnapForPaste(file: string, sessionId: string): string {
   const token = randomBytes(16).toString('hex')
-  snapTokens.set(token, { file, at: Date.now() })
+  snapTokens.set(token, { file, sessionId, at: Date.now() })
   while (snapTokens.size > SNAP_TOKENS_MAX) {
     const oldest = snapTokens.keys().next().value
     if (oldest === undefined) break
@@ -102,13 +105,15 @@ export function keepSnapForPaste(file: string): string {
   return token
 }
 
-/** The picture a token names, once: its file and its bitmap (kept at the
- *  capture, else read back from the file); null for a token that is unknown,
- *  used or older than SNAP_TOKEN_MS. */
-export function takeSnapForPaste(token: string): { file: string; picture: Electron.NativeImage } | null {
+/** The picture a token names, once, for the session `sessionId`: its file
+ *  and its bitmap (kept at the capture, else read back from the file); null
+ *  for a token that is unknown, used, older than SNAP_TOKEN_MS, or kept for
+ *  another session (that token is used up too). */
+export function takeSnapForPaste(token: string, sessionId: string): { file: string; picture: Electron.NativeImage } | null {
   const kept = typeof token === 'string' ? snapTokens.get(token) : undefined
   if (!kept) return null
   snapTokens.delete(token)
+  if (typeof sessionId !== 'string' || kept.sessionId !== sessionId) return null
   if (Date.now() - kept.at > SNAP_TOKEN_MS) return null
   const picture = takeSnapPicture(kept.file) ?? nativeImage.createFromPath(kept.file)
   return picture.isEmpty() ? null : { file: kept.file, picture }

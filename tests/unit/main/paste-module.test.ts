@@ -81,6 +81,7 @@ beforeEach(() => {
   keyCtx = []
   accountDir = null
   snaps.clear()
+  snapTakes = []
   const spy = (rule: typeof CLAUDE_CLIPBOARD_PASTE) => ({ ...rule, key: (ctx: { platform: NodeJS.Platform; accountDir: string | null }) => { keyCtx.push(ctx); return rule.key(ctx) } })
   paste.setPasteDeps({
     platform: 'win32',
@@ -96,12 +97,14 @@ beforeEach(() => {
     savePicture: async () => { saves++; return saved },
     door: async (sessionId, key, sentence) => { door.push({ sessionId, key, sentence }); return doorAnswer as never },
     pathRoute: () => pathRoute,
-    takeSnap: (token: string) => { const k = snaps.get(token) ?? null; snaps.delete(token); return k },
+    takeSnap: (token: string, sessionId: string) => { snapTakes.push(sessionId); const k = snaps.get(token) ?? null; snaps.delete(token); return k },
   } as never)
 })
 
 /** Snap tokens main keeps (screenshot-capture's, faked): one-shot. */
 const snaps = new Map<string, { file: string; picture: NativeImage }>()
+/** The session each token was taken for (R1-2: the token is bound to it). */
+let snapTakes: string[] = []
 const SNAP_TOKEN = '0123456789abcdef0123456789abcdef'
 
 const press = (chord: 'image' | 'text', focused: boolean) => paste.pasteImageKey({ sessionId: 's1', chord, focused })
@@ -319,6 +322,8 @@ describe('Snap\'s press on the paste channel, by the token its capture answered 
     expect(door).toEqual([{ sessionId: 's1', key: ESC_V, sentence: SNAP_WINDOW_SENTENCE }])
     expect(await paste.pasteImageKey({ sessionId: 's1', chord: 'snap', focused: false, snap: { token: SNAP_TOKEN, item: 'window' } })).toMatchObject({ reason: 'no-picture' })
     expect(door).toHaveLength(1)
+    // Review round 1 (R1-2): the token is taken for the press's own session.
+    expect(snapTakes).toEqual(['s1', 's1'])
   })
 
   it('Rectangle\'s sentence for a rectangle; an unknown token pastes nothing', async () => {
