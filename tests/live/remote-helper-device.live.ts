@@ -1403,11 +1403,14 @@ describe('remote helper on a real Linux host', () => {
     const d = remoteFakeDir
     expect(d).toMatch(/aicc-e2e\./)
     const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
-    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    // The machine as its list holds it now (the update case's Check put the other build there).
+    const list = current ?? machines
+    const rec = list.get(machine.did)!
+    const m: RemoteMachineRecord = { ...rec, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
     const id = 'e2e-tab-paste'
     inUse = 1
     const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
-    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog })
+    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: list.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog })
     const pictures = `${plan.helper.folder}/paste`
     let out = ''
     pty.onData((x) => { out += x })
@@ -1436,9 +1439,9 @@ describe('remote helper on a real Linux host', () => {
 
     // PH1: a holder of the test's own (no session files), on a link of its own.
     const sid = remoteSessionId('e2e-ph1')
-    const own = remoteHelperCommands(machine, sid)
+    const own = remoteHelperCommands(rec, sid)
     const ph1Pictures = `${own.folder}/paste`
-    const values = (n: string, ...rest: string[]) => [n, machine.did, machines.installId(), machine.helper.folder, machine.helper.sha256, ...rest]
+    const values = (n: string, ...rest: string[]) => [n, rec.did, list.installId(), rec.helper.folder, rec.helper.sha256, ...rest]
     const holdNonce = newNonce()
     const held = await runScript(runner, target, 'hold', values(holdNonce, sid, holderLabel('e2e-ph1'), 'away'))
     const line = afterHashLine(held.stdout, holdNonce).split(/\r?\n/).find((l) => l.startsWith('{'))
@@ -1495,7 +1498,7 @@ describe('remote helper on a real Linux host', () => {
       opened.stream.destroy()
       // Its session folder, which its holder made for the picture, goes as a tab's does.
       const un = newNonce()
-      await runScript(runner, target, 'unsession', [un, machine.did, machines.installId(), sid]).catch(() => undefined)
+      await runScript(runner, target, 'unsession', [un, rec.did, list.installId(), sid]).catch(() => undefined)
     }
     await untilHost('PH1\'s session folder to go', `test -e "${own.folder}" && echo there || echo gone`, 'gone')
   })
