@@ -791,6 +791,22 @@ mod tests {
         assert!(!dir.exists());
     }
 
+    /// `at` and each missing folder on the way to it, made one level at a
+    /// time and set to 0700 before the next is made in it, never left to the
+    /// umask. The lib tests share one process and its umask, and a socket
+    /// bind beside them sets it to 0177 for a moment (transport/unix.rs,
+    /// `bind_private`): a level `create_dir_all` made in that moment was
+    /// 0600, with no search bit, so the next level could not be made inside it.
+    #[cfg(unix)]
+    fn folders_0700(at: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let missing: Vec<&Path> = at.ancestors().take_while(|p| matches!(fs::symlink_metadata(p), Err(e) if e.kind() == io::ErrorKind::NotFound)).collect();
+        for level in missing.iter().rev() {
+            fs::create_dir(level).unwrap();
+            fs::set_permissions(level, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_folder_that_is_a_link_or_open_to_others_is_refused_io() {
@@ -798,9 +814,8 @@ mod tests {
         let s = Scratch::new("links");
         let dir = s.paste();
         let session = dir.parent().unwrap().to_path_buf();
-        fs::create_dir_all(&session).unwrap();
-        fs::set_permissions(dir.parent().unwrap().parent().unwrap(), fs::Permissions::from_mode(0o700)).unwrap();
-        fs::set_permissions(&session, fs::Permissions::from_mode(0o700)).unwrap();
+        // sessions/ and the session's folder, each 0700.
+        folders_0700(&session);
         // paste/ a link to another folder: io, and nothing written there.
         let elsewhere = s.0.join("elsewhere");
         fs::create_dir(&elsewhere).unwrap();
