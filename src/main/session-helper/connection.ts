@@ -39,7 +39,9 @@
  * 1 MiB, nothing more until its `pong`, and the frames the holder answered
  * `busy` (it takes no input while the program has stopped reading) sent
  * again, so the program never sees input with a gap in it. The keep-alive
- * ping is the same ping.
+ * ping is the same ping. A picture's chunks (putFile) are paced by the same
+ * pings, counted with the typed input: 16 raw frames or 1 MiB of the two
+ * together between two pings, so no more than that is ever ahead of one.
  */
 import { createHash } from 'crypto'
 import * as fs from 'fs'
@@ -369,8 +371,11 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
   private readonly replyTimeoutMs: number
   /** Typed input not sent yet: it waits for a pong, or to be sent again. */
   private unsent: Buffer[] = []
-  /** Typed input sent since the last ping went. */
+  /** Typed input sent since the last ping went: what its pong accounts for. */
   private window: Buffer[] = []
+  /** Raw frames, and their bytes, sent since the last ping went: typed input
+   *  and a picture's chunks together (counted()). */
+  private windowFrames = 0
   private windowBytes = 0
   /** The ping on its way: its id, the typed input sent before it, its timer. */
   private ping: { id: number; frames: Buffer[]; timer: ReturnType<typeof setTimeout> } | null = null
@@ -507,7 +512,9 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
    * channel with no upload open close the connection). The ping is the
    * keep-alive's own (one already on its way is waited out first), so typed
    * input is paced as before. Then the bytes, as raw frames of at most 64 KiB
-   * on the paste channel, never the terminal's; then the holder's
+   * on the paste channel, never the terminal's, paced by the pings as typed
+   * input is (a ping after every 16 raw frames or 1 MiB, the typed input's
+   * counted with them, and no chunk until its pong); then the holder's
    * `file.stored` {re, sha256}, whose hash must be the picture's
    * (readFileStored; anything else is `bad-frame`). Resolves with that hash:
    * the reply carries no path, and nothing is typed from it.
@@ -517,7 +524,8 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
    * 20 MiB (`too-large`), and a second picture while one is being sent
    * (`busy`). The holder's refusal rejects with its code. Typed input goes on
    * meanwhile. The holder ends an upload with 30 s and no chunk itself; the
-   * app's own wait is that and the reply timeout, from the last chunk written.
+   * app's own wait is that and the reply timeout, from the last chunk written
+   * or the last pong, whichever came later.
    */
   async putFile(name: string, bytes: Buffer): Promise<{ sha256: string }> {
     if (this.closed) throw new HolderError('io', 'the connection is closed')
@@ -545,15 +553,29 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
       await this.pongAfterNow()
       // Refused (or the connection went): no byte is sent, and the refusal is the answer.
       if (!this.waiting.has(id)) return this.stored(await replied, sha256)
+      this.rearm(id, 'file.put', wait)
       for (let at = 0; at < bytes.length; at += RAW_MAX) {
+        // Paced as typed input is (section 15): no chunk while a ping waits
+        // for its pong, and a ping after every 16 raw frames or 1 MiB, typed
+        // input and the picture's chunks counted together (counted()). So no
+        // more than that is ever ahead of a ping, whose pong would otherwise
+        // come late on a slow link and close the connection.
+        if (this.ping) {
+          while (!this.closed && this.ping) await this.nextPong()
+          if (this.closed || !this.waiting.has(id)) break
+          // The holder has read every chunk before that ping: the wait runs from now.
+          this.rearm(id, 'file.put', wait)
+        }
         if (this.closed || !this.waiting.has(id)) break
+        const chunk = bytes.subarray(at, at + RAW_MAX)
         let more: boolean
         try {
-          more = this.stream.write(encodeRawFrame(bytes.subarray(at, at + RAW_MAX), PASTE_CHANNEL))
+          more = this.stream.write(encodeRawFrame(chunk, PASTE_CHANNEL))
         } catch {
           this.close()
           break
         }
+        this.counted(chunk.length)
         if (!more) await this.drained()
         this.rearm(id, 'file.put', wait)
       }
@@ -754,9 +776,17 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
         return
       }
       this.window.push(chunk)
-      this.windowBytes += chunk.length
-      if (this.window.length >= INPUT_FRAMES_PER_PING || this.windowBytes >= INPUT_BYTES_PER_PING) this.sendPing()
+      this.counted(chunk.length)
     }
+  }
+
+  /** One raw frame written, typed input or a picture's chunk: once 16 of them
+   *  or 1 MiB have gone since the last ping, the next ping goes, and neither
+   *  sends more until its pong (section 15). */
+  private counted(bytes: number): void {
+    this.windowFrames += 1
+    this.windowBytes += bytes
+    if (this.windowFrames >= INPUT_FRAMES_PER_PING || this.windowBytes >= INPUT_BYTES_PER_PING) this.sendPing()
   }
 
   /** A ping: the typed input sent before it is accounted for by its pong. A
@@ -768,6 +798,7 @@ export class HolderConnection extends EventEmitter<HolderConnectionEvents> {
     timer.unref?.()
     this.ping = { id, frames: this.window, timer }
     this.window = []
+    this.windowFrames = 0
     this.windowBytes = 0
     try {
       this.stream.write(encodeJsonFrame({ t: 'ping', id }))

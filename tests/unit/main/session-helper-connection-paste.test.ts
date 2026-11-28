@@ -14,6 +14,9 @@
 //  - the holder's refusal rejects with its code; a stored hash that is not
 //    the picture's rejects;
 //  - typed input is not held up while a picture is being sent;
+//  - a picture is paced by the pings as typed input is (section 15): a ping
+//    after every 16 raw frames or 1 MiB, typed input and the picture's chunks
+//    counted together, and nothing more until its pong;
 //  - the limits and the name rule are the shared vectors'
 //    (helper/fixtures/local.json `paste`), which the helper's tests read too.
 import { describe, it, expect, afterEach } from 'vitest'
@@ -24,7 +27,7 @@ import {
   FrameReader, PASTE_CAP, PASTE_CHANNEL, PASTE_CHUNK_WAIT_MS, PASTE_NAME_RE, PASTE_PICTURE_MAX, PASTE_REPLY_MS, PASTE_SESSION_MAX, RAW_MAX,
   encodeJsonFrame, helloAck, readFileStored, type HolderRecord,
 } from '../../../src/main/session-helper/protocol'
-import { HolderConnection } from '../../../src/main/session-helper/connection'
+import { HolderConnection, INPUT_FRAMES_PER_PING } from '../../../src/main/session-helper/connection'
 import { duplexPair } from './session-helper-fake-holder'
 
 type Json = Record<string, unknown>
@@ -55,11 +58,14 @@ type FromApp = { kind: 0; channel: number; json: Json } | { kind: 1; channel: nu
 
 /** The stand-in answers each ping with its pong, in order, as a holder does;
  *  with `refuse.next` set it refuses the next file.put at once, before the
- *  pong to the ping after it, as a holder refuses before it takes a byte. */
+ *  pong to the ping after it, as a holder refuses before it takes a byte.
+ *  With `pongs.hold` set to n it keeps back the pong to its n-th ping
+ *  (counted from 1) until `release()`. */
 async function connected(caps: string[], paste: boolean, status = false) {
   const [app, holder] = duplexPair()
   const frames: FromApp[] = []
   const refuse: { next: { code: string; text: string } | null } = { next: null }
+  const pongs: { seen: number; hold: number; held: unknown } = { seen: 0, hold: 0, held: undefined }
   const reader = new FrameReader('app_to_helper')
   holder.on('data', (chunk: Buffer) => {
     for (const f of reader.push(chunk)) {
@@ -70,7 +76,11 @@ async function connected(caps: string[], paste: boolean, status = false) {
         holder.write(encodeJsonFrame({ t: 'error', re: m.id, ...refuse.next }))
         refuse.next = null
       }
-      if (m.t === 'ping') holder.write(encodeJsonFrame({ t: 'pong', re: m.id }))
+      if (m.t === 'ping') {
+        pongs.seen += 1
+        if (pongs.seen === pongs.hold) pongs.held = m.id
+        else holder.write(encodeJsonFrame({ t: 'pong', re: m.id }))
+      }
     }
   })
   const hello = { proto: [1], helper: { version: '0.1.0' }, os: 'linux', arch: 'x86_64', caps, session: { sid: SID, state: 'live' } }
@@ -81,11 +91,20 @@ async function connected(caps: string[], paste: boolean, status = false) {
   const json = () => frames.filter((f): f is Extract<FromApp, { kind: 0 }> => f.kind === 0).map((f) => f.json)
   const raw = (channel: number) => frames.filter((f): f is Extract<FromApp, { kind: 1 }> => f.kind === 1 && f.channel === channel).map((f) => f.bytes)
   const puts = () => json().filter((m) => m.t === 'file.put')
-  return { conn, frames, json, raw, puts, refuse, send: (m: unknown, channel = 0) => { holder.write(encodeJsonFrame(m, channel)) } }
+  /** What the app sent after its hello.ack, in order: a control message by its type, a raw frame as `raw<channel>`. */
+  const kinds = () => frames.slice(1).map((f) => (f.kind === 0 ? String(f.json.t) : `raw${f.channel}`))
+  const release = () => { holder.write(encodeJsonFrame({ t: 'pong', re: pongs.held })) }
+  return { conn, frames, json, raw, puts, refuse, pongs, kinds, release, send: (m: unknown, channel = 0) => { holder.write(encodeJsonFrame(m, channel)) } }
 }
 
 /** A picture's bytes: `n` of them, not all alike. */
-const picture = (n: number) => Buffer.from(Array.from({ length: n }, (_, i) => (i * 31 + 7) & 0xff))
+const picture = (n: number) => {
+  const b = Buffer.alloc(n)
+  for (let i = 0; i < n; i++) b[i] = (i * 31 + 7) & 0xff
+  return b
+}
+const MiB = 1024 * 1024
+const times = (n: number, kind: string) => Array.from({ length: n }, () => kind)
 
 describe('the connection acks paste only when it asks for it and the holder offers it', () => {
   it('asked and offered: acked last, after the caps before it', async () => {
@@ -230,6 +249,52 @@ describe('putFile: one picture into the session\'s folder on the holder\'s machi
     expect(c.raw(1)[0].toString()).toBe('typed meanwhile')
     c.send({ t: 'file.stored', re: c.puts()[0].id, sha256: sha(bytes) })
     await put
+  })
+
+  it('a picture over 1 MiB is paced by the pings, as typed input is: 16 chunks, a ping, nothing more until its pong; then the rest, a ping after every 16, and file.stored resolves', async () => {
+    const c = await connected(OFFERS, true)
+    // The first ping is the one after file.put; the second, the one after
+    // the first 16 chunks: its pong is kept back. A ping written behind
+    // everything the link has not delivered yet would come back late on a
+    // slow link and close the connection, so no more than 1 MiB is ever
+    // ahead of one.
+    c.pongs.hold = 2
+    const bytes = picture(3 * MiB)
+    const put = c.conn.putFile('paste-1.png', bytes)
+    await until(() => c.raw(PASTE_CHANNEL).length >= INPUT_FRAMES_PER_PING, 'the first 16 chunks')
+    await tick(50)
+    expect(c.raw(PASTE_CHANNEL)).toHaveLength(INPUT_FRAMES_PER_PING)
+    expect(c.kinds()).toEqual(['file.put', 'ping', ...times(16, 'raw2'), 'ping'])
+    c.release()
+    await until(() => c.pongs.seen === 4, 'a ping after the 32nd chunk and after the 48th')
+    expect(c.kinds()).toEqual(['file.put', 'ping', ...times(16, 'raw2'), 'ping', ...times(16, 'raw2'), 'ping', ...times(16, 'raw2'), 'ping'])
+    expect(Buffer.concat(c.raw(PASTE_CHANNEL)).equals(bytes)).toBe(true)
+    c.send({ t: 'file.stored', re: c.puts()[0].id, sha256: sha(bytes) })
+    await expect(put).resolves.toEqual({ sha256: sha(bytes) })
+  })
+
+  it('typed input and a picture\'s chunks count together toward the 16 raw frames between two pings', async () => {
+    const c = await connected(OFFERS, true)
+    c.pongs.hold = 2
+    const bytes = picture(2 * MiB)
+    const typed = Buffer.alloc(RAW_MAX * 10, 0x61)
+    const put = c.conn.putFile('paste-1.png', bytes)
+    // Typed meanwhile, 10 frames of it: it waits for the pong to the ping
+    // after file.put, as the picture does, and goes first.
+    c.conn.sendInput(typed)
+    await until(() => c.raw(1).length + c.raw(PASTE_CHANNEL).length >= INPUT_FRAMES_PER_PING, '16 raw frames')
+    await tick(50)
+    const k = c.kinds()
+    expect(k.slice(0, 2)).toEqual(['file.put', 'ping'])
+    expect(k[k.length - 1]).toBe('ping')
+    const between = k.slice(2, -1)
+    expect(between).toEqual([...times(10, 'raw1'), ...times(6, 'raw2')])
+    c.release()
+    await until(() => c.raw(PASTE_CHANNEL).length === 32, 'the rest of the picture')
+    c.send({ t: 'file.stored', re: c.puts()[0].id, sha256: sha(bytes) })
+    await expect(put).resolves.toEqual({ sha256: sha(bytes) })
+    expect(Buffer.concat(c.raw(1)).equals(typed)).toBe(true)
+    expect(Buffer.concat(c.raw(PASTE_CHANNEL)).equals(bytes)).toBe(true)
   })
 
   it('a connection that closes while the picture waits for its reply rejects it', async () => {
