@@ -185,6 +185,14 @@ export function clipStandInFolder(m: Pick<RemoteMachineRecord, 'os'>, cli: Pick<
   return `${folder}/bin`
 }
 
+/** 2.1.3-beta.21 (aicc_planning#446): what a program the helper's run mode
+ *  starts on the host gets as its environment (no terminal, no shell): the
+ *  host account's own variables, as a launch has them, and LANG. Nothing of
+ *  this computer's. */
+export function hostRunEnv(m: RemoteMachineRecord): Record<string, string> {
+  return { ...hostAccountEnv(m), LANG: m.lang ?? 'C.UTF-8' }
+}
+
 /** The session helper's commands for session `sid` on machine `m`, by the
  *  layout the scripts keep there (scripts.ts: `~/.aicc/<did>/helper/<folder>/aicc-helper`,
  *  `~/.aicc/<did>/store` and, for the session's own files,

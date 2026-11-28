@@ -263,7 +263,7 @@ export async function runScript(
   target: SshTarget,
   script: ScriptName,
   values: readonly string[],
-  opts: { firstConnection?: boolean; stdin?: Buffer; timeoutMs?: number; stdoutMax?: number } = {},
+  opts: { firstConnection?: boolean; stdin?: Buffer; timeoutMs?: number; stdoutMax?: number; signal?: AbortSignal } = {},
 ): Promise<ExecResult> {
   // A host read's exec prints its files as hex (2.1.3-beta.18 section 3.2), so it may keep more.
   const stdoutMax = opts.stdoutMax ?? EXEC_STDOUT_MAX
@@ -284,6 +284,11 @@ export async function runScript(
     let settled = false
     const timer = setTimeout(() => { timedOut = true; try { child.kill() } catch { /* gone */ } }, opts.timeoutMs ?? EXEC_TIMEOUT_MS)
     timer.unref?.()
+    // 2.1.3-beta.21: a stop (a review's cancel) ends ssh, so the exec closes
+    // on the host and what it started there is ended (the run mode, run.rs).
+    const stop = () => { try { child.kill() } catch { /* gone */ } }
+    if (opts.signal?.aborted) stop()
+    else opts.signal?.addEventListener('abort', stop, { once: true })
     child.stdout?.on('data', (c: Buffer) => {
       outBytes += c.length
       if (outBytes > stdoutMax) { try { child.kill() } catch { /* gone */ } return }
@@ -294,6 +299,7 @@ export async function runScript(
       if (settled) return
       settled = true
       clearTimeout(timer)
+      opts.signal?.removeEventListener('abort', stop)
       resolve({ code, stdout: Buffer.concat(out).toString('utf8'), stderr: err, timedOut, ...(signal ? { signal } : {}), ...(notStarted ? { notStarted: true as const } : {}) })
     }
     // A spawn that failed (no process id) never started ssh.

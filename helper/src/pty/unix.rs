@@ -421,8 +421,9 @@ fn session_members(_sid: libc::pid_t) -> Vec<libc::pid_t> {
     Vec::new()
 }
 
-/// Send `sig` to the session's first group and to every other process in it.
-fn signal_session(sid: libc::pid_t, sig: libc::c_int) {
+/// Send `sig` to the session's first group and to every other process in it
+/// (the run mode, run.rs, ends its program's session the same way).
+pub(crate) fn signal_session(sid: libc::pid_t, sig: libc::c_int) {
     unsafe {
         libc::killpg(sid, sig);
     }
@@ -435,7 +436,7 @@ fn signal_session(sid: libc::pid_t, sig: libc::c_int) {
 
 /// True while anything of the session runs: its first group, or another
 /// process in it that is not a zombie waiting to be reaped.
-fn session_left(sid: libc::pid_t) -> bool {
+pub(crate) fn session_left(sid: libc::pid_t) -> bool {
     if unsafe { libc::killpg(sid, 0) } == 0 {
         return true;
     }

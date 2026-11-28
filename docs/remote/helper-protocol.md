@@ -338,6 +338,36 @@ standard input is not an end: it comes once the prompt is read. It
 exits 1, with a message on standard error and nothing started, when the request
 is refused or the program cannot start, and 2 on a command line it does not
 take. It writes no file, opens no connection and starts nothing but `argv`.
+When its standard output closed first it writes no result line (it cannot)
+and exits 1.
+
+As built (2.1.3-beta.21, phase 6): `helper/src/run.rs`; the app's side is
+`src/main/remote-helper/review.ts` (`runOnHost`, `parseRunResult`) and the
+`run` fixed script (`scripts.ts`). The program's session is ended as a holder
+ends a tree (hangup and continue to the session, then a kill after 2 s; the
+holder's own `signal_session` and `session_left`). A review's material is read
+on the host by the `reviewread` fixed script (review-diff.ts's hardened git, or
+the named files, as hex, under the same 512 KB bound, refused never cut; the
+range as review-diff.ts parses it), and a Check reads where Codex is, its
+version, the exec's git and the models Codex's own picker lists there (the
+`cliread` fixed script, in a fresh, empty config folder of its own, removed
+after it). Codex's argv, its output reader and its version and model list
+rules come from the Codex package (core's `ProviderRemoteReview`).
+
+**The probes' gate.** A review runs on a machine only once probes PV1 and PV2
+(`tests/live/remote-review.live.ts`, helper/probes/README.md) have passed on
+a host of its architecture: Rocky for Linux x86-64, the Pi for Linux arm64.
+The proof is a property of the app build, never of a file on the machine:
+`REMOTE_REVIEW_PROVEN` in `src/main/codex-review-remote.ts` holds one entry
+for each architecture, null until the commit that records a PASS in
+helper/probes/README.md sets it to the Codex and git versions that run
+passed with (the live file prints the entry). While a machine's architecture
+has no entry, a review there is refused with the reason before anything is
+read or run there, and nothing runs on this computer instead. Once it has
+one, a review runs on any machine of that architecture whose Codex is not
+older than the oldest version the app runs (`CODEX_MIN_SUPPORTED_VERSION`)
+and, for modes `working` and `range`, whose git read at its last Check: no
+exact version is matched, and nothing of it is written or read on the host.
 
 ## 5 Processes
 
@@ -553,7 +583,7 @@ has seen; a gap is logged, and noted on the session if a hook event was lost.
 | a reply; `probe`, `session.prepare`, `session.start`, `session.end` | 10 s; 30 s | `timeout` |
 | `file.put` (section 15) | 30 s between chunks; reply 10 s after the last | `timeout`, partial file removed |
 | heartbeat; helper with no frame from the app | `ping` every 15 s; 60 s | no `pong` in 45 s: link dropped; the relay exits, the holder stays |
-| an MCP tool call | the tool's limit, at most 10 min; a codex_review, its timeout plus 90 s (the host read's 60 s, `src/main/remote-helper/ssh-exec.ts:171`, and the run's 30 s), at most 990 s | `timeout` to the CLI |
+| an MCP tool call | the tool's limit, at most 10 min; a codex_review, its timeout plus 90 s (the host read's 60 s, `src/main/remote-helper/ssh-exec.ts:171`, and the run's 30 s), at most 990 s. As built in 2.1.3-beta.21, neither the relay, the holder nor the app's tool stream limits a call: a codex_review on a machine is bounded by the host read's exec (60 s), its run's exec (its timeout plus 30 s) and the CLI's own MCP timeout, as a review here is | `timeout` to the CLI |
 | `sudo.ask` waiting for the user | 120 s | askpass fails; sudo reports it |
 
 ## 11 A dropped connection

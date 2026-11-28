@@ -1591,7 +1591,14 @@ jobs:
   # modes as its session files name them, reaching the app's side once each,
   # and again after the ssh child is killed (what was posted in the cut
   # arrives once it is back), and two tabs at once each getting only its own;
-  # the end, Remove, nothing left under ~/.aicc.
+  # the end, Remove, nothing left under ~/.aicc. From 2.1.3-beta.21 (plan
+  # phase 6, aicc_planning#446) it then runs tests/live/remote-review.live.ts:
+  # probes PV1 and PV2 against the stand-in Codex the rc step puts on the login
+  # PATH (helper/probes/pv-codex-stand-in.cjs; its header says why not the real
+  # Codex), the gate they decide (the app build's record of a PASS by
+  # architecture, never a file on the host), and one codex_review from a
+  # Claude Code tab through the relay, run on the machine, whose footer names
+  # it.
   #
   # It runs ONLY on a dispatch that names it (`remote_helper_e2e`), never on a
   # pull request or a push. It is section evidence, like a test-machine line:
@@ -1705,6 +1712,9 @@ jobs:
           set -euo pipefail
           mkdir -p "$HOME/aicc-e2e-bin"
           cp helper/target/remote-helper-e2e/aicc-fake-cli "$HOME/aicc-e2e-bin/claude"
+          # The review check's stand-in Codex (2.1.3-beta.21), found the same way.
+          cp helper/probes/pv-codex-stand-in.cjs "$HOME/aicc-e2e-bin/codex"
+          chmod 755 "$HOME/aicc-e2e-bin/codex"
           old="$RUNNER_TEMP/bashrc.old"
           cp "$HOME/.bashrc" "$old" 2>/dev/null || : > "$old"
           {
@@ -1719,6 +1729,9 @@ jobs:
           echo "an interactive login shell sees: $il_sees"
           [ "$exec_sees" = "unset none" ] || { echo "::error::the exec sees what only a login shell should"; exit 1; }
           [ "$il_sees" = "from-rc $HOME/aicc-e2e-bin/claude" ] || { echo "::error::bash -il does not see the rc file's variable and claude"; exit 1; }
+          codex_sees=$(bash -ilc 'command -v codex && codex --version' </dev/null 2>/dev/null | tail -n 2 | tr '\n' ' ')
+          echo "an interactive login shell's codex: $codex_sees"
+          [ "$codex_sees" = "$HOME/aicc-e2e-bin/codex codex-cli 0.157.1 " ] || { echo "::error::bash -il does not run the stand-in Codex"; exit 1; }
 
       - name: Write the hosts file (no secret)
         shell: bash
@@ -1747,6 +1760,28 @@ jobs:
         shell: bash
         env:
           REPORT: ${{ runner.temp }}/remote-helper-e2e/vitest.json
+        run: node scripts/ci/vitest-ran.mjs "$REPORT"
+
+      # 2.1.3-beta.21 (plan phase 6, aicc_planning#446): probes PV1 and PV2 and
+      # a review on the machine, after the device check (never beside it: both
+      # use the account's ~/.aicc), also when that check was red.
+      - name: Run the review check on the machine (probes PV1 and PV2, and a review there)
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REMOTE_HELPER_HOSTS: ${{ runner.temp }}/remote-helper-e2e/hosts.json
+          REMOTE_HELPER_BIN: helper/target/helper-linux-musl/aicc-helper
+          REMOTE_HELPER_MANIFEST: helper/target/helper-manifest/manifest.json
+          REMOTE_HELPER_FAKE_CLI: helper/target/remote-helper-e2e/aicc-fake-cli
+          REMOTE_REVIEW_CODEX: stand-in
+          REMOTE_HELPER_OUT: ${{ runner.temp }}/remote-helper-e2e
+        run: npx vitest run --config vitest.live.config.ts tests/live/remote-review.live.ts --retry=0 --reporter=default --reporter=json --outputFile.json="$REMOTE_HELPER_OUT/vitest-review.json"
+
+      - name: Fail the review check when no test ran, or one did not pass
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          REPORT: ${{ runner.temp }}/remote-helper-e2e/vitest-review.json
         run: node scripts/ci/vitest-ran.mjs "$REPORT"
 
       - name: Upload the two programs, the manifest and the readings

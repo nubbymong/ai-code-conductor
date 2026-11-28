@@ -27,6 +27,8 @@ use std::io;
 mod unix;
 #[cfg(unix)]
 pub use unix::{ExitWatch, Pty};
+#[cfg(unix)]
+pub(crate) use unix::{session_left, signal_session};
 
 #[cfg(windows)]
 mod windows;

@@ -33,6 +33,9 @@ import { peekSessionState, readDetachedRemotesRegistry } from '../session-state'
 import { RemoteMachines, fileStore } from '../remote-helper/machines'
 import { bundledHelperPaths, manifestSha256For, readBundledLinuxHelpers } from '../remote-helper/manifest'
 import { EXEC_TIMEOUT_MS, nodeSshRunner } from '../remote-helper/ssh-exec'
+import { readHostReviewMaterial, runOnHost } from '../remote-helper/review'
+import { hostRunEnv } from '../remote-helper/session'
+import { codexRemoteReview, setRemoteReviewDeps } from '../codex-review-mcp-tool'
 import { MACHINES_NOT_APP, answer } from './machines-handlers'
 import { appWindowSender } from './trusted-sender'
 
@@ -142,6 +145,9 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
       runner, store: fileStore(recordsFile), bundled: () => readBundledLinuxHelpers(where), inUse: remoteTabsOn, log: logInfo,
       // 2.1.3-beta.20 section 3.1.8: Remove signs out each account signed in there first, or names where to end each.
       signOutAccounts: signOutForRemove, accountsLeft: accountsLeftText, forgotten: forgetHostAccounts,
+      // 2.1.3-beta.21 (aicc_planning#446): a Check reads the machine's Codex
+      // version and model list by the Codex package's own rules.
+      reviewer: codexRemoteReview,
     })
     // 2.1.3-beta.20 section 3.1.6: each read of a machine's accounts reaches the renderer as it lands.
     setHostAccountsListener((m) => {
@@ -178,6 +184,16 @@ export function registerRemoteMachinesHandlers(getWindow: () => BrowserWindow | 
         const email = listProfiles().find((p) => p.id === id)?.accountEmail || undefined
         return { ...(email ? { email } : {}), method: getAuthMethod(id) }
       },
+    })
+    // 2.1.3-beta.21 (aicc_planning#446): a remote tab's codex_review runs on
+    // its machine: its record, the read of the change there and the run there.
+    const reviewMachines = machines
+    const reviewCtx = () => ({ runner, installId: reviewMachines.installId(), log: logInfo })
+    setRemoteReviewDeps({
+      machine: (did) => { try { return reviewMachines.get(did) ?? null } catch { return null } },
+      read: (rec, input) => readHostReviewMaterial(reviewCtx(), rec, input),
+      run: (rec, spec, input, timeoutMs, signal) => runOnHost(reviewCtx(), rec, spec, input, timeoutMs, signal),
+      env: hostRunEnv,
     })
     // At start-up, once: list mode on each machine listed (no daemon, no polling).
     const first = setTimeout(() => {

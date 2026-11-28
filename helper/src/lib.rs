@@ -26,6 +26,8 @@ pub mod random;
 pub mod relay;
 pub mod request;
 pub mod ring;
+#[cfg(unix)]
+pub mod run;
 pub mod screen;
 pub mod selftest;
 pub mod serve;

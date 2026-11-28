@@ -47,7 +47,8 @@ import { resolveCdpPort, CDP_PORT_PROD } from '../shared/cdp-ports'
 import { isAllowedBrowserUrl } from '../shared/browser-url'
 import { pushAgentUrlToWebview } from './webview-manager'
 import type { GlobalVisionConfig } from '../shared/types'
-import { registerCodexReviewTool, registerClaudeReviewTool, abortSessionReviews, cancelReviewRequest } from './codex-review-mcp-tool'
+import { registerCodexReviewTool, registerClaudeReviewTool, registerRemoteCodexReviewTool, remoteCodexReviewOffered, abortSessionReviews, cancelReviewRequest } from './codex-review-mcp-tool'
+import { forgetRemoteReviewSession, remoteReviewTarget } from './remote-helper/review-sessions'
 import { getAccountsService } from './provider-accounts'
 import { registerCanvasTools } from './canvas-mcp-tool'
 import { canvasRootsForSession, canvasRootRefusalFor, getAgentCanvasStateForSession, getCanvasStateForSession, getLastCompletedCanvasStateForSession, renderVersion, reopenVersionForReview, resolveInsideCanvasRoot, setVersionVerdict } from './canvas/canvas-store'
@@ -810,6 +811,9 @@ export function unregisterCodexReviewSession(sessionId: string): void {
   codexReviewOptedIn.delete(sessionId)
   claudeReviewOptedIn.delete(sessionId)
   sessionCwds.delete(sessionId)
+  // 2.1.3-beta.21 (aicc_planning#446): a remote tab's registration for a
+  // review on its machine goes the same way (remote-helper/review-sessions.ts).
+  forgetRemoteReviewSession(sessionId)
   // A review never outlives the session it serves (WP2 5a), whichever tool
   // started it.
   abortSessionReviews(sessionId)
@@ -1221,16 +1225,25 @@ export async function startMcpServer(
     // codex CLI. The saved on counts only with its answer (owner decision
     // 2026-09-26, the rule main reads the Codex setting by); absent, or not
     // answered, is "not set up", never on.
+    // 2.1.3-beta.21 (aicc_planning#446): a remote tab registered for a review
+    // on its machine (remote-helper/review-sessions.ts) is ready when that
+    // machine's last Check found Codex there: the review runs on the
+    // machine's own Codex sign-in, never on an account of this computer.
+    const remoteReview = boundSessionId !== null ? remoteReviewTarget(boundSessionId) : null
     const reviewTool = offeredReviewTool(source, {
       toolsMaster,
       codexReviewOn: toolOn('codexReview'),
       claudeReviewOn: toolOn('claudeReview'),
       codexEnabled: savedSettings?.codexEnabled === true && savedSettings?.codexAnswered === true,
       // Never lets a readiness check take the other tools down with it.
-      codexReviewReady: () => { try { return getAccountsService()?.reviewReady('codex') === true } catch { return false } },
+      codexReviewReady: () => { try { return remoteReview ? remoteCodexReviewOffered(remoteReview) : getAccountsService()?.reviewReady('codex') === true } catch { return false } },
       claudeReviewReady: () => { try { return getAccountsService()?.reviewReady('claude') === true } catch { return false } },
     })
-    if (reviewTool === 'codex_review') {
+    if (reviewTool === 'codex_review' && remoteReview) {
+      // The same tool, run on the tab's machine (codex-review-mcp-tool.ts
+      // runRemoteCodexReview); never on this computer.
+      registerRemoteCodexReviewTool(server, z, () => boundSessionId, (sessionId: string) => remoteReviewTarget(sessionId))
+    } else if (reviewTool === 'codex_review') {
       registerCodexReviewTool(
         server,
         z,
