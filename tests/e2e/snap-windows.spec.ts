@@ -1554,9 +1554,11 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
 //     does not come back.
 //     READ, both runs that measured Claude Code. Run 46128029706 (the app on
 //     a fresh, empty PowerShell module analysis cache, beta.20's D1
-//     condition): Claude Code 2.1.332 showed no placeholder within the 15 s
-//     bound in 7 of 8 presses, and one 13.7 s after its key; Codex 0.157.1
-//     31 to 120 ms. Run 46128921672 (a warm PowerShell cache): Claude Code
+//     condition): Claude Code 2.1.332, for ESC v, showed no placeholder
+//     within the 15 s bound at 0, 1, 2 and 3 busy processes (4 of 4); the
+//     one placeholder seen, 13.7 s into the grade 1 Ctrl+V row, is most
+//     likely that grade's ESC v read ending late (Claude Code ignores Ctrl+V
+//     on Windows, run 46128921672); Codex 0.157.1 31 to 120 ms. Run 46128921672 (a warm PowerShell cache): Claude Code
 //     926, 914, 1030 and 1250 ms after ESC v at 0 to 3 busy processes, no
 //     placeholder for Ctrl+V on Windows; Codex 31 to 76 ms after either key;
 //     every turn carried the picture by its decoded pixels. PW2 (the same
@@ -1588,9 +1590,12 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
 //     clipboard by Windows PowerShell 5.1 (WinForms Clipboard.GetImage). In
 //     probe run 46128029706, with the app on a fresh, empty module analysis
 //     cache (coldPowerShellEnv, beta.20's D1 condition for the first app), it
-//     took the key ("Pasting..." in its footer) and its read did not end
-//     within 15 s in 7 of 8 presses (one showed its placeholder 13.7 s after
-//     its key): a cold cmdlet lookup took 21.6 to 27.4 s on this runner
+//     took the key ("Pasting..." in its footer), and for ESC v its read
+//     showed no placeholder within the 15 s bound at 0, 1, 2 and 3 busy
+//     processes (4 of 4); the one placeholder seen, 13.7 s into the grade 1
+//     Ctrl+V row, is most likely that grade's ESC v read ending late (Claude
+//     Code ignores Ctrl+V on Windows, run 46128921672). A cold cmdlet lookup
+//     took 21.6 to 27.4 s on this runner
 //     (46040073797). A user's computer keeps that cache, so Claude Code's PW1
 //     and C4 run on the runner's own cache, warmed first by the same command
 //     (warmClaudeClipboardRead); the Codex groups keep beta.20's cold cache

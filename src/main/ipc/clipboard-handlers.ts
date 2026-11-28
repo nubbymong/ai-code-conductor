@@ -110,6 +110,6 @@ export async function saveClipboardImage(): Promise<PasteableImage> {
     writeFileSync(filePath, jpeg)
     return { path: filePath }
   }
-  // No bitmap on the clipboard — fall back to a copied image FILE (BUG-8).
+  // No bitmap on the clipboard: fall back to a copied image FILE (BUG-8).
   return readClipboardImageFilePath(screenshotsDir)
 }

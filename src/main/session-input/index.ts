@@ -586,10 +586,12 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
  *  10 s. Applied to every PW1 reading (review round 1, R1-1), so 10 s, the
  *  cap. Probe run 46128029706 (GitHub's Windows runner, 4 CPUs, the app's
  *  bundled ConPTY, the app on a fresh, empty PowerShell module analysis
- *  cache): Claude Code 2.1.332's own clipboard read (Windows PowerShell)
- *  showed no placeholder within PW1's 15 s bound in 7 of 8 presses, and one
- *  13.7 s after its key, so its worst case is over 15 s and twice that is
- *  over the cap. On a warm cache (probe run 46128921672) it showed
+ *  cache): Claude Code 2.1.332's own clipboard read (Windows PowerShell),
+ *  for ESC v, showed no placeholder within PW1's 15 s bound at 0, 1, 2 and
+ *  3 busy processes (4 of 4); the one placeholder seen, 13.7 s into the
+ *  grade 1 Ctrl+V row, is most likely that grade's ESC v read ending late
+ *  (Claude Code ignores Ctrl+V on Windows, run 46128921672). So its worst
+ *  case is over 15 s and twice that is over the cap. On a warm cache (probe run 46128921672) it showed
  *  "[Image #1]" 926, 914, 1030 and 1250 ms after ESC v at 0, 1, 2 and 3 busy
  *  processes; Codex 0.157.1 31 to 76 ms there and 31 to 120 ms on the cold
  *  cache (it reads the clipboard without PowerShell); every turn carried
