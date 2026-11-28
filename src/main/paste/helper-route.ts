@@ -47,8 +47,11 @@
 //
 // THE WINDOWS APP ONLY, IN THIS BETA. The remote route from a macOS or Linux
 // app comes in 2.1.3-beta.23 (plan s4, with the real-Mac paste check): there
-// a press answers "not available yet", and Snap leaves its picture on this
-// computer's clipboard (Q1) and answers the same; nothing is sent or typed.
+// a press with a picture answers "not available yet" (one with no picture,
+// a copied file over the cap, or a tab that is not open answers as on
+// Windows: phase 5 review 2, R2-1), and Snap leaves its picture on this
+// computer's clipboard (Q1) and answers "not available yet"; nothing is
+// sent or typed.
 //
 // Pure of Electron (its picture is the few calls of a NativeImage it uses),
 // so the remote-helper-e2e job runs it under plain Node against a real host
