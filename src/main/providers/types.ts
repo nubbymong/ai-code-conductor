@@ -1052,10 +1052,10 @@ export type RunScreenImageResult =
  *  composer not seen in the wait before the key (`busy`, a press from outside
  *  the terminal only); no placeholder within the wait; the sentence not
  *  confirmed (the picture is at the prompt, unsent, and nothing was taken
- *  back); a prompt up after the placeholder, before the sentence was sent
+ *  back); a prompt up after the key, before the sentence was sent
  *  (`prompt-on-screen`: Enter would answer the prompt, so the hint does not
- *  ask for it; review round 2, R2-1); main reads no screen for the session
- *  (`no-screen`). */
+ *  ask for it; review rounds 2 and 3, R2-1 and R3-1); main reads no screen
+ *  for the session (`no-screen`). */
 export type RunScreenClipboardResult =
   | { outcome: 'placeholder' | 'sent' }
   | { outcome: 'session-gone' | 'busy' | 'no-placeholder' | 'sentence-not-sent' | 'prompt-on-screen' | 'no-screen' }

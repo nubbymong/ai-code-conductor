@@ -623,7 +623,7 @@ function draftPlaceholders(draft: string | null): number {
  * Without one (a press in the terminal: the user is writing): the key at
  * once, whatever the composer holds, then a placeholder more than the
  * composer held before the key, within the wait; nothing more is typed.
- * A prompt up after the key: nothing more typed (`no-placeholder`). Never
+ * A prompt up after the key: nothing more typed (`prompt-on-screen`). Never
  * sends Ctrl+C. A run that ends meanwhile: `session-gone`.
  */
 export async function pasteClipboardIntoCodexComposer(key: string, sentence: string | null, deps: ComposerSubmitDeps, opts: { readyWaitMs: number; placeholderWaitMs: number }): Promise<RunScreenClipboardResult> {
@@ -676,7 +676,7 @@ export async function pasteClipboardIntoCodexComposer(key: string, sentence: str
     await deps.sleep(SUBMIT_CONFIRM_POLL_MS)
     if (!deps.live()) return { outcome: 'session-gone' }
     const shot = await read()
-    if (state(shot) === 'blocked') return { outcome: 'no-placeholder' }
+    if (state(shot) === 'blocked') return { outcome: 'prompt-on-screen' }
     if (sentence !== null) {
       placeholder = codexImagePlaceholderShown(shot.lines, models, shot.title)
       if (placeholder) break
