@@ -174,6 +174,34 @@ describe('ci.yml: the Remote helper e2e job only reads, runs its file once, and 
     expect(read(LIVE)).toMatch(/readBundledLinuxHelper\(\{ manifest: need\('REMOTE_HELPER_MANIFEST'\), file: need\('REMOTE_HELPER_BIN'\) \}\)/)
   })
 
+  // 2.1.3-beta.21 (plan phase 6, aicc_planning#446): probes PV1 and PV2 and a
+  // review on the machine, after the device check, never beside it.
+  it('then runs the review check: its own live file, retries off, the stand-in Codex the rc step put on the login PATH, its own report that must show a pass', () => {
+    const at = (start: string) => names().findIndex((n) => n.startsWith(start))
+    const rc = step('Give the account rc files')
+    expect(String(rc.run)).toContain('cp helper/probes/pv-codex-stand-in.cjs "$HOME/aicc-e2e-bin/codex"')
+    const run = step('Run the review check on the machine')
+    const cmd = String(run.run).trim()
+    expect(cmd.startsWith('npx vitest run --config vitest.live.config.ts tests/live/remote-review.live.ts '), cmd).toBe(true)
+    expect(cmd.split(/\s+/)).toContain('--retry=0')
+    expect(cmd.match(/--retry\b/g)).toHaveLength(1)
+    expect(cmd).not.toMatch(/--passWithNoTests|\|\||continue-on-error/)
+    expect(cmd).toContain('--outputFile.json="$REMOTE_HELPER_OUT/vitest-review.json"')
+    expect(run.if).toBe('${{ !cancelled() }}')
+    expect(run.env?.REMOTE_REVIEW_CODEX).toBe('stand-in')
+    expect(run.env?.REMOTE_HELPER_BIN).toBe(DEV_LINUX_HELPER)
+    expect(run.env?.REMOTE_HELPER_MANIFEST).toBe(DEV_MANIFEST)
+    const check = step('Fail the review check when no test ran')
+    expect(String(check.run).trim()).toBe('node scripts/ci/vitest-ran.mjs "$REPORT"')
+    expect(check.if).toBe('${{ !cancelled() }}')
+    expect(check.env?.REPORT).toBe('${{ runner.temp }}/remote-helper-e2e/vitest-review.json')
+    // After the device check and its own verdict, before the upload.
+    expect(at('Run the review check on the machine')).toBeGreaterThan(at('Fail a run in which no test ran'))
+    expect(at('Fail the review check when no test ran')).toBeGreaterThan(at('Run the review check on the machine'))
+    expect(at('Upload the two programs')).toBeGreaterThan(at('Fail the review check when no test ran'))
+    for (const v of ['REMOTE_HELPER_HOSTS', 'REMOTE_HELPER_BIN', 'REMOTE_HELPER_MANIFEST', 'REMOTE_HELPER_FAKE_CLI', 'REMOTE_REVIEW_CODEX']) expect(read('tests/live/remote-review.live.ts')).toContain(v)
+  })
+
   it('fails the job when no test ran or one did not pass, even after a red check step', () => {
     const check = step('Fail a run in which no test ran')
     expect(String(check.run).trim()).toBe('node scripts/ci/vitest-ran.mjs "$REPORT"')

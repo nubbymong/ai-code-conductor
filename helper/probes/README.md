@@ -464,3 +464,105 @@ recorded as host off). Rocky Linux 10: not run; its one 8 s connect failed on 20
 (plan 2.1.3-beta.15 C7): P3 HOLDS, alive at 60 s in 3 of 3 runs of each form
 (KillUserProcesses no, Linger yes, so a host with cleanup on is still not measured), and
 P6 SAME, with the exec, `-l` and `-il` alike and claude found by all three.
+
+# Probes PV1 and PV2: does a review run on the machine a remote session runs on?
+
+The question (the 2.1.3-beta.21 plan, phase 6, 6.2; aicc_planning#446): on a
+Linux host reached through the session helper, does Codex's review run there
+(PV1), and does the change read there match what this computer would read
+(PV2)? Until both have passed on a host, for the Codex and the git its last
+Check found, the app refuses a codex_review there and says why; nothing ever
+falls back to this computer, which would review a different copy of the change.
+Both run from one file, `tests/live/remote-review.live.ts`, through the app's
+own code (the machine's Check, the host read, the helper's run mode), so what
+they prove is what a review there does.
+
+- **PV1.** The machine's Check finds Codex by the login shell's `-il` lookup,
+  reads its version (not older than the oldest the app runs) and the models
+  its own picker lists there. The helper's run mode starts a program with no
+  terminal (`/usr/bin/tty` says so). The review's argv (ADR-031's, from the
+  Codex package) runs from one `ssh -T` exec with the prompt on standard input,
+  and its JSON events read as a review, with the result line saying it exited 0.
+- **PV2.** One fixture repository is made the same on the host and on this
+  computer (two commits, an unstaged change, a staged new file, a binary
+  file). The host read gives byte for byte what this computer's review-diff.ts
+  gives, for mode working, the ranges `HEAD~1..HEAD` and `HEAD~1...HEAD`, and
+  mode paths. A change over 512 KB, and named files over it together, are
+  refused there, never cut.
+
+When both pass, the file writes one line in `~/.aicc/review-probes` on the host
+(`aicc-review-probes 1 codex <version> git <version>`, mode 0600) and checks
+that the next Check reads it. That line opens the gate for that Codex and that
+git only: an update of either shuts it until the probes pass again. Then the
+file runs one codex_review from a Claude Code tab through the session helper
+(the fake CLI as the tab's program, the session's own tool server on the host
+carrying the call) and checks that it ran there and its footer names the
+machine.
+
+## What you need
+
+1. The `remote-helper-e2e` artifact of the branch under test (its static
+   `aicc-helper`, its `manifest.json` and `aicc-fake-cli`), unpacked into a
+   folder of its own on the test PC (the Windows test VM).
+2. On the host, in the tester login: Codex installed into the login's own
+   folder (no sudo), version 0.157.1 as the app tests with, on the PATH an
+   interactive login shell sets, and signed in with the test account. git
+   on that PATH. Never 192.168.50.185. On the Pi's shared login, a note to its
+   admin through the inbox first, and Codex signed out again at the end.
+3. Key sign-in to the host from the test PC, with its host key already known.
+4. A hosts file: `{ "host": "<address>", "user": "<tester login>", "port": 22 }`.
+
+## Run it
+
+From a checkout of the branch, with its node_modules:
+
+```sh
+REMOTE_HELPER_HOSTS=<hosts file> \
+REMOTE_HELPER_BIN=<artifact>/aicc-helper \
+REMOTE_HELPER_MANIFEST=<artifact>/manifest.json \
+REMOTE_HELPER_FAKE_CLI=<artifact>/aicc-fake-cli \
+REMOTE_REVIEW_CODEX=real \
+REMOTE_HELPER_OUT=<readings folder> \
+npx vitest run --config vitest.live.config.ts tests/live/remote-review.live.ts --retry=0
+```
+
+In PowerShell, set each variable with `$env:NAME = "value"` first. Set
+`REMOTE_REVIEW_KEEP_GATE=0` for a dry run that leaves the gate shut.
+
+## What it does and reports
+
+1. Adds the machine with a device folder of its own (its Check: Codex's path,
+   version and model list, and the git version).
+2. Takes away any probes' line an earlier run left, Checks again, and shows a
+   review there refused with the reason and nothing read or run.
+3. PV1, then 4. PV2, as above, in a folder of the run's own inside the home
+   folder (`~/aicc-pv.<random>`), which it removes at the end.
+5. Writes the probes' line when both passed, and Checks again.
+6. The review through the tab.
+
+Then the tab ends, the run's folders go and the machine's device folder is
+removed. The probes' line stays: that is its purpose. The last two lines are
+`PV1 RESULT: PASS` or `FAIL` and `PV2 RESULT: PASS` or `FAIL`; the readings
+are `remote-review.json` in the readings folder. Exit 0 only when every step
+passed.
+
+## Reading the answer
+
+- **PV1 FAIL:** the review is refused on that host with the reason (the Check
+  record, the run's result line and Codex's own error are in the readings).
+  A sign-in error means Codex is not signed in there.
+- **PV2 FAIL:** the host's git reads the change differently from this
+  computer's, or the bound did not hold there: the review stays refused on
+  that host, with the reason, until it is fixed and the probes pass.
+
+In CI, the `remote-helper-e2e` job runs the same file against its localhost
+sshd with `REMOTE_REVIEW_CODEX=stand-in`: a stand-in Codex
+(`pv-codex-stand-in.cjs`) on the login PATH, since the review's argv passes
+`--ignore-user-config` and so cannot be pointed at a loopback model. The real
+Codex is proven by the host lines only.
+
+## Status
+
+Written for 2.1.3-beta.21. Not yet run on a host: Rocky and the Pi were off
+when the phase was built; the host lines are owed before the cut (plan
+section 6.2, s5).

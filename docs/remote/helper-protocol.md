@@ -12,7 +12,8 @@ probe (ADR) must confirm. R5 fixtures fix field types, lengths and refusals.
   install once per target (a host, or a container on it; R2 at a saved SSH
   config's first upload), so installs and devices never share one.
 - **Layout.** Everything lives under `~/.aicc/<did>/` (the node id aside,
-  section 13); `~/.aicc` holds only `did` folders. In one: `owner`, a marker
+  section 13); `~/.aicc` holds only `did` folders, and from 2.1.3-beta.21 one
+  file, `review-probes` (section 4, the one-shot run mode). In one: `owner`, a marker
   with the `did` and app install id; `helper/<version>-<hash12>/aicc-helper`
   (first 12 hex of its SHA-256; never on `PATH`); `sessions/<sid>/` (0700: spec,
   provider files, socket `s`, `seq`, a bounded spool, the helper log, `holder`
@@ -338,6 +339,32 @@ standard input is not an end: it comes once the prompt is read. It
 exits 1, with a message on standard error and nothing started, when the request
 is refused or the program cannot start, and 2 on a command line it does not
 take. It writes no file, opens no connection and starts nothing but `argv`.
+When its standard output closed first it writes no result line (it cannot)
+and exits 1.
+
+As built (2.1.3-beta.21, phase 6): `helper/src/run.rs`; the app's side is
+`src/main/remote-helper/review.ts` (`runOnHost`, `parseRunResult`) and the
+`run` fixed script (`scripts.ts`). The program's session is ended as a holder
+ends a tree (hangup and continue to the session, then a kill after 2 s; the
+holder's own `signal_session` and `session_left`). A review's material is read
+on the host by the `reviewread` fixed script (review-diff.ts's hardened git, or
+the named files, as hex, under the same 512 KB bound, refused never cut; the
+range as review-diff.ts parses it), and a Check reads where Codex is, its
+version, the exec's git and the models Codex's own picker lists there (the
+`cliread` fixed script, in a fresh, empty config folder of its own, removed
+after it). Codex's argv, its output reader and its version and model list
+rules come from the Codex package (core's `ProviderRemoteReview`).
+
+**The probes' gate.** A review runs on a machine only once probes PV1 and PV2
+(`tests/live/remote-review.live.ts`, helper/probes/README.md) have passed
+there for the Codex and the git it has now: they then write one line,
+`aicc-review-probes 1 codex <version> git <version>`, in `~/.aicc/review-probes`
+(a regular file of the user's own, 0600), and a Check reads its first line
+(at most 300 bytes) with the Codex version and the git version. While the line
+is missing, or names another Codex or git, a review there is refused with the
+reason before anything is read or run there, and nothing runs on this
+computer instead. Remove leaves it: it belongs to the host account, not to a
+device folder.
 
 ## 5 Processes
 
