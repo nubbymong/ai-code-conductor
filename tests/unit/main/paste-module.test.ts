@@ -188,7 +188,7 @@ describe('a Claude Code or Codex session on this computer', () => {
     files = [FILE]
     sizes = { [FILE]: 1000 }
     writeResult = 'failed'
-    expect(await press('image', false)).toMatchObject({ outcome: 'not-pasted', reason: 'not-written' })
+    expect(await press('image', false)).toEqual({ outcome: 'not-pasted', reason: 'not-written', note: PASTE_NOTES['not-written'] })
     expect(door).toEqual([])
   })
 
@@ -339,7 +339,7 @@ describe('Snap\'s picture (2.1.5)', () => {
 
   it('a picture this computer\'s clipboard did not take: nothing pasted, and the hint says it was not written', async () => {
     writeResult = 'failed'
-    expect(await paste.pasteSnapPicture('s1', picture(), SNAP_FILE, SNAP_RECTANGLE_SENTENCE)).toMatchObject({ reason: 'not-written' })
+    expect(await paste.pasteSnapPicture('s1', picture(), SNAP_FILE, SNAP_RECTANGLE_SENTENCE)).toEqual({ outcome: 'not-pasted', reason: 'not-written', note: PASTE_NOTES['not-written'] })
     expect(door).toEqual([])
   })
 

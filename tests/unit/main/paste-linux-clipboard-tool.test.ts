@@ -187,11 +187,13 @@ describe('the login shell\'s answer, read', () => {
 })
 
 describe('an alias or a function by the program\'s name hides it, not stands in for it (R3-F1)', () => {
-  /** The launcher as a user's .bashrc or .zshrc makes it: xclip on the PATH
-   *  Homebrew's shellenv line builds, and a definition of that name. Until
-   *  the definition is cleared (`unalias xclip` for the alias, `unset -f
-   *  xclip` for the function, ahead of `command -v`), `command -v` prints the
-   *  definition; once cleared, the program's path. */
+  /** The launcher as a login profile that defines it makes it (.bash_profile,
+   *  .zprofile, .profile): xclip on the PATH Homebrew's shellenv line builds,
+   *  and a definition of that name, so the seam answers the definition to
+   *  every question, `-l -c` and `-l -i -c` alike. Until the definition is
+   *  cleared (`unalias xclip` for the alias, `unset -f xclip` for the
+   *  function, ahead of `command -v`), `command -v` prints the definition;
+   *  once cleared, the program's path. */
   const hidden = (answer: string, cleared: (command: string) => boolean) => {
     const asked: Array<{ command: string; interactive: boolean }> = []
     return {
@@ -212,7 +214,7 @@ describe('an alias or a function by the program\'s name hides it, not stands in 
   ]
 
   for (const [what, answer, cleared] of cases) {
-    it(`${what} named xclip in .bashrc or .zshrc over xclip from Homebrew on Linux: found, so not missing and the key goes`, async () => {
+    it(`${what} named xclip in a login profile over xclip from Homebrew on Linux: found, so not missing and the key goes`, async () => {
       for (const shell of ['/bin/bash', '/usr/bin/zsh', '/bin/sh']) {
         const env = x11('/usr/bin:/bin', { SHELL: shell })
         const t = hidden(answer, cleared)
@@ -223,6 +225,36 @@ describe('an alias or a function by the program\'s name hides it, not stands in 
       }
     })
   }
+
+  it('the path R3-F1 reported: `-l -c` a plain "not found", then `-l -i -c` reads .bashrc, .zshrc or $ENV, where Homebrew\'s line and the alias are: found, so not missing and the key goes', async () => {
+    /** `-l -c` reads neither file, so it finds nothing; the interactive
+     *  question sees the alias, and once it is cleared the program's path. */
+    const rcOnly = () => {
+      const asked: Array<{ command: string; interactive: boolean }> = []
+      return {
+        asked,
+        s: {
+          runnable: () => false,
+          runnableAsync: async () => false,
+          ask: async (_shell: string, command: string, _env: unknown, interactive?: boolean) => {
+            asked.push({ command, interactive: interactive === true })
+            if (interactive !== true) return `${END}\n`
+            return command.startsWith('unalias xclip') ? LINUXBREW : `alias xclip='xclip -selection clipboard'\n${END}\n`
+          },
+        },
+      }
+    }
+    for (const shell of ['/bin/bash', '/usr/bin/zsh', '/bin/sh']) {
+      const env = x11('/usr/bin:/bin', { SHELL: shell })
+      expect(await tools.claudeClipboardToolMissing('linux', env, rcOnly().s), `${shell}: not missing`).toBe(false)
+      const t = rcOnly()
+      expect(await tools.loginShellToolAnswer('xclip', env, 'linux', t.s), `${shell}: the program found, not only no answer`).toBe('found')
+      expect(t.asked, `${shell}: \`-l -c\`, then \`-l -i -c\``).toEqual([
+        { command: XCLIP, interactive: false },
+        { command: XCLIP, interactive: true },
+      ])
+    }
+  })
 
   it('a definition the question could not clear (a readonly function): no answer, so not missing; nothing more asked', async () => {
     for (const answer of [`alias xclip='xclip -selection clipboard'`, 'xclip']) {

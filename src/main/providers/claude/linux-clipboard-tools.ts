@@ -90,10 +90,12 @@ export function claudeLinuxClipboardTool(env: Env): ClaudeLinuxClipboardTool {
 const TOOL_ANSWER_END = '__CCC_CLIPBOARD_TOOL_END__'
 
 /** What the sh-family launcher runs to say where `tool` is: any alias and
- *  any function of that name cleared (`unalias`, `unset -f`; with none, each
- *  prints only to the error output, sent nowhere, and the list goes on),
- *  then `command -v`, then the marker. Fixed text: `tool` is one of
- *  CLAUDE_LINUX_CLIPBOARD_TOOLS, never a user's word. */
+ *  any function of that name cleared (`unalias`, `unset -f`; with none,
+ *  `unalias` warns on the error output and `unset -f` says nothing or warns
+ *  there too: the error output is sent nowhere, nothing reaches the output
+ *  read here, and the list goes on), then `command -v`, then the marker.
+ *  Fixed text: `tool` is one of CLAUDE_LINUX_CLIPBOARD_TOOLS, never a
+ *  user's word. */
 export function loginShellToolCommand(tool: ClaudeLinuxClipboardTool): string {
   if (!CLAUDE_LINUX_CLIPBOARD_TOOLS.includes(tool)) throw new Error('loginShellToolCommand: not a clipboard program')
   return `unalias ${tool} 2>/dev/null; unset -f ${tool} 2>/dev/null; command -v ${tool}; printf '%s\\n' ${TOOL_ANSWER_END}`
