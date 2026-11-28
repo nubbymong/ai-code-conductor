@@ -147,7 +147,7 @@
  * coldPowerShellEnv), so every run reads that cold start, whatever an earlier
  * app on the runner left in the runner's own cache. Not raised, and not
  * answered by the fix: the first app of a job is slower than the apps after
- * it. It meets its own cold-disk start, and in most jobs read a burst of
+ * it. It meets its own cold-disk start and, in most jobs, a burst of
  * disk reads by a runner process outside the app as well (provjobd.exe,
  * about one CPU and 3,000 to 13,000 read operations a second for 8 to 9 s,
  * from 2 to 6 s after the first app's launch, C: 0 to 12% idle). Under the
@@ -163,23 +163,27 @@
  * took 0.6 to 0.8 s before provjobd's burst began, and its folder change
  * 2.1 s as the burst began, against 20 to 60 ms and 36 to 50 ms in the seven
  * apps after it, which all passed D1 in 2.3 to 2.9 s, with or without
- * 24,000 files written just before them. The two conditions were separated
- * in one job in 46092372556 (diagnosis, 16 apps, alternating): a burst like
- * provjobd's (one process at about one CPU, several thousand I/O operations
- * a second for 9 s, from 2 s after the launch) left D1 as it was on a warm
- * file cache (the stand-in 2.0 to 2.6 s after the Snap button, against 1.9
- * to 2.3 s with no load), and so did the burst with two busy processes
- * (1.7 to 3.4 s); the standby file cache purged before the launch made it
- * 2.9 to 3.2 s. Both together gave the first app's pattern: the owner-only
- * calls took 12.1 to 12.4 s, nearly all of it before Windows PowerShell ran
- * their first line, the tab took the direct line, and the stand-in started
- * 8.2 to 8.7 s after the Snap button showed (the job's first app: 8.4 s).
- * In 46094389002 provjobd ran no burst, and the first app was as slow
- * (8.0 s), C: 0 to 4% idle through its own start; a cold cache, the burst
- * and two busy processes together gave 6.4 to 8.2 s. The slowest D1 read
- * with the fix in and no generated modules is a first app with no diag
- * lines, the merge candidate 46094264723: the stand-in about 11.8 s after
- * the Snap button, 18 s inside TAB_MS.
+ * 24,000 files written just before them. A forced disk burst and a forced
+ * cache purge were separated in one job in 46092372556 (diagnosis, 16 apps,
+ * alternating): a forced burst (one process at about one CPU, several
+ * thousand I/O operations a second for 9 s from 2 s after the launch, mostly
+ * writes, where provjobd's are reads) left D1 as it was on a warm file cache
+ * (the stand-in 2.0 to 2.6 s after the Snap button, against 1.9 to 2.3 s
+ * with no load), and so did the burst with two busy processes (1.7 to
+ * 3.4 s); the standby file cache purged before the launch made it 2.9 to
+ * 3.2 s. Both together gave the first app's outcome (the direct line, the
+ * stand-in 8.2 to 8.7 s after the Snap button showed, against the first
+ * app's 8.4 s), though not its timeline: the owner-only calls took 12.1 to
+ * 12.4 s, about 11 s of it before Windows PowerShell ran their first line,
+ * where the first app spent 4 to 5 s before it and 3.2 to 3.7 s to its first
+ * cmdlet. In 46094389002 provjobd ran no burst, and the first app was as
+ * slow (8.0 s), C: 0 to 4% idle through its own start; a cold cache, the
+ * burst and two busy processes together gave 7.9 to 8.2 s in 3 apps. A
+ * fourth, whose burst ended before its app had launched, reads as a cold
+ * cache, two busy processes and a system svchost load, and took 6.4 s. The
+ * slowest D1 read with the fix in and no generated modules is a first app
+ * with no diag lines, the merge candidate 46094264723: the stand-in about
+ * 11.8 s after the Snap button, 18 s inside TAB_MS.
  * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
  * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
  * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms

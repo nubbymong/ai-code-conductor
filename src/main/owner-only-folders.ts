@@ -122,8 +122,9 @@
 // limit and was asked again; named with its module, the first cmdlet returned
 // in 210 to 270 ms there, and the call took 2.6 s inside Windows PowerShell
 // (3.3 s as the app saw it). Later apps on a runner read 1.0 to 1.8 s; its
-// first app took longer, by an amount that varied: 13.6 s in 46049854244,
-// 8.8 s in 46084512071 and 1.9 s in 46059519266, as the app saw the call.
+// first app took longer, by an amount that varied: 13.6 s in 46049854244
+// (with thousands of generated modules on the path), 8.8 s in 46084512071
+// and 1.9 s in 46059519266, as the app saw the call.
 // The module look is gone; CONTEXT.d/2026-11-27-b20-snap-d1.md records what
 // was measured of the first app's wait.
 import { execFile } from 'node:child_process'
