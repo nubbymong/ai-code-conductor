@@ -738,12 +738,22 @@ mod tests {
         assert_eq!(parse(&words).expect("taken").store, PathBuf::from(store));
     }
 
-    /// A folder of this test, its mode set outright: the lib tests share one
-    /// process and its umask.
+    /// A folder of this test, `mode` set outright, never left to the umask.
+    ///
+    /// The lib tests share one process and its umask, and a socket bind
+    /// beside them sets it to 0177 for a moment (transport/unix.rs,
+    /// `bind_private`). A level `create_dir_all` made in that moment was 0600,
+    /// with no search bit, so the next level could not be made inside it
+    /// ("Permission denied", seen on the macOS runner). So each missing level
+    /// is made on its own and set to 0700 before the next is made in it.
     #[cfg(unix)]
     fn folder(at: &Path, mode: u32) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::create_dir_all(at).expect("a folder");
+        let missing: Vec<&Path> = at.ancestors().take_while(|p| matches!(std::fs::symlink_metadata(p), Err(e) if e.kind() == std::io::ErrorKind::NotFound)).collect();
+        for level in missing.iter().rev() {
+            std::fs::create_dir(level).expect("a folder");
+            std::fs::set_permissions(level, std::fs::Permissions::from_mode(0o700)).expect("its mode");
+        }
         std::fs::set_permissions(at, std::fs::Permissions::from_mode(mode)).expect("its mode");
         at.to_path_buf()
     }
