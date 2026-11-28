@@ -37,15 +37,18 @@
 //
 // One scripted turn (2.1.3-beta.21, plan 6.3's CI line; the review check,
 // tests/live/remote-review.live.ts): a Claude Code turn whose run is
-// `review-tool-<n>` and whose last user message names it is the call. It is
+// `review-tool-<n>` and whose latest user turn (every user message after the
+// last assistant message) names it is the call. It is
 // answered, once per run, with a tool_use of the app's review tool as Claude
 // Code names a `conductor` tool (REVIEW_TOOL, input REVIEW_INPUT: mode
 // working), when the request lists that tool; when it does not, with text
-// that says so. The next request, whose last user message carries that
+// that says so. The next request, whose latest user turn carries that
 // tool_use's result, is the answer: it gets the fixed text REVIEW_DONE_TEXT,
 // and its event keeps the result's text (16 KiB at most) and its error flag,
 // which is what the check reads the review's footer from. Each of these
-// events carries `script`: the step, and the tool_use sent or the result read.
+// events carries `script`: the step, and the tool_use sent or the result read;
+// a step it does not script (`again`, `other`), the request's shape (each
+// message's role and part types, never its text).
 const http = require('http');
 const crypto = require('crypto');
 const { pngPixelHashes } = require('./png-rgba.cjs');
@@ -162,11 +165,21 @@ function readResponses(body) {
 
 const toolCount = (body) => (Array.isArray(body && body.tools) ? body.tools.length : 0);
 
-/** The parts of an Anthropic request's last message, when it is the user's. */
-function lastUserParts(body) {
+/** The parts of an Anthropic request's latest user turn: every user message
+ *  after its last assistant message (Claude Code 2.1.332 sends its own
+ *  attachments as user messages of their own, after the prompt and after a
+ *  tool result). */
+function latestUserParts(body) {
   const msgs = Array.isArray(body && body.messages) ? body.messages : [];
-  const last = msgs[msgs.length - 1];
-  return last && last.role === 'user' ? partsOf(last.content) : [];
+  let at = msgs.length;
+  while (at > 0 && !(msgs[at - 1] && msgs[at - 1].role === 'assistant')) at--;
+  return msgs.slice(at).filter((m) => m && m.role === 'user').flatMap((m) => partsOf(m.content));
+}
+
+/** A request's shape for a reading: each message's role and part types (the last 12), never its text. */
+function messagesShape(body) {
+  const msgs = Array.isArray(body && body.messages) ? body.messages : [];
+  return msgs.slice(-12).map((m) => `${m && typeof m.role === 'string' ? m.role : '?'}:${partsOf(m && m.content).map((p) => (p && typeof p.type === 'string' ? p.type : '?')).join('+')}`);
 }
 
 /** A tool_result's text: a string as it is, its text blocks joined by a line end. */
@@ -177,14 +190,14 @@ function resultText(content) {
 /**
  * What the scripted review turn makes of one Claude Code turn whose run is
  * `run` (`called`: the runs already answered with a tool_use): null when the
- * run is not a review run; `answer` when the last user message carries the
+ * run is not a review run; `answer` when the latest user turn carries the
  * result of a tool_use this stand-in sent; `call` when it names the run
  * (`offered`: the request lists REVIEW_TOOL; when not, the tools it lists);
  * `again` for a call of a run already called; `other` for anything else.
  */
 function reviewStep(body, run, called) {
   if (typeof run !== 'string' || !REVIEW_RUN_RE.test(run)) return null;
-  const last = lastUserParts(body);
+  const last = latestUserParts(body);
   const result = last.find((p) => p && p.type === 'tool_result' && typeof p.tool_use_id === 'string' && p.tool_use_id.startsWith(TOOL_USE_PREFIX));
   if (result) {
     return { step: 'answer', run, toolResult: { toolUseId: result.tool_use_id, isError: result.is_error === true, text: resultText(result.content).slice(0, RESULT_TEXT_MAX) } };
@@ -290,9 +303,10 @@ function createModelStandIn({ onEvent }) {
         const step = c.api === 'anthropic' && c.kind === 'turn' ? reviewStep(body, c.run, called) : null;
         const toolUse = step && step.step === 'call' && step.offered ? { id: `${TOOL_USE_PREFIX}${id}`, name: REVIEW_TOOL, input: REVIEW_INPUT } : null;
         if (toolUse) called.add(step.run);
-        const script = step ? { ...step, ...(toolUse ? { toolUse } : {}) } : null;
+        const unscripted = step && (step.step === 'again' || step.step === 'other');
+        const script = step ? { ...step, ...(toolUse ? { toolUse } : {}), ...(unscripted ? { shape: messagesShape(body) } : {}) } : null;
         onEvent({ ...base, api: c.api, kind: c.kind, run: c.run, images: c.images, text: c.text ? c.text.slice(0, 400) : null, ...(script ? { script } : {}) });
-        const text = !step || step.step === 'again' || step.step === 'other' ? (c.kind === 'turn' ? 'p11 ok' : 'ok') : step.step === 'answer' ? REVIEW_DONE_TEXT : REVIEW_NOT_OFFERED_TEXT;
+        const text = !step || unscripted ? (c.kind === 'turn' ? 'p11 ok' : 'ok') : step.step === 'answer' ? REVIEW_DONE_TEXT : REVIEW_NOT_OFFERED_TEXT;
         if (toolUse) anthropicToolUseReply(res, body, id, toolUse);
         else if (c.api === 'anthropic') anthropicReply(res, body, id, text); else responsesReply(res, body, id, text);
         onEvent({ ev: 'reply-done', t: Date.now(), id, run: c.run, kind: c.kind });

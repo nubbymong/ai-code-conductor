@@ -681,12 +681,18 @@ async function reviewAskedByClaudeCode(id: string): Promise<void> {
       const call = scripted(from, 'call')
       if (call && call.offered === false) throw new Error(`Claude Code's request did not offer ${REVIEW_TOOL}; it offered: ${(call.tools ?? []).join(', ')}`)
       if (scripted(from, 'answer')) return true
+      // The prompt's turn not read as the call (a request of the run before any
+      // call): Claude Code has its text answer already, so fail now, with its shape.
+      const unread = call ? undefined : modelEvents.slice(from).find((e) => e.ev === 'request' && e.script?.step === 'other')
+      if (unread) throw new Error(`the model stand-in did not read Claude Code's turn as the review call: ${JSON.stringify(unread.script)}`)
       // Not expected (the allow rule runs the tool), but answered so the
       // check reads the review: Claude Code asking before the call.
       if (!promptAnswered && Date.now() - lastLook > 1000) {
         lastLook = Date.now()
-        const screen = await screenText(pty)
-        if (/Do you want to proceed\?/.test(screen) && /codex_review/.test(screen)) {
+        const read = pty.screenRead
+        const lines = read ? await read().then((s) => s.lines, () => null) : null
+        const screen = lines ? lines.map((l) => l.text).join('\n') : ''
+        if (/codex_review/.test(screen) && (/Do you want to/.test(screen) || readClaudeScreen(lines).screen === 'blocked')) {
           promptAnswered = true
           note('permission-prompt', screen)
           pty.write('\r')

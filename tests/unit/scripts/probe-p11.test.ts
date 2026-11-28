@@ -277,6 +277,22 @@ describe('P11: the scripted review turn (a tool_use for the review tool, then fi
     expect(R.reviewStep(second('toolu_p11_4', 'all text', true), 'review-tool-1', new Set())!.toolResult).toEqual({ toolUseId: 'toolu_p11_4', isError: true, text: 'all text' })
   })
 
+  // Claude Code 2.1.332 sends its own attachments as user messages of their
+  // own after the prompt and after a tool result (remote-helper-e2e run
+  // 46155764250: the prompt's request read as `other`): the latest user turn
+  // is every user message after the last assistant message.
+  it('reads the whole latest user turn: the prompt followed by user messages of the CLI\'s own is the call; a result followed by them is the answer', () => {
+    const reminder = { role: 'user', content: [{ type: 'text', text: '<system-reminder>the CLI\'s own</system-reminder>' }] }
+    const call = { ...first(), messages: [...first().messages, reminder, { role: 'user', content: 'more of its own' }] }
+    expect(R.reviewStep(call, runOf(call), new Set())).toEqual({ step: 'call', run: 'review-tool-1', offered: true })
+    const later = second('toolu_p11_5', 'the text')
+    const answer = { ...later, messages: [...later.messages, reminder] }
+    expect(R.reviewStep(answer, runOf(answer), new Set(['review-tool-1']))).toEqual({ step: 'answer', run: 'review-tool-1', toolResult: { toolUseId: 'toolu_p11_5', isError: false, text: 'the text' } })
+    // The prompt before the assistant's tool_use is not the latest turn.
+    const stale = { ...later, messages: [...later.messages.slice(0, 2), reminder] }
+    expect(R.reviewStep(stale, runOf(stale), new Set())).toEqual({ step: 'other', run: 'review-tool-1' })
+  })
+
   it('anything else is not the review: another run, no run, another tool_use id in a later message with no run named', () => {
     const other = { ...first(), messages: [{ role: 'user', content: 'p11 probe claude-paste-1: please view the image.' }] }
     expect(R.reviewStep(other, runOf(other), new Set())).toBeNull()
@@ -310,10 +326,11 @@ describe('P11: the scripted review turn (a tool_use for the review tool, then fi
       expect(answer.find((e) => e.type === 'message_delta')!.delta.stop_reason).toBe('end_turn')
       // The same run asked again: plain text, no second call.
       expect(textOf(await post(first()))).toBe('p11 ok')
+      // A step it does not script carries the request's shape: each message's role and part types, never its text.
       expect(events.filter((e) => e.ev === 'request').map((e) => e.script)).toEqual([
         { step: 'call', run: 'review-tool-1', offered: true, toolUse: { id, name: 'mcp__conductor__codex_review', input: R.REVIEW_INPUT } },
         { step: 'answer', run: 'review-tool-1', toolResult: { toolUseId: id, isError: false, text: 'the review\n\n---\nthe footer' } },
-        { step: 'again', run: 'review-tool-1' },
+        { step: 'again', run: 'review-tool-1', shape: ['user:text+text'] },
       ])
     } finally {
       await standIn.close()
