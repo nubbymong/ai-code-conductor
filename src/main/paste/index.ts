@@ -191,11 +191,9 @@ function fromDoor(result: ClipboardPasteDoorResult): PasteKeyResult {
   }
 }
 
-/** The key for `sessionId`'s CLI by its table, then the door; no key when
- *  the program the CLI reads the clipboard with is missing (plan
- *  2.1.3-beta.21 phase 3, 3.1: Claude Code on Linux). */
+/** The key for `sessionId`'s CLI by its table, then the door. */
 async function sendKey(sessionId: string, rule: ClipboardPasteRule, sentence: string | null): Promise<PasteKeyResult> {
-  if (rule.clipboardToolMissing?.(deps.platform)) return notPasted('no-clipboard-tool')
+  if (await rule.clipboardToolMissing?.(deps.platform)) return notPasted('no-clipboard-tool')
   let accountDir: string | null = null
   try { accountDir = deps.accountDir(sessionId) } catch { accountDir = null }
   const key = rule.key({ platform: deps.platform, accountDir })

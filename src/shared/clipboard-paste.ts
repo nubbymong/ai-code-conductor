@@ -54,8 +54,8 @@ export type PasteNotPastedReason =
   /** The session's key cannot be sent (an account binding the app cannot express). */
   | 'no-key'
   /** The program the CLI reads the clipboard with is not on this computer
-   *  (Claude Code on Linux: xclip under X11, xclip or wl-paste under
-   *  Wayland; plan 2.1.3-beta.21 phase 3). */
+   *  (Claude Code on Linux: xclip under X11, wl-paste under Wayland; plan
+   *  2.1.3-beta.21 phase 3). */
   | 'no-clipboard-tool'
   /** This computer's clipboard could not be written. */
   | 'not-written'
