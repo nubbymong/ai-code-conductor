@@ -362,14 +362,18 @@ export const LOGIND_READS: readonly string[] = [
 // ── 2.1.3-beta.21: a review on the machine a remote session runs on ──────────
 
 /** The probe's reads for a review on the machine (aicc_planning#446): where
- *  `codex` is on the exec's PATH and the exec's git version. `W` is
- *  `timeout 10` where the machine has it, so a `codex --version` that does
- *  not answer cannot hold the probe. Whether reviews run on a machine is not
- *  read there: it is this build's record of the probes PV1 and PV2 by
- *  architecture (codex-review-remote.ts REMOTE_REVIEW_PROVEN). */
+ *  `codex` is on the exec's PATH and its version, for every login shell (a
+ *  Codex only the exec finds is the record's, with this version: the path
+ *  and the version come from the same lookup, machines.ts), and the exec's
+ *  git version. `W` is `timeout 10` where the machine has it, so a
+ *  `codex --version` that does not answer cannot hold the probe. Whether
+ *  reviews run on a machine is not read there: it is this build's record of
+ *  the probes PV1 and PV2 by architecture (codex-review-remote.ts
+ *  REMOTE_REVIEW_PROVEN). */
 const REVIEW_PROBE_READS = [
   'W=; command -v timeout >/dev/null 2>&1 && W="timeout 10"',
   'r codex "$(command -v codex 2>/dev/null)"',
+  'command -v codex >/dev/null 2>&1 && r codex-version "$($W codex --version </dev/null 2>/dev/null | head -n 1)"',
   'r git "$(git --version </dev/null 2>/dev/null | head -n 1)"',
 ]
 
@@ -514,7 +518,7 @@ const SPECS = {
       ...REVIEW_PROBE_READS,
       // `$` alone, so the PATH and the lookup expand in the login shell, not here.
       'v="$"',
-      'case "${S##*/}" in bash|zsh|sh|dash|ksh|mksh|ash|yash) "$S" -ilc "echo AICC-RESULT $N il-path ${v}PATH; echo AICC-RESULT $N il-claude ${v}(command -v claude 2>/dev/null); echo AICC-RESULT $N il-codex ${v}(command -v codex 2>/dev/null); echo AICC-RESULT $N il-codex-version ${v}(command -v codex >/dev/null 2>&1 && $W codex --version </dev/null 2>/dev/null | head -n 1)" </dev/null 2>/dev/null;; *) command -v codex >/dev/null 2>&1 && r codex-version "$($W codex --version </dev/null 2>/dev/null | head -n 1)";; esac',
+      'case "${S##*/}" in bash|zsh|sh|dash|ksh|mksh|ash|yash) "$S" -ilc "echo AICC-RESULT $N il-path ${v}PATH; echo AICC-RESULT $N il-claude ${v}(command -v claude 2>/dev/null); echo AICC-RESULT $N il-codex ${v}(command -v codex 2>/dev/null); echo AICC-RESULT $N il-codex-version ${v}(command -v codex >/dev/null 2>&1 && $W codex --version </dev/null 2>/dev/null | head -n 1)" </dev/null 2>/dev/null;; esac',
       'r end ok',
     ]),
   },

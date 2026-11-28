@@ -703,11 +703,14 @@ export class RemoteMachines {
     const execPath = hostText(probe.values.get('path'), 32767) ?? '/usr/local/bin:/usr/bin:/bin'
     const claudePath = hostPath(probe.values.get('il-claude'), 4096) ?? hostPath(probe.values.get('claude'), 4096)
     // 2.1.3-beta.21 (aicc_planning#446): Codex there, by the same lookup, and
-    // its version; the exec's git.
-    const codexPath = hostPath(probe.values.get('il-codex'), 4096) ?? hostPath(probe.values.get('codex'), 4096)
+    // its version; the exec's git. The version is read from the lookup the
+    // path came from: the `-il` one's when its answer is the path, else the
+    // exec's, never one lookup's path with the other's version.
+    const ilCodex = hostPath(probe.values.get('il-codex'), 4096)
+    const codexPath = ilCodex ?? hostPath(probe.values.get('codex'), 4096)
     let reviewer: ProviderRemoteReview | undefined
     try { reviewer = this.deps.reviewer?.() } catch { reviewer = undefined }
-    const codexVersion = reviewer ? reviewer.parseVersion(probe.values.get('il-codex-version') || probe.values.get('codex-version') || '') : null
+    const codexVersion = reviewer ? reviewer.parseVersion((ilCodex ? probe.values.get('il-codex-version') : probe.values.get('codex-version')) ?? '') : null
     const git = gitVersionOf(probe.values.get('git'))
     const lang = probe.values.get('lang')
     // 3. install, unless the machine has this helper already in place

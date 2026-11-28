@@ -261,6 +261,48 @@ describe('a Check reads Codex, its model list and the git there', () => {
     expect(t).toContain('il-codex-version ${v}(command -v codex >/dev/null 2>&1 && $W codex --version')
   })
 
+  // Review round 1, F6: the path and the version come from the same lookup.
+  it('the probe reads the exec\'s Codex version for every login shell, outside the -il lookup, so a Codex only the exec finds has its version', () => {
+    const t = scriptText('probe')
+    const exec = 'command -v codex >/dev/null 2>&1 && r codex-version "$($W codex --version </dev/null 2>/dev/null | head -n 1)"'
+    const at = t.indexOf(exec)
+    expect(at, 'the exec\'s version read').toBeGreaterThanOrEqual(0)
+    // Before the login shell's branch, and only once: not inside it, not left in its `*)` arm.
+    const branch = t.indexOf('case "${S##*/}" in')
+    expect(at).toBeLessThan(branch)
+    expect(t.split(exec).length).toBe(2)
+    expect(t.slice(branch)).not.toContain('r codex-version')
+  })
+
+  it('an sh-family login shell whose -il lookup finds no Codex while the exec\'s PATH does: the exec\'s Codex, with its own version', async () => {
+    const ssh = new FakeSsh(host({}, { 'il-codex': '', 'il-codex-version': '', codex: '/usr/local/bin/codex', 'codex-version': 'codex-cli 0.157.1', git: 'git version 2.47.1' }))
+    const [rec] = (await added(ssh)).list()
+    expect(rec.shellIsSh).toBe(true)
+    expect(rec.codex?.path).toBe('/usr/local/bin/codex')
+    expect(rec.codex?.version).toBe('0.157.1')
+    expect(ssh.scripts()).toContain('cliread')
+  })
+
+  it('the -il lookup gave a name that is not a path (an alias): the exec\'s Codex is used, with the exec\'s version, never the -il one\'s', async () => {
+    const ssh = new FakeSsh(host({}, { 'il-codex': 'alias codex=\'/opt/other/codex\'', 'il-codex-version': 'codex-cli 0.160.0', codex: '/usr/local/bin/codex', 'codex-version': 'codex-cli 0.157.1', git: 'git version 2.47.1' }))
+    const [rec] = (await added(ssh)).list()
+    expect(rec.codex?.path).toBe('/usr/local/bin/codex')
+    expect(rec.codex?.version).toBe('0.157.1')
+  })
+
+  it('both lookups find a Codex: the -il one, with its own version, never the exec\'s', async () => {
+    const ssh = new FakeSsh(host({}, { ...CODEX_PROBE, codex: '/usr/bin/codex', 'codex-version': 'codex-cli 0.150.0' }))
+    const [rec] = (await added(ssh)).list()
+    expect(rec.codex?.path).toBe('/home/nick/.npm-global/bin/codex')
+    expect(rec.codex?.version).toBe('0.157.1')
+  })
+
+  it('the -il lookup found a Codex whose version did not read: its version is not read from the exec\'s other Codex', async () => {
+    const ssh = new FakeSsh(host({}, { 'il-codex': '/home/nick/.npm-global/bin/codex', 'il-codex-version': '', codex: '/usr/bin/codex', 'codex-version': 'codex-cli 0.157.1', git: 'git version 2.47.1' }))
+    const [rec] = (await added(ssh)).list()
+    expect(rec.codex).toEqual({ path: '/home/nick/.npm-global/bin/codex', version: null })
+  })
+
   it('the model list is read in a fresh, empty Codex home in the device folder, removed after it', () => {
     const t = scriptText('cliread')
     expect(t).toContain('T=$A/cli-$N')
