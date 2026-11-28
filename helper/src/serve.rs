@@ -117,8 +117,10 @@
 //! closes, detaches or is replaced, and when no chunk comes in time
 //! (`paste::CHUNK_WAIT`, answered `timeout`). A read of the next frame waits
 //! only until that time; one that passes before a byte of a frame came ends
-//! the upload and the connection goes on. The folder goes at the session's
-//! end. The holder never reads a picture and decides nothing from one.
+//! the upload and the connection goes on, its 60 s with no frame
+//! (`IDLE_TIMEOUT`) running on from the last frame, not anew. The folder
+//! goes at the session's end. The holder never reads a picture and decides
+//! nothing from one.
 //!
 //! Locks: a connection's stream gate (`Conn::live`) first (the attached
 //! connection's before a relay's, which guards that relay's tool messages),
@@ -1847,6 +1849,11 @@ impl Serve {
         // The picture this connection is sending (`paste`), at most one: it
         // ends, its partial file removed, when this function returns.
         let mut upload: Option<Upload> = None;
+        // When the last frame came, and whether a chunk wait has just run
+        // out: the read after one waits only what is left of the 60 s with
+        // no frame (IDLE_TIMEOUT), not 60 s more.
+        let mut last_frame = Instant::now();
+        let mut after_stall = false;
         loop {
             let next = match &upload {
                 // The next chunk is due: a read waits only until then.
@@ -1854,10 +1861,17 @@ impl Serve {
                     let limit = u.due().saturating_duration_since(Instant::now()).min(IDLE_TIMEOUT);
                     self.read_next(conn, reader, limit, "a chunk of the picture did not arrive in time", self.max_json(allowed.mcp), true)
                 }
-                None => self.read_next(conn, reader, IDLE_TIMEOUT, "no frame from the app in 60 seconds", self.max_json(allowed.mcp), false),
+                None => {
+                    let limit = if after_stall { IDLE_TIMEOUT.saturating_sub(last_frame.elapsed()) } else { IDLE_TIMEOUT };
+                    after_stall = false;
+                    self.read_next(conn, reader, limit, "no frame from the app in 60 seconds", self.max_json(allowed.mcp), false)
+                }
             };
             let f = match next {
-                Next::Frame(f) => f,
+                Next::Frame(f) => {
+                    last_frame = Instant::now();
+                    f
+                }
                 Next::Quiet => {
                     // No chunk in time: the upload ends, nothing is kept, and
                     // the connection goes on. Its partial file goes first, so
@@ -1867,6 +1881,7 @@ impl Serve {
                         drop(u);
                         let _ = conn.send_error(Some(id), request::CODE_TIMEOUT, "no chunk of the picture came in time: the upload ended and nothing was kept");
                     }
+                    after_stall = true;
                     continue;
                 }
                 Next::Close => return,
