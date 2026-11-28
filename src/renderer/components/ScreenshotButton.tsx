@@ -14,13 +14,13 @@ const SNAP_NOTE_MS = 6000
 interface Props {
   sessionId: string
   // How the picture reaches the session (ADR-032; plan 2.1.3-beta.21 phase
-  // 2, 2.1.5): main's capture hands the picture to the paste module itself,
-  // which writes it to the clipboard and presses the CLI's own paste key,
-  // then the sentence and Enter; the renderer is sent no path and sends
-  // none. A tab on the old SSH path gets today's request naming the saved
-  // file for the Conductor MCP server's fetch_host_screenshot tool. Only the
-  // path route behind the test switch answers a file, for 2.1.3-beta.20's
-  // flow (sendImageToSession).
+  // 2, 2.1.5): main's capture keeps the picture and answers a token for it,
+  // never its path; the token goes back on the paste channel, and the paste
+  // module writes the picture to the clipboard and presses the CLI's own
+  // paste key, then the sentence and Enter. A tab on the old SSH path gets
+  // today's request naming the saved file for the Conductor MCP server's
+  // fetch_host_screenshot tool. Only the path route behind the test switch
+  // answers a file, for 2.1.3-beta.20's flow (sendImageToSession).
   sessionType: 'local' | 'ssh'
 }
 
@@ -102,7 +102,7 @@ export default function ScreenshotButton({ sessionId, sessionType }: Props) {
       await afterTwoFrames()
       const answer = await window.electronAPI.screenshot.captureRectangle(sessionId)
       if (applySnapAnswer(sessionId, answer, 'rectangle', sessionType)) {
-        // the paste's own answer, applied
+        // the token went to the paste; its hint follows
       } else if (isSnapNotCaptured(answer)) {
         // 2.1.3-beta.19 fix round: nothing opened, so say why, above the bar.
         usePasteHintStore.getState().show(sessionId, SNAP_NO_DESKTOP_TEXT, SNAP_NOTE_MS)
