@@ -189,7 +189,7 @@ const TOOL_TYPES: [(&str, &[&str]); 3] = [("mcp.open", &["t", "stream"]), ("mcp"
 
 /// A request id: an even integer (app ids are even, section 9) a JavaScript
 /// number holds exactly.
-fn request_id(v: &Value) -> Option<u64> {
+pub(crate) fn request_id(v: &Value) -> Option<u64> {
     let id = v.get("id")?.as_u64()?;
     if id % 2 == 0 && id <= MAX_SAFE_INTEGER {
         Some(id)
@@ -200,7 +200,7 @@ fn request_id(v: &Value) -> Option<u64> {
 
 /// True when the object holds every key of `required`, nothing but those
 /// and `optional`, and each key once.
-fn keys_fit(v: &Value, required: &[&str], optional: &[&str]) -> bool {
+pub(crate) fn keys_fit(v: &Value, required: &[&str], optional: &[&str]) -> bool {
     let keys = match v.keys() {
         Some(k) => k,
         None => return false,

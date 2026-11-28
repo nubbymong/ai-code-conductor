@@ -514,6 +514,12 @@ export class RemoteDriver implements HelperPtyDriver {
   /** What prepare() made, for HelperPty's hold to take. */
   setPrepared(p: { record: HolderRecord } | { error: Error }): void { this.prepared = p }
 
+  /** A picture is sent to the session's own folder on the host
+   *  (2.1.3-beta.21, file.put; the holder makes the folder when the launch
+   *  wrote no files there, whether or not the picture is then stored): the
+   *  folder goes at the session's end, as one holding its files does. */
+  pictureSent(): void { this.filesSent = true }
+
   /** HelperPty's start: the holder prepare() started (RemoteHelperPty always
    *  prepares first, so an attach never reaches a launch). */
   async hold(sid: string, label: string, abandoned: () => boolean): Promise<HolderRecord> {
@@ -905,6 +911,9 @@ export class RemoteDriver implements HelperPtyDriver {
         ...(asks?.hooks ? { hooks: true } : {}),
         ...(asks?.mcp ? { mcp: true } : {}),
         ...(asks?.status ? { status: true } : {}),
+        // 2.1.3-beta.21 (ADR-032): the tab's own connection sends its pictures
+        // (file.put, RemoteHelperPty.putPicture); an end's own link sends none.
+        ...(tabs ? { paste: true } : {}),
       })
       if (endAgain) this.wrapRequests(conn, record)
       if (asks) this.signals?.connected(conn)
@@ -1124,6 +1133,36 @@ export class RemoteHelperPty implements IPty {
   get everShown(): boolean { return this.driver.wasAttached }
   /** 2.1.3-beta.21: this start wrote the clipboard stand-in (RemoteDriver clipStandInReady). */
   get clipStandInReady(): boolean { return this.driver.clipStandInReady }
+
+  /** The next picture's number (its name's `<n>`): from the clock in seconds,
+   *  so a new run of the app on a session kept there does not take the name
+   *  of the picture there now (a name already in `paste/` is refused), then
+   *  one more each time, within the 9 digits a name takes. */
+  private nextPicture = 1 + (Math.floor(Date.now() / 1000) % 900_000_000)
+
+  /**
+   * 2.1.3-beta.21 (ADR-032; docs/remote/helper-protocol.md section 15,
+   * capability `paste`): a picture from this computer into this tab's session
+   * folder on its machine (`paste/`), by `file.put` on the tab's own
+   * connection, for the CLI's own clipboard paste there. `kind` is its
+   * format, which its name says (`paste-<n>.png` or `.jpg`). Resolves with
+   * the name it took and its SHA-256; nothing is typed, and no path comes
+   * back to be typed (the CLI's own paste key is the caller's next step).
+   * Rejects (a HolderError with the protocol's code) before the tab reached
+   * its holder or while it is not attached (`not-connected`), on a holder
+   * from before 2.1.3-beta.21 that offers no `paste` (`unknown-type`), and
+   * with the holder's own refusal.
+   */
+  async putPicture(bytes: Buffer, kind: 'png' | 'jpg'): Promise<{ name: string; sha256: string }> {
+    const inner = this.inner
+    if (!inner) throw new HolderError('not-connected', 'the tab has not reached its holder yet')
+    const n = this.nextPicture
+    this.nextPicture = n >= 999_999_999 ? 1 : n + 1
+    const name = `paste-${n}.${kind}`
+    this.driver.pictureSent()
+    const { sha256 } = await inner.putFile(name, bytes)
+    return { name, sha256 }
+  }
 
   write(data: string | Buffer): void {
     if (this.inner) { this.inner.write(data); return }

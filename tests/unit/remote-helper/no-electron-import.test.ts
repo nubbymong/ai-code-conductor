@@ -59,6 +59,8 @@ describe('the modules the remote helper device check imports', () => {
       import('../../../src/main/remote-helper/review-sessions'),
       import('../../../src/main/codex-review-remote'),
       import('../../../src/main/providers/codex/remote-review'),
+      // 2.1.3-beta.21 (probe PH1): the holder connection the live file opens on a link of its own.
+      import('../../../src/main/session-helper/connection'),
     ])
     expect(typeof modules[0].remoteLaunchOf).toBe('function')
     expect(typeof modules[5].claudeRemoteLaunch.launch).toBe('function')
@@ -70,6 +72,7 @@ describe('the modules the remote helper device check imports', () => {
     expect(typeof modules[11].registerRemoteReviewSession).toBe('function')
     expect(typeof modules[12].runRemoteCodexReview).toBe('function')
     expect(typeof modules[13].codexRemoteReview.args).toBe('function')
+    expect(typeof modules[14].HolderConnection.open).toBe('function')
   })
 
   it('the live file imports no other module of the app', async () => {
@@ -88,6 +91,8 @@ describe('the modules the remote helper device check imports', () => {
       '../../src/main/remote-helper/scripts',
       '../../src/main/remote-helper/session',
       '../../src/main/remote-helper/ssh-exec',
+      // 2.1.3-beta.21 (probe PH1): a holder connection on a link of the test's own.
+      '../../src/main/session-helper/connection',
       // 2.1.3-beta.19 section 1.2: the holder records' two shapes, read by section 1.1's reader.
       '../../src/main/session-helper/protocol',
     ])

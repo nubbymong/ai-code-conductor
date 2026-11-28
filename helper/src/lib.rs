@@ -20,6 +20,7 @@ pub mod hello;
 pub mod holder;
 pub mod hook;
 pub mod json;
+pub mod paste;
 pub mod pids;
 pub mod pty;
 pub mod random;

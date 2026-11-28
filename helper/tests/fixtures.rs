@@ -13,7 +13,7 @@ use aicc_helper::request::{self, Allowed, Request};
 use aicc_helper::ring::DEFAULT_RING_BYTES;
 use aicc_helper::screen::{self, Screen};
 use aicc_helper::store::{self, Listing, Record};
-use aicc_helper::{relay, serve, transport};
+use aicc_helper::{paste, relay, serve, transport};
 use std::fs;
 
 fn load(name: &str) -> Value {
@@ -593,7 +593,8 @@ fn declared(case: &Value) -> Option<Vec<String>> {
 fn status_and_hook_kind_vectors_read_as_the_fixtures_say() {
     let doc = load("local.json");
     let part = doc.get("status").expect("status");
-    assert_eq!(strings(part, "offered"), serve::HOLDER_CAPS.to_vec());
+    // What a holder offered from 2.1.3-beta.18 until the session's pictures.
+    assert_eq!(strings(part, "offered"), serve::HOLDER_CAPS[..8].to_vec());
     assert_eq!(strings(part, "status_caps"), aicc_helper::status::ACK_CAPS.to_vec());
     let env = part.get("env").expect("env");
     assert_eq!((text(env, "store"), text(env, "session")), (hook::STORE_ENV, hook::SESSION_ENV));
@@ -781,4 +782,57 @@ fn the_local_limits_match_the_constants() {
     let hex = l.get("endpoint_random_hex").expect("endpoint_random_hex");
     let key = if cfg!(windows) { "windows" } else { "unix" };
     assert_eq!(hex.get(key).and_then(Value::as_u64), Some(transport::ENDPOINT_RANDOM_HEX as u64));
+}
+
+// ── local.json `paste`: the session's pictures (capability `paste`) ─────────
+
+#[test]
+fn paste_vectors_read_as_the_fixtures_say() {
+    let doc = load("local.json");
+    let part = doc.get("paste").expect("paste");
+    assert_eq!(strings(part, "offered"), serve::HOLDER_CAPS.to_vec());
+    assert_eq!(strings(part, "ack"), vec!["core", "local", serve::PASTE_CAP]);
+    let l = part.get("limits").expect("limits");
+    let n = |k: &str| l.get(k).and_then(Value::as_u64).unwrap_or_else(|| panic!("missing number {k}"));
+    assert_eq!(n("channel"), u64::from(paste::CHANNEL));
+    assert_eq!(n("chunk_bytes"), frame::MAX_RAW as u64);
+    assert_eq!(n("picture_bytes"), paste::MAX_PICTURE);
+    assert_eq!(n("session_bytes"), paste::MAX_HELD);
+    assert_eq!(n("chunk_wait_ms"), paste::CHUNK_WAIT_RELEASE.as_millis() as u64);
+    assert_eq!(n("reply_ms"), paste::REPLY_WITHIN.as_millis() as u64);
+    assert_eq!(n("number_digits"), paste::MAX_NUMBER_DIGITS as u64);
+    let names = part.get("names").expect("names");
+    for name in strings(names, "valid") {
+        assert!(paste::picture_name(name).is_some(), "refused {name:?}");
+    }
+    for name in strings(names, "invalid") {
+        assert!(paste::picture_name(name).is_none(), "took {name:?}");
+    }
+    let requests = part.get("requests").expect("requests");
+    let mut ran = 0;
+    for case in items(requests, "valid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let put = paste::parse_put(&value).unwrap_or_else(|r| panic!("{name}: refused with {}: {}", r.code, r.text));
+        let got = Value::obj(vec![("type", Value::str("file.put")), ("id", Value::uint(put.id)), ("name", Value::str(&put.name)), ("size", Value::uint(put.size)), ("sha256", Value::str(&put.sha256))]);
+        assert_eq!(got.to_json(), case.get("expect").expect("expect").to_json(), "{name}");
+        ran += 1;
+    }
+    let mut codes: Vec<&str> = Vec::new();
+    for case in items(requests, "invalid") {
+        let name = text(case, "name");
+        let value = json::parse(text(case, "json").as_bytes()).unwrap_or_else(|e| panic!("{name}: not JSON: {e:?}"));
+        let refusal = paste::parse_put(&value).expect_err(name);
+        assert_eq!(refusal.code, text(case, "error"), "{name}: {}", refusal.text);
+        codes.push(refusal.code);
+        ran += 1;
+    }
+    assert!(ran >= 18, "only {ran} paste vectors");
+    for code in [request::CODE_BAD_FIELD, request::CODE_TOO_LARGE] {
+        assert!(codes.contains(&code), "no vector refused with {code}");
+    }
+    // The reply carries the hash, and no path.
+    let stored = part.get("stored").expect("stored");
+    let re = stored.get("re").and_then(Value::as_u64).expect("re");
+    assert_eq!(paste::stored_message(re, text(stored, "sha256")).to_json(), text(stored, "json"));
 }

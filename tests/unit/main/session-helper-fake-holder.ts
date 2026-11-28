@@ -77,7 +77,7 @@
  * attached connection only, nothing more is sent to it after `term.detached`
  * (a hook event waits for the next attach), and the connection is closed.
  */
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
 import * as fs from 'fs'
 import * as path from 'path'
 import { Duplex, PassThrough, finished } from 'stream'
@@ -217,6 +217,8 @@ export class FakeConn {
   close(): void {
     if (this.closed) return
     this.closed = true
+    // A picture being sent ends with its connection (section 15).
+    if (this.holder.upload?.conn === this) this.holder.upload = null
     this.end.end()
     this.holder.conns.delete(this)
     if (this.holder.attached === this) this.holder.detached()
@@ -318,6 +320,14 @@ export class FakeHolder {
   noHalfClose = false
   /** B1f: answers term.detach; false leaves it unanswered. */
   answerDetach = true
+  /** 2.1.3-beta.21 (section 15, `paste`): each picture stored, in order. */
+  readonly pictures: Array<{ name: string; bytes: Buffer; sha256: string }> = []
+  /** Each raw frame that came on a channel other than the terminal's, in order. */
+  readonly pictureChunks: Array<{ channel: number; bytes: Buffer }> = []
+  /** Set: file.put is answered with this error code in place of being taken. */
+  pasteRefusal: string | null = null
+  /** The picture being sent now, and the connection sending it. */
+  upload: { conn: FakeConn; id: unknown; name: string; size: number; sha256: string; chunks: Buffer[]; got: number } | null = null
 
   constructor(readonly sid: string, readonly label: string, readonly store: string) {
     this.endpoint = `\\\\.\\pipe\\aicc-helper-${sid}-${hex(16)}`
@@ -447,6 +457,8 @@ export class FakeHolder {
       for (const f of reader.push(chunk)) {
         if (f.kind === 1) {
           conn.log.push({ raw: f.bytes.length })
+          // A picture's bytes on the paste channel (2.1.3-beta.21): never typed input.
+          if (f.channel !== 1) { this.pictureBytes(conn, f.channel, f.bytes); continue }
           if (conn === this.attached) this.typed(conn, f.bytes)
           continue
         }
@@ -480,6 +492,29 @@ export class FakeHolder {
     conn.refusing = true
     this.busies++
     conn.sendJson({ t: 'error', code: 'busy', text: 'the program is not reading its input; this frame and the ones after it until your next ping were not taken' })
+  }
+
+  /** One raw frame off the terminal's channel: a picture's bytes, taken while
+   *  its file.put is open, on the paste channel (section 15); with none open,
+   *  `bad-frame` and a close. The last byte checks the hash and answers. */
+  private pictureBytes(conn: FakeConn, channel: number, b: Buffer): void {
+    this.pictureChunks.push({ channel, bytes: b })
+    const u = this.upload
+    if (channel !== 2 || !u || u.conn !== conn) {
+      conn.sendJson({ t: 'error', code: 'bad-frame', text: 'raw bytes on the paste channel with no picture being sent' })
+      conn.close()
+      return
+    }
+    u.chunks.push(b)
+    u.got += b.length
+    if (u.got < u.size) return
+    this.upload = null
+    const bytes = Buffer.concat(u.chunks)
+    const got = createHash('sha256').update(bytes).digest('hex')
+    if (u.got > u.size) return conn.sendJson({ t: 'error', re: u.id, code: 'too-large', text: 'a byte past size' })
+    if (got !== u.sha256) return conn.sendJson({ t: 'error', re: u.id, code: 'bad-field', text: 'the SHA-256 of the bytes is not the one file.put named' })
+    this.pictures.push({ name: u.name, bytes, sha256: got })
+    conn.sendJson({ t: 'file.stored', re: u.id, sha256: got })
   }
 
   /** The program starts reading again: what waited reaches it. */
@@ -589,6 +624,15 @@ export class FakeHolder {
         if (!conn.ackedCaps.includes('mcp')) return err('unknown-type', 'mcp')
         if (this.toolStreams.get(Number(m.stream)) !== conn) return conn.sendJson({ t: 'error', code: 'not-found', text: 'no such tool stream' })
         this.toolSent.push({ stream: Number(m.stream), message: m.message })
+        return
+      case 'file.put':
+        // 2.1.3-beta.21 (section 15): one picture at a time, from the attached connection that acked paste.
+        if (!conn.ackedCaps.includes('paste')) return err('unknown-type', 'file.put')
+        if (!this.launch) return err('not-found', 'nothing launched')
+        if (conn !== this.attached) return err('not-connected', 'only the connection attached to the terminal sends a picture')
+        if (this.upload) return err('busy', 'a picture is being sent in this session already')
+        if (this.pasteRefusal) return err(this.pasteRefusal, 'refused by the test')
+        this.upload = { conn, id: re, name: String(m.name), size: Number(m.size), sha256: String(m.sha256), chunks: [], got: 0 }
         return
       case 'mcp.close':
         // Only a relay ends a stream: the attached connection's end with its attach.
