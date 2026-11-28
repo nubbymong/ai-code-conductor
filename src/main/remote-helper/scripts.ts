@@ -43,7 +43,10 @@
  * removed at its end (`unsession`), and by the next Check once its holder is
  * gone (`sweep`). From 2.1.3-beta.19 (section 6.3) the list of kept sessions
  * the app takes at start-up and when the Machines page opens (`sessions`)
- * removes them too, so a folder a quit leaves goes at the next start.
+ * removes them too, so a folder a quit leaves goes at the next start. From
+ * 2.1.3-beta.21 (ADR-032) a session's folder may also hold `bin/` (0700), the
+ * clipboard stand-in's two scripts the `files` script writes there
+ * (CLIP_STAND_IN); it goes with the folder.
  *
  * From 2.1.3-beta.20 (section 3, Sign in on this machine) each account
  * signed in on the machine has a folder of its own,
@@ -276,6 +279,45 @@ export const FIELD_FILE_RE = /^(?!\.\.?(?:\/|$))[A-Za-z0-9._-]{1,128}(?:\/(?!\.\
 export const FIELD_KEY_RE = /^[A-Za-z0-9_-]{1,64}(?:\.[A-Za-z0-9_-]{1,64}){0,15}$/
 /** The most a field read answers: the helper's field mode prints at most 1 KiB. */
 export const FIELD_VALUE_MAX = 1024
+
+/**
+ * 2.1.3-beta.21 (ADR-032; docs/remote/helper-protocol.md section 15): the
+ * clipboard stand-in's two scripts, `xclip` and `wl-paste`, which the `files`
+ * script writes into the session's `bin/` folder (0700, each script 0700,
+ * written to a staging name and moved over its own) when the launch asks for
+ * them (`C` is `clip`). Each is two lines:
+ *
+ *   #!/bin/sh
+ *   exec '<helper>' clip --store '<store>' --session '<sid>' --as <name> [--real '<path>'] -- "$@"
+ *
+ * `<helper>` is this build's helper (`G`, its folder) and `<store>` the store,
+ * both built from `$HOME`; `--real` is the real tool of that name as `command
+ * -v` finds it on the exec's PATH outside `bin/`, left out when there is none
+ * or its path holds a single quote, a backslash or a control character. With
+ * such a helper, store or `bin/` path no script is written. The script text
+ * cannot hold the single quote, double quote and backslash those lines need
+ * and the checks compare (section 4), so awk prints each by its code
+ * (`printf("%c", n)`) and their bytes are checked first. A stand-in that
+ * cannot be written is said (`clip <why>`) and fails nothing: the session
+ * starts, and its image paste is not available. `clip ok` once both are in
+ * place.
+ */
+const CLIP_STAND_IN = [
+  'cb() { v="$"; q=$(LC_ALL=C awk -v f=%c "BEGIN{printf(f,39)}" </dev/null 2>/dev/null); w=$(LC_ALL=C awk -v f=%c "BEGIN{printf(f,34)}" </dev/null 2>/dev/null); b=$(LC_ALL=C awk -v f=%c "BEGIN{printf(f,92)}" </dev/null 2>/dev/null)',
+  '[ "$(printf "%s%s%s" "$q" "$w" "$b" | od -A n -t x1 | tr -d "[:space:]")" = 27225c ] || { r clip no-awk; return 0; }',
+  'case "$G" in */*|.*|"") r clip bad-helper-folder; return 0;; esac',
+  'P=$A/helper/$G/aicc-helper; Y=$A/store; B=$Q/bin',
+  'for x in "$P" "$Y" "$B"; do case "$x" in *"$q"*|*"$b"*|*[[:cntrl:]]*) r clip bad-path; return 0;; esac; done',
+  '[ -e "$B" ] || [ -L "$B" ] || mkdir "$B" || { r clip cannot-make-bin; return 0; }',
+  'pv "$B" || { r clip bin-not-private; return 0; }',
+  'for t in xclip wl-paste; do R=$(command -v "$t" 2>/dev/null); case "$R" in /*) ;; *) R=;; esac; case "$R" in "$B"/*|*"$q"*|*"$b"*|*[[:cntrl:]]*) R=;; esac; j=; [ -n "$R" ] && j=" --real $q$R$q"; W=$B/.$t.$N; if [ -d "$B/$t" ] && [ ! -L "$B/$t" ]; then r clip bin-file-is-a-folder; return 0; fi; { echo "#!/bin/sh"; echo "exec $q$P$q clip --store $q$Y$q --session $q$X$q --as $t$j -- $w${v}@$w"; } > "$W" || { rm -f -- "$W"; r clip cannot-write; return 0; }; chmod 700 "$W" || { rm -f -- "$W"; r clip cannot-set-mode; return 0; }; mv -f -- "$W" "$B/$t" || { rm -f -- "$W"; r clip cannot-place; return 0; }; done',
+  'r clip ok; }',
+  '[ "$C" = clip ] && cb',
+]
+
+/** The `files` script's stand-in value: `clip` writes the clipboard
+ *  stand-in (CLIP_STAND_IN), `none` does not. */
+export const STAND_IN_RE = /^(clip|none)$/
 
 /** A session's files as the `files` script takes them: `<name>:<size>` for
  *  each, joined by commas, in the order their bytes follow on standard input.
@@ -568,15 +610,19 @@ const SPECS = {
    *  into `sessions/<X>/` (made 0700 when missing), before its launch. `L` is
    *  the layout (FILES_LAYOUT_RE): the bytes follow in its order. All of them
    *  are read into a staging file first and checked for their size; each file
-   *  is then cut from it into a staging name and moved over its own name. */
+   *  is then cut from it into a staging name and moved over its own name.
+   *  2.1.3-beta.21: then, when `C` is `clip`, the clipboard stand-in's two
+   *  scripts into the session's `bin/` folder (CLIP_STAND_IN), naming the
+   *  helper in this build's folder `G`. */
   files: {
-    values: [SESSION, { name: 'file layout', re: FILES_LAYOUT_RE }],
+    values: [SESSION, { name: 'file layout', re: FILES_LAYOUT_RE }, FOLDER, { name: 'clipboard stand-in', re: STAND_IN_RE }],
     text: join([
-      'N=$1; D=$2; I=$3; X=$4; L=$5',
+      'N=$1; D=$2; I=$3; X=$4; L=$5; G=$6; C=$7',
       ...CHECKS,
       ...EXISTING,
       'umask 077',
       'case "$X" in *[!A-Za-z0-9_-]*|"") no bad-session;; esac',
+      'case "$C" in clip|none) ;; *) no bad-stand-in;; esac',
       'S=$A/sessions; Q=$S/$X',
       '[ -e "$S" ] || [ -L "$S" ] || mkdir "$S" || no cannot-make-sessions-folder',
       'pv "$S" || no sessions-folder-not-private',
@@ -590,6 +636,7 @@ const SPECS = {
       '[ "$n" -eq "$z" ] || { rm -f -- "$T"; no short-upload; }',
       'p=0; for e in "$@"; do m=${e%%:*}; s=${e##*:}; F=$Q/.$m.$N; if [ -d "$Q/$m" ] && [ ! -L "$Q/$m" ]; then rm -f -- "$T"; no file-is-a-folder; fi; tail -c +$((p+1)) "$T" | head -c "$s" > "$F"; k=$(wc -c < "$F"); k=$((k+0)); if [ "$k" -ne "$s" ]; then rm -f -- "$F" "$T"; no short-file; fi; mv -f -- "$F" "$Q/$m" || { rm -f -- "$F" "$T"; no cannot-place; }; p=$((p+s)); done',
       'rm -f -- "$T"',
+      ...CLIP_STAND_IN,
       'r end ok',
     ]),
   },

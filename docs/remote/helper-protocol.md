@@ -1861,10 +1861,12 @@ sends `file.put`.
 **The clipboard stand-in (from 2.1.3-beta.21; ADR-032; pending probe PR1).**
 On a Linux host Claude Code reads a picture by running `xclip` or `wl-paste`,
 which it finds by `PATH` (ADR-032's table). For a helper tab whose Claude
-package's remote launch asks for the stand-in, a fixed script writes two
-scripts, `xclip` and `wl-paste`, into `sessions/<sid>/bin/` (the folder 0700,
-each script 0700, not the 0600 of the other session files, section 1), each
-of two lines:
+package's remote launch asks for the stand-in, the `files` fixed script
+(section 1's session files; its values gain this build's helper folder and
+`clip`, or `none`) writes, after the session's files, two scripts, `xclip` and
+`wl-paste`, into `sessions/<sid>/bin/` (the folder 0700, each script 0700, not
+the 0600 of the other session files, section 1; each written to a staging name
+and moved over its own), each of two lines:
 
 ```
 #!/bin/sh
@@ -1880,28 +1882,48 @@ absolute path of the real tool of that name, as the fixed script's own
 and is left out when there is none. No path holding a single quote, a
 backslash or a control character is written: with such a helper or store path
 no `bin/` is written, and image paste in that tab shows as not available yet;
-with such a real tool, `--real` is left out. The launch then puts
+with such a real tool, `--real` is left out. The script text holds no quote
+or backslash (section 4), so the single quote, double quote and backslash the
+two lines hold and the checks compare come from awk's `printf` by their codes,
+checked by their bytes first; with no awk, no `bin/` is written either. The
+`files` exec answers `clip ok`, or `clip <why>` for a stand-in not written,
+which fails nothing: the session starts, and the tab's image paste is not
+available. The launch then puts
 `sessions/<sid>/bin` first on `PATH`: core's `remoteLaunchSpec`
-(`src/main/remote-helper/session.ts:177-188`) does it inside the `-c` wrapper
-text, after the rc files, when the Claude package's remote launch asks for the
-stand-in (a `RemoteLaunch` field, not a variable, since a provider's
-environment may not set `PATH`, `:183-186`); for a login shell outside the sh
-family (no wrapper, `:178`) the folder goes in front of the host account's
-`PATH` (`:139`), where no rc file runs.
+(`src/main/remote-helper/session.ts`, through `clipStandInFolder`) does it
+inside the `-c` wrapper text, after the rc files, when the Claude package's
+remote launch asks for the stand-in (`clipStandIn`, a `RemoteLaunch` field,
+not a variable: `remoteLaunchSpec`'s check of the provider's environment
+refuses a variable the launch sets itself, `PATH` among them); for a login
+shell outside the sh family (no wrapper: neither `PLAIN_WRAPPER` nor the
+stand-in's) the folder goes in front of the host account's `PATH`
+(`hostAccountEnv`), where no rc file runs. The wrapper text
+(`CLIP_STAND_IN_WRAPPER`) is
+`PATH="$1${PATH:+:$PATH}"; export PATH; shift; exec "$0" "$@"`, the folder
+the first argument after the program, so no host path is in the text and an
+empty `PATH` gets no trailing colon. A folder that holds a colon, a single
+quote, a backslash or a control character gets no stand-in, and neither does
+a host that is not Linux (the machine's recorded system; Claude Code on macOS
+reads the pasteboard, not `xclip`): its `files` exec is asked for `none`.
 
 ```
 aicc-helper clip --store <folder> --session <sid> --as xclip|wl-paste [--real <path>] -- [args...]
 ```
 
 `--session` must match the session id pattern, so no path part reaches a
-folder name, and each option is given once. The mode reads only
-`sessions/<sid>/paste/` beside the store, which must be a real folder of the
-user's own, 0700, with no link on the way from the store's parent. The current
-picture is the file there named `paste-<n>.png` or `paste-<n>.jpg` (with more
-than one, the highest `<n>`), a regular file of the user's own of at most
-20 MiB, opened without following a link; its type, `image/png` or
-`image/jpeg`, comes from its name. It answers only these shapes, Claude Code's
-(PR1 records the exact argument lists):
+folder name, and each option is given once; `--` ends them. `--store` is an
+absolute path of plain names below a folder of its own. The mode reads only
+`sessions/<sid>/paste/` beside the store (by the store's own parent, never
+through `..`): the store's parent, `sessions`, the session's folder and
+`paste/` must each be a real folder of the user's own, 0700, never a link.
+The current picture is the file there named `paste-<n>.png` or
+`paste-<n>.jpg` (with more than one, the highest `<n>`; two names sharing it
+are no current picture), a regular file of the user's own of 1 byte to
+20 MiB, opened without following a link, that begins with its type's
+signature (PNG's eight bytes, JPEG's `FF D8 FF`: text under a picture's name
+is no picture); its type, `image/png` or `image/jpeg`, comes from its name.
+It answers only these shapes, Claude Code's (PR1 records the exact argument
+lists):
 
 - as `xclip`: `-selection clipboard`, `-o` and `-t TARGETS`, in any order,
   each once: it prints the current picture's type and a line end, and exits 0;
@@ -1913,7 +1935,8 @@ than one, the highest `<n>`), a regular file of the user's own of at most
   `--no-newline` (or `-n`), `<type>` the current picture's type: it writes the
   picture's bytes and exits 0.
 
-With no current picture, each of those prints nothing and exits 1. Any other
+With no current picture, each of those prints nothing and exits 1 (a list,
+and a read of `image/png` or `image/jpeg`). Any other
 use (another shape, another type, a text read, a write to the clipboard) goes
 to the real tool: its `--real` path is started by `execve`, with no search of
 `PATH`, the arguments after `--` as given and the environment unchanged, and
@@ -1922,8 +1945,10 @@ The mode never serves text, never reads another session's folder or any other
 file, and never touches a display or the host's clipboard itself; it starts no
 process but the real tool, writes nothing and opens no connection. It exits 2
 on a command line it does not take, a `--real` that is not absolute or lies
-inside the session's `bin/` included. `bin/` goes with the session folder at
-the session's end.
+inside the session's `bin/` (by its names, or by its real path) included. On
+Windows a command line it takes exits 1; one it does not take exits 2.
+`bin/` goes with the session folder at the session's end.
+Code: `helper/src/clip.rs`, its tests `helper/tests/clip.rs`.
 
 **Change.** The `hold` and `list` command lines and their exit codes, the
 record and the listing are frozen within version 1; new fields need a new

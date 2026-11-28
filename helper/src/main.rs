@@ -20,6 +20,7 @@
 //! aicc-helper console-hosts [--pid <n> --created <t>]                (Windows only)
 //! aicc-helper end-console-host --made-from <t> --made-to <t>         (Windows only)
 //! aicc-helper capture --out <folder>                                 (Windows only)
+//! aicc-helper clip --store <folder> --session <sid> --as xclip|wl-paste [--real <path>] -- [args...]   (macOS and Linux)
 //! ```
 //!
 //! `hold` runs one holder (protocol section 15). With `--detach` it starts the
@@ -47,7 +48,10 @@
 //! byte for byte, as the app reaches a holder on another machine through
 //! `ssh -T`: it exits 0 when the holder closes the connection, 3 with no
 //! holder for the session, 2 on a usage error, and 1 otherwise and on Windows
-//! (`bridge.rs`).
+//! (`bridge.rs`). `clip` (from 2.1.3-beta.21) is the clipboard stand-in a
+//! remote session's CLI runs as `xclip` or `wl-paste`: the session's current
+//! picture for a list or a read of its type, the real tool for anything else
+//! (`clip.rs`).
 #![deny(unsafe_code)]
 
 use aicc_helper::hello::{self, Hello, CAPS};
@@ -62,7 +66,7 @@ use std::process::ExitCode;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | field | hook | status | mcp | bridge | start | end | console-hosts | end-console-host | capture> [options]";
+const USAGE: &str = "usage: aicc-helper <version | hello | selftest | hold | list | field | hook | status | mcp | bridge | start | end | console-hosts | end-console-host | capture | clip> [options]";
 /// The ring is 1 KiB to 64 MiB; the protocol's default is 2 MiB.
 const MIN_RING_BYTES: usize = 1024;
 const MAX_RING_BYTES: usize = 64 * 1024 * 1024;
@@ -162,6 +166,11 @@ fn main() -> ExitCode {
     // (2), never a panic.
     if raw.first().map_or(false, |c| c.as_os_str() == "field") {
         return cmd_field(&raw[1..]);
+    }
+    // The clip mode too (clip.rs): the tool's own arguments go to the real
+    // tool as given, so they are read raw, never as Unicode.
+    if raw.first().map_or(false, |c| c.as_os_str() == "clip") {
+        return aicc_helper::clip::command(&raw[1..]);
     }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let command = match args.first() {
