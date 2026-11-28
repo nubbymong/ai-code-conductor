@@ -25,7 +25,12 @@
  * after the rc files, for a login shell of the sh family
  * (CLIP_STAND_IN_WRAPPER), else in front of the host account's PATH. The
  * CLI's own image paste then reads the picture the app sent the session;
- * nothing of this computer is named there.
+ * nothing of this computer is named there. The app's paste route for the tab
+ * (src/main/paste/helper-route.ts, through the remote helper's
+ * remoteTabPaste) sends the picture by putPicture, then the key the launch
+ * read from the host's own keybindings file (imagePasteKey); such a tab's
+ * own connection also reads its holder's screen (screenRead), where the
+ * Claude package reads the paste's placeholder.
  *
  * Its own files (2.1.3-beta.18 section 3.2): before the hold, one exec reads
  * the host files the provider names (its hostReads: for Claude Code, the
