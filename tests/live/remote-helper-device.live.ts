@@ -83,25 +83,31 @@
  * CI runner, built by this file, installed by a Check as an update's would),
  * the first build's helper folder kept by that Check while its holder has a
  * record, and removed by the next Check once none has (2.1.3-beta.19);
+ * (2.1.3-beta.21, probe PH1) a tab's picture into its session folder on the
+ * host by file.put, read back there by its hash and gone after its end, and
+ * on a link of the test's own the caps, a bad hash and a stalled upload
+ * leaving nothing, and the holder's end removing the folder;
  * Remove; nothing left under ~/.aicc and no helper process of the
  * run left. The test's own execs read only what their command prints (an rc
  * file prints first).
  */
 import { describe, it, expect, beforeAll, afterAll, onTestFinished } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
+import { createHash, randomBytes } from 'crypto'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { RemoteMachines, type MachineStore, type RemoteMachineRecord } from '../../src/main/remote-helper/machines'
-import { nodeSshRunner, execArgv, sshEnv, newNonce, readScriptResult, runScript, type SshRunner, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
-import { RemoteHelperPty, remoteLaunchSpec, remoteSessionId } from '../../src/main/remote-helper/session'
+import { nodeSshRunner, execArgv, sshEnv, newNonce, readScriptResult, runScript, afterHashLine, openScriptStream, type SshRunner, type SshTarget } from '../../src/main/remote-helper/ssh-exec'
+import { RemoteHelperPty, remoteHelperCommands, remoteLaunchSpec, remoteSessionId } from '../../src/main/remote-helper/session'
+import { HolderConnection } from '../../src/main/session-helper/connection'
+import { PASTE_CHANNEL, PASTE_CHUNK_WAIT_MS, PASTE_PICTURE_MAX, encodeRawFrame, readRecord } from '../../src/main/session-helper/protocol'
 import { remoteLaunchOf, type RemoteSignalDeps } from '../../src/main/remote-helper'
 import { CLAUDE_REMOTE_ACCOUNTS, claudeRemoteLaunch } from '../../src/main/providers/claude/remote-launch'
 import { readBundledLinuxHelper, type BundledLinuxHelper } from '../../src/main/remote-helper/manifest'
 import { listKept, untilEnded } from '../../src/main/remote-helper/kept'
-import { readRecord } from '../../src/main/session-helper/protocol'
 import { fieldAnswerOf, readHostForStart, type HostAccountRead } from '../../src/main/remote-helper/host-reads'
-import { scriptCommand } from '../../src/main/remote-helper/scripts'
+import { holderLabel, scriptCommand } from '../../src/main/remote-helper/scripts'
 import { accountFolder, prepareAccountFolder, readMachineAccounts, signOutListOnMachine, signOutOnMachine } from '../../src/main/remote-helper/host-accounts'
 
 const need = (name: string): string => {
@@ -1383,6 +1389,115 @@ describe('remote helper on a real Linux host', () => {
       for (const f of [folderA, folderB, folderC]) sshRun(`test -f "${f}/.aicc-account" && rm -rf -- "${f}"`)
       sshRun('rmdir -- "$HOME/.aicc/accounts" 2>/dev/null; true')
     }
+  })
+
+  // 2.1.3-beta.21 (phase 4; ADR-032; helper protocol section 15, capability
+  // paste; probe PH1 on this host). The CI line: a helper tab's picture goes
+  // into its session folder on the host by file.put, is read back there by
+  // its hash (the folder 0700, the file 0600), replaces the one before it, and
+  // is gone after the tab's end. PH1, on a link of the test's own to a holder
+  // of its own: the caps and the refused names come before a byte, a bad hash
+  // and a stalled upload (the build the installers carry, 30 s) leave
+  // nothing, and the holder's end removes the folder.
+  it('a picture into a tab\'s session folder on the host by file.put: read back by its hash and gone after the end; the caps, a bad hash and a stalled upload leave nothing (2.1.3-beta.21, probe PH1)', async () => {
+    const d = remoteFakeDir
+    expect(d).toMatch(/aicc-e2e\./)
+    const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex')
+    const m: RemoteMachineRecord = { ...machine, claudePath: `${d}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+    const id = 'e2e-tab-paste'
+    inUse = 1
+    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model' }, null, () => true, remoteSessionId(id), 100, 30, true)
+    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: sessionLog })
+    const pictures = `${plan.helper.folder}/paste`
+    let out = ''
+    pty.onData((x) => { out += x })
+    try {
+      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+      const png = randomBytes(200_000)
+      const first = await pty.putPicture(png, 'png')
+      expect(first.sha256).toBe(sha(png))
+      const read = sshRun(`sha256sum "${pictures}/${first.name}" | cut -d' ' -f1; stat -c '%a %u' "${pictures}" "${pictures}/${first.name}"; id -u`).out.trim().split('\n')
+      note('paste-tab-read', read)
+      const uid = read.pop()
+      expect(read).toEqual([sha(png), `700 ${uid}`, `600 ${uid}`])
+      const jpg = randomBytes(5_000)
+      const second = await pty.putPicture(jpg, 'jpg')
+      expect(sshRun(`ls -A "${pictures}"`).out.trim().split('\n')).toEqual([second.name])
+      // Nothing was typed into the session for either.
+      expect(out).not.toContain('echo:')
+      note('paste-tab', { first, second })
+    } finally {
+      pty.kill()
+      await pty.ended
+      inUse = 0
+    }
+    await untilHost('the holder to end', `pgrep -f -- "--store $HOME/[.]aicc/${machine.did}/store" | wc -l`, '0')
+    await untilHost('its folder to go', `test -e "${plan.helper.folder}" && echo there || echo gone`, 'gone')
+
+    // PH1: a holder of the test's own (no session files), on a link of its own.
+    const sid = remoteSessionId('e2e-ph1')
+    const own = remoteHelperCommands(machine, sid)
+    const ph1Pictures = `${own.folder}/paste`
+    const values = (n: string, ...rest: string[]) => [n, machine.did, machines.installId(), machine.helper.folder, machine.helper.sha256, ...rest]
+    const holdNonce = newNonce()
+    const held = await runScript(runner, target, 'hold', values(holdNonce, sid, holderLabel('e2e-ph1'), 'away'))
+    const line = afterHashLine(held.stdout, holdNonce).split(/\r?\n/).find((l) => l.startsWith('{'))
+    expect(line, held.stderr).toBeDefined()
+    const record = readRecord(JSON.parse(line!), 'unix')
+    expect(record?.session).toBe(sid)
+    const bridgeNonce = newNonce()
+    const opened = await openScriptStream(runner, target, 'bridge', values(bridgeNonce, sid), bridgeNonce, 30_000)
+    let conn: HolderConnection | undefined
+    const ls = () => sshRun(`ls -A "${ph1Pictures}" 2>/dev/null`).out.trim().split('\n').filter(Boolean)
+    const ph1: Record<string, unknown> = {}
+    try {
+      conn = await HolderConnection.open({ record: record!, os: 'unix', checkEndpointFolder: () => null, openStream: async () => opened.stream, helloTimeoutMs: 20_000, replyTimeoutMs: 60_000, paste: true })
+      expect([conn.hello.caps.includes('paste'), conn.paste]).toEqual([true, true])
+      await conn.request({ t: 'term.launch', argv: [`${d}/aicc-fake-cli`], cwd: machine.home, env: { PATH: '/usr/bin:/bin', HOME: machine.home }, cols: 80, rows: 24 })
+      await conn.request({ t: 'term.attach', from: 0 })
+      const data = randomBytes(150_000)
+      // The caps and the names: each refused before a byte, the link stays.
+      const refused: string[] = []
+      for (const [name, size, code] of [['paste-01.png', 10, 'bad-field'], ['../paste-1.png', 10, 'bad-field'], ['paste-1.gif', 10, 'bad-field'], ['paste-1.png', 0, 'bad-field'], ['paste-1.png', PASTE_PICTURE_MAX + 1, 'too-large']] as const) {
+        await expect(conn.request({ t: 'file.put', name, size, sha256: sha(data) }), `${name} ${size}`).rejects.toMatchObject({ code })
+        refused.push(`${name} ${size} ${code}`)
+      }
+      ph1.caps = refused
+      // A round trip: stored, and read back on the host by its hash.
+      const stored = await conn.putFile('paste-1.png', data)
+      expect(stored.sha256).toBe(sha(data))
+      expect(sshRun(`sha256sum "${ph1Pictures}/paste-1.png" | cut -d' ' -f1`).out.trim()).toBe(sha(data))
+      ph1.roundTrip = stored.sha256
+      // A bad hash: refused after the last byte, nothing new kept.
+      const bad = conn.request({ t: 'file.put', name: 'paste-2.png', size: data.length, sha256: '0'.repeat(64) })
+      for (let at = 0; at < data.length; at += 65536) opened.stream.write(encodeRawFrame(data.subarray(at, at + 65536), PASTE_CHANNEL))
+      await expect(bad).rejects.toMatchObject({ code: 'bad-field' })
+      expect(ls()).toEqual(['paste-1.png'])
+      ph1.badHash = ls()
+      // A stalled upload: timeout once its chunk wait passed, nothing new kept.
+      const started = Date.now()
+      const stall = conn.request({ t: 'file.put', name: 'paste-3.png', size: data.length, sha256: sha(data) })
+      opened.stream.write(encodeRawFrame(data.subarray(0, 1000), PASTE_CHANNEL))
+      await expect(stall).rejects.toMatchObject({ code: 'timeout' })
+      const waited = Date.now() - started
+      ph1.stall = { waitedMs: waited, left: ls() }
+      expect(waited).toBeGreaterThanOrEqual(PASTE_CHUNK_WAIT_MS - 2_000)
+      expect(ls()).toEqual(['paste-1.png'])
+      // The holder's end removes the folder.
+      await conn.request({ t: 'term.end' })
+      await untilHost('PH1\'s picture folder to go', `test -e "${ph1Pictures}" && echo there || echo gone`, 'gone')
+      ph1.removedAtEnd = true
+    } finally {
+      note('ph1', ph1)
+      // A step that failed before the end: the holder is ended here, so nothing of it is left.
+      if (!ph1.removedAtEnd) await conn?.request({ t: 'term.end' }).catch(() => undefined)
+      conn?.close()
+      opened.stream.destroy()
+      // Its session folder, which its holder made for the picture, goes as a tab's does.
+      const un = newNonce()
+      await runScript(runner, target, 'unsession', [un, machine.did, machines.installId(), sid]).catch(() => undefined)
+    }
+    await untilHost('PH1\'s session folder to go', `test -e "${own.folder}" && echo there || echo gone`, 'gone')
   })
 
   it('Remove takes it away: nothing of the run is left under ~/.aicc, and no helper process', async () => {
