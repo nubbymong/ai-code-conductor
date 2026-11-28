@@ -38,7 +38,10 @@
 // Red on e89996bb on macOS and Linux only: the saved files' paths here were
 // Windows-shaped, and the module's basename there does not split a
 // backslash, so the request named the whole path; they are now built in the
-// shape of the OS the test runs on, as main's own saved paths are.
+// shape of the OS the test runs on, as main's own saved paths are. The
+// session's account folder is built the same way since the audit after
+// 7e068f5e: the table joins it to its keybindings file, and on macOS and
+// Linux a joined Windows-shaped folder is a relative path, not the folder.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { join, parse } from 'node:path'
 
@@ -63,6 +66,8 @@ const FILE = 'C:\\Users\\me\\Pictures\\shot.png'
  */
 const SHOTS = join(parse(process.cwd()).root, 'res', 'screenshots')
 const SNAP_FILE = join(SHOTS, 'screenshot-2026-11-28-101500.jpg')
+/** A session's account folder, in this OS's own shape, as main's profile folders are. */
+const ACCOUNT_DIR = join(parse(process.cwd()).root, 'acct', 'one')
 const ESC_V = '\u001bv'
 
 let where: PasteSessionWhere | null
@@ -236,9 +241,9 @@ describe('a Claude Code or Codex session on this computer', () => {
 
   it('the session\'s account folder (the profile it spawned under) reaches the table; none is this computer\'s own sign-in', async () => {
     await press('image', true)
-    accountDir = 'C:\\acct\\one'
+    accountDir = ACCOUNT_DIR
     await press('image', true)
-    expect(keyCtx).toEqual([{ platform: 'win32', accountDir: null }, { platform: 'win32', accountDir: 'C:\\acct\\one' }])
+    expect(keyCtx).toEqual([{ platform: 'win32', accountDir: null }, { platform: 'win32', accountDir: ACCOUNT_DIR }])
   })
 
   it('a plain shell (no provider) or a provider with no table: not available, nothing read or typed', async () => {
