@@ -31,6 +31,12 @@
  * filtered again by `liveBroadcastPick` at the press, so a session that ended
  * while it was up gets nothing.
  *
+ * aicc_planning#450 (2.1.3-beta.21, plan block 7): any send-a-prompt button
+ * that is not a broadcast button can go to all sessions once, from its
+ * right-click menu ("Send to all sessions…"): the same chooser, send path and
+ * note, by `oneOffBroadcastBlocker`, the rule below without its Global line.
+ * The button's own option does not change.
+ *
  * No React and no store here, so the rules are testable on their own.
  */
 import type { Session } from '../stores/sessionStore'
@@ -139,19 +145,47 @@ export function liveBroadcastPick(sessions: readonly BroadcastSession[], picked:
 /** The fields of a button that decide whether it can go to every session. */
 export type BroadcastFields = Pick<CustomCommand, 'scope' | 'kind' | 'target' | 'defaultArgs' | 'lastCustomArgs' | 'hasSecretArg'>
 
+const NOT_A_PROMPT = 'Only a prompt can go to every open session.'
+const NOT_GLOBAL = 'Only a Global button can go to every open session.'
+const HAS_ARGUMENTS = 'Only a prompt with no arguments can go to every open session.'
+
+/** A prompt for the agent. An old record with no stored kind is one unless
+ *  it aims at the partner shell or carries a secret, as layout.ts's
+ *  effectiveKind reads a Global record, and any record in an agent session. */
+function isAgentPrompt(cmd: BroadcastFields): boolean {
+  const prompt = cmd.kind ? cmd.kind === 'prompt' : !cmd.hasSecretArg
+  return prompt && cmd.target !== 'partner'
+}
+
+/** Arguments, remembered Ctrl+click arguments, or a secret argument. */
+function hasArguments(cmd: BroadcastFields): boolean {
+  return !!(cmd.hasSecretArg || cmd.defaultArgs?.length || cmd.lastCustomArgs?.length)
+}
+
 /**
  * Why this button cannot go to every open session, in one line for the edit
  * dialog, or null when it can. Only a simple prompt can (#399 Q4): a prompt
- * for the agent (an old record with no stored kind is one unless it aims at
- * the partner shell or carries a secret, as layout.ts's effectiveKind reads a
- * Global record), shown on every config's bar, with no arguments, no
- * remembered Ctrl+click arguments and no secret argument.
+ * for the agent (isAgentPrompt), shown on every config's bar, with no
+ * arguments, no remembered Ctrl+click arguments and no secret argument.
  */
 export function broadcastBlocker(cmd: BroadcastFields): string | null {
-  const prompt = cmd.kind ? cmd.kind === 'prompt' : !cmd.hasSecretArg
-  if (!prompt || cmd.target === 'partner') return 'Only a prompt can go to every open session.'
-  if (cmd.scope !== 'global') return 'Only a Global button can go to every open session.'
-  if (cmd.hasSecretArg || cmd.defaultArgs?.length || cmd.lastCustomArgs?.length) return 'Only a prompt with no arguments can go to every open session.'
+  if (!isAgentPrompt(cmd)) return NOT_A_PROMPT
+  if (cmd.scope !== 'global') return NOT_GLOBAL
+  if (hasArguments(cmd)) return HAS_ARGUMENTS
+  return null
+}
+
+/**
+ * aicc_planning#450 (2.1.3-beta.21, plan block 7): why this button's prompt
+ * cannot go to all sessions ONCE, from its right-click menu's "Send to all
+ * sessions…", or null when it can. broadcastBlocker without its Global line,
+ * so a Session prompt can go too: nothing is stored, and the bar the button
+ * shows on does not change. The button's own option is neither read nor
+ * changed here.
+ */
+export function oneOffBroadcastBlocker(cmd: BroadcastFields): string | null {
+  if (!isAgentPrompt(cmd)) return NOT_A_PROMPT
+  if (hasArguments(cmd)) return HAS_ARGUMENTS
   return null
 }
 

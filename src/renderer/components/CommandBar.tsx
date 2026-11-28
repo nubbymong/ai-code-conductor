@@ -45,7 +45,7 @@ import { writeSessionInput, dropTmuxCopyModeBelief } from './terminal/tmuxWheelS
 import { usePasteHintStore } from '../stores/pasteHintStore'
 import { stripSpoofableText } from '../../shared/safe-text'
 import type { PromptButtonResult, SubmitNotDeliveredReason } from '../../shared/types'
-import { broadcastTargets, broadcastPrompt, broadcastNote, broadcastBlocker, isBroadcastButton, liveBroadcastPick, tallyBroadcast } from '../lib/commandBroadcast'
+import { broadcastTargets, broadcastPrompt, broadcastNote, broadcastBlocker, oneOffBroadcastBlocker, isBroadcastButton, liveBroadcastPick, tallyBroadcast } from '../lib/commandBroadcast'
 import BroadcastChooser from './command-bar/BroadcastChooser'
 
 // User-picked section colours are Mocha pastels tuned for dark surfaces;
@@ -647,6 +647,16 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
     !!caps.agent && !caps.isAsk && broadcastBlocker(cmd) === null && typeof window.electronAPI?.pty?.submitPrompt === 'function'
 
   /**
+   * aicc_planning#450: whether this button's prompt can go to all sessions
+   * ONCE, from its right-click menu's "Send to all sessions…": canBroadcast
+   * with broadcastBlocker's Global line left out (oneOffBroadcastBlocker), so
+   * a Session prompt can too. The menu shows the item by the same rule
+   * (layout.ts sendToAllOffer).
+   */
+  const canBroadcastOnce = (cmd: CustomCommand): boolean =>
+    !!caps.agent && !caps.isAsk && oneOffBroadcastBlocker(cmd) === null && typeof window.electronAPI?.pty?.submitPrompt === 'function'
+
+  /**
    * #399: send this button's prompt to each of `targets` (the sessions the
    * chooser's answer reaches at the press, #413), each through its own prompt
    * path in main (lib/commandBroadcast: the sends, the count), and show one
@@ -685,29 +695,32 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
    *  repeats never answer it at all: the chooser swallows them. The sessions
    *  are read from the session store at the press, so the bar does not redraw
    *  on every session change to keep a list nobody is looking at. With no
-   *  session to send to, the tab says so and nothing asks. */
-  const askedBroadcast = useRef<string | null>(null)
+   *  session to send to, the tab says so and nothing asks. `once`: asked
+   *  from the right-click menu's "Send to all sessions…" (#450), so the
+   *  answer is read again by that route's own rule. */
+  const askedBroadcast = useRef<{ id: string; once: boolean } | null>(null)
   const broadcastPresses = useRef(0)
-  const askBroadcast = (cmd: CustomCommand) => {
+  const askBroadcast = (cmd: CustomCommand, once = false) => {
     const listed = broadcastTargets(useSessionStore.getState().sessions)
     if (listed.length === 0) {
       const note = broadcastNote(tallyBroadcast([]))
       if (note) usePasteHintStore.getState().show(sessionId, note, PROMPT_NOTE_MS)
       return
     }
-    askedBroadcast.current = cmd.id
+    askedBroadcast.current = { id: cmd.id, once }
     broadcastPresses.current += 1
     setConfirm({ kind: 'broadcast', commandId: cmd.id, listed, press: broadcastPresses.current })
   }
   const answerBroadcast = (picked: readonly string[] | null) => {
-    const id = askedBroadcast.current
+    const asked = askedBroadcast.current
     askedBroadcast.current = null
     setConfirm(null)
-    if (!picked || !id) return
+    if (!picked || !asked) return
     // Read again: the button may have been edited while the chooser was up,
-    // and a picked session may have ended (it gets nothing).
-    const cmd = commands.find((c) => c.id === id)
-    if (cmd && canBroadcast(cmd)) broadcastCommand(cmd, liveBroadcastPick(useSessionStore.getState().sessions, picked))
+    // and a picked session may have ended (it gets nothing). A one-off from
+    // the menu is read by the one-off rule, so a Session prompt still goes.
+    const cmd = commands.find((c) => c.id === asked.id)
+    if (cmd && (asked.once ? canBroadcastOnce(cmd) : canBroadcast(cmd))) broadcastCommand(cmd, liveBroadcastPick(useSessionStore.getState().sessions, picked))
   }
 
   /** `shift`: a Shift+click (#399). On a simple Global prompt it is a
@@ -1249,6 +1262,11 @@ export default function CommandBar({ sessionId, configId, sessionType = 'local',
           onClose={() => setMenu(null)}
           onRun={() => { setMenu(null); if (!inapplicability(menuCmd, caps)) runCommand(menuCmd) }}
           onRunWithArgs={() => { const el = menu.el; setMenu(null); runCommand(menuCmd, el?.getBoundingClientRect() ?? new DOMRect(menu.x, menu.y, 1, 1)) }}
+          // #450: a one-off to all sessions, through the broadcast chooser;
+          // the button's own option is not changed. No prompt path, no item.
+          onSendToAll={typeof window.electronAPI?.pty?.submitPrompt === 'function'
+            ? () => { setMenu(null); if (canBroadcastOnce(menuCmd)) askBroadcast(menuCmd, true) }
+            : undefined}
           onEdit={() => { setMenu(null); setEditingCommand(menuCmd) }}
           onDuplicate={() => {
             setMenu(null)

@@ -133,6 +133,9 @@ const key = async (el: Element | null, k: string, init: KeyboardEventInit = {}) 
 }
 const item = () => byTest('menu-send-all')
 const why = () => byTest('menu-send-all-why')?.textContent ?? null
+/** The item's own words and its right-edge hint, read apart. */
+const labelOf = (el: HTMLElement | null) => el?.querySelector<HTMLElement>('span.flex-1')?.textContent ?? null
+const hintOf = (el: HTMLElement | null) => el?.querySelector<HTMLElement>('span.font-mono')?.textContent ?? null
 const isDisabled = (el: HTMLElement | null) => !!el && (el as HTMLButtonElement).disabled && el.getAttribute('aria-disabled') === 'true'
 const chooser = () => byTest('broadcast-chooser')
 const sentTo = () => submitPrompt.mock.calls.map((c) => c[0])
@@ -150,8 +153,9 @@ describe('the right-click item shows for a send-a-prompt button that is not a br
     render()
     await rightClick(cmd.id)
     expect(item()).not.toBeNull()
-    expect(item()!.textContent).toBe(ITEM_LABEL)
+    expect(labelOf(item())).toBe(ITEM_LABEL)
     expect(isDisabled(item())).toBe(false)
+    expect(hintOf(item())).toBeNull()
     expect(why()).toBeNull()
   })
 
@@ -186,6 +190,7 @@ describe('the right-click item shows for a send-a-prompt button that is not a br
     render()
     await rightClick(cmd.id)
     expect(isDisabled(item())).toBe(true)
+    expect(hintOf(item())).toBe("can't send")
     expect(why()).toBe(ARGS_REASON)
     await click('menu-send-all')
     expect(chooser()).toBeNull()
@@ -266,6 +271,17 @@ describe('choosing it opens the broadcast chooser, and Send reaches the sessions
     expect(submitPrompt).not.toHaveBeenCalled()
   })
 
+  it('a Shift+click broadcast keeps its own rule: a Global prompt made Session-only while the chooser is up sends nothing', async () => {
+    COMMANDS = [GLOBAL_PROMPT]
+    render()
+    await act(async () => { chip('p1').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, shiftKey: true })); await settle() })
+    expect(chooser()).not.toBeNull()
+    COMMANDS = [{ ...GLOBAL_PROMPT, scope: 'config', configId: 'cfg' }]
+    render()
+    await click('broadcast-chooser-all')
+    expect(submitPrompt).not.toHaveBeenCalled()
+  })
+
   it('with no open agent session to send to, the tab says so and nothing asks', async () => {
     COMMANDS = [GLOBAL_PROMPT]
     SESSIONS = [{ ...OPEN[0], ptyExited: true }, OPEN[3], OPEN[4]]
@@ -334,12 +350,13 @@ describe('the keyboard reaches it as the rest of the menu (#450)', () => {
 
 describe('the item in other sessions, read off the menu itself (#450)', () => {
   const noop = () => {}
-  const renderMenu = (cmd: Record<string, unknown>, session: Record<string, unknown>, onSendToAll: (() => void) | undefined = vi.fn()) => {
+  /** `onSendToAll` null: the bar gives no way to send, so the menu gets none. */
+  const renderMenu = (cmd: Record<string, unknown>, session: Record<string, unknown>, onSendToAll: (() => void) | null = vi.fn()) => {
     act(() => {
       root.render(React.createElement(UserButtonMenu, {
         x: 0, y: 0, cmd: cmd as never, caps: sessionCapabilities(session as never), sections: [], hasConfig: true,
         onClose: noop, onRun: noop, onRunWithArgs: noop, onEdit: noop, onDuplicate: noop, onIcon: noop, onColor: noop,
-        onTogglePin: noop, onShowIn: noop, onMoveToSection: noop, onMove: noop, onDelete: noop, onSendToAll,
+        onTogglePin: noop, onShowIn: noop, onMoveToSection: noop, onMove: noop, onDelete: noop, onSendToAll: onSendToAll ?? undefined,
       }))
     })
   }
@@ -353,8 +370,9 @@ describe('the item in other sessions, read off the menu itself (#450)', () => {
   ])('shown disabled with its reason %s', (_name, cmd, session, reason) => {
     const onSendToAll = vi.fn()
     renderMenu(cmd, session, onSendToAll)
-    expect(item()!.textContent).toBe(ITEM_LABEL)
+    expect(labelOf(item())).toBe(ITEM_LABEL)
     expect(isDisabled(item())).toBe(true)
+    expect(hintOf(item())).toBe("can't send")
     expect(why()).toBe(reason)
     act(() => { item()!.click() })
     expect(onSendToAll).not.toHaveBeenCalled()
@@ -367,7 +385,7 @@ describe('the item in other sessions, read off the menu itself (#450)', () => {
   })
 
   it('not shown when the bar gives no way to send (no prompt path)', () => {
-    renderMenu(GLOBAL_PROMPT, OPEN[0], undefined)
+    renderMenu(GLOBAL_PROMPT, OPEN[0], null)
     expect(byTest('command-menu')).not.toBeNull()
     expect(item()).toBeNull()
   })
