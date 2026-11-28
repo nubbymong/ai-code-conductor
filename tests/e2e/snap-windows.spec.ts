@@ -1558,34 +1558,36 @@ test.describe('Snap into a Codex tab on Windows while Codex shows its warning co
 //     within the 15 s bound at 0, 1, 2 and 3 busy processes (4 of 4); the
 //     one placeholder seen, 13.7 s into the grade 1 Ctrl+V row, is most
 //     likely that grade's ESC v read ending late (Claude Code ignores Ctrl+V
-//     on Windows, run 46128921672); Codex 0.157.1 31 to 120 ms. Run 46128921672 (a warm PowerShell cache): Claude Code
-//     926, 914, 1030 and 1250 ms after ESC v at 0 to 3 busy processes, no
-//     placeholder for Ctrl+V on Windows; Codex 31 to 76 ms after either key;
-//     every turn carried the picture by its decoded pixels. PW2 (the same
-//     runs and runs 46126339163, 46127035163): one write left PNG, CF_DIBV5,
-//     CF_BITMAP and CF_DIB, and GetImage read it. The gate ran with a wait of
-//     2 x 1250 ms = 2.5 s, from the warm run alone. Review round 1 (R1-1)
-//     applied the rule to every PW1 reading: the cold run's worst case is
-//     over 15 s, twice that is over the cap, so the wait is the cap, 10 s.
-//     The gate's clipboard-route presses stand at 10 s: the poll stops at
-//     the placeholder, and every one of them showed it within 2.5 s.
+//     on Windows, run 46128921672); Codex 0.157.1 31 to 120 ms. Run
+//     46128921672 (a warm PowerShell cache): Claude Code 926, 914, 1030 and
+//     1250 ms after ESC v at 0 to 3 busy processes, no placeholder for Ctrl+V
+//     on Windows; Codex 31 to 76 ms after either key; every turn carried the
+//     picture by its decoded pixels. PW2 (the same runs and runs 46126339163,
+//     46127035163): one write left PNG, CF_DIBV5, CF_BITMAP and CF_DIB, and
+//     GetImage read it. The gate ran with a wait of 2 x 1250 ms = 2.5 s, from
+//     the warm run alone. Review round 1 (R1-1) applied the rule to every PW1
+//     reading: the cold run's worst case is over 15 s, twice that is over the
+//     cap, so the wait is the cap, 10 s. The gate's clipboard-route presses
+//     stand at 10 s: the poll stops at the placeholder, and every one of them
+//     showed it within 2.5 s.
 //   GATE (one job, the Windows runner, --retries=0): the load grader at 0,
 //     1, 2 and 3 busy processes (node, normal priority), each early and late
 //     (GRADES), each count running BUSY_SETTLE_MS before its press (gate run
 //     46129823039 started them at the press, and every path-route press
-//     there pasted and sent, the paste meeting 61 to 75% total CPU). C2 on the path route (the test switch, CCC_E2E_PATH_ROUTE=1,
-//     in its own app and serial group): each press recorded as a reading,
-//     never asserted; then ONE assertion: at 3 busy processes at least one of
-//     its two presses reaches Codex as text (main's image rule read "the
-//     composer held N characters of the path, as text"; in run 46084512071
-//     both did). C2 on the clipboard route (its own app and group): every
-//     press asserted, as part two's C2 is. C4, Claude Code Snap on the
-//     clipboard route (its own app and group): every press asserted, its
-//     turn carrying the picture by its decoded pixels. A red on the clipboard
-//     route, or in C4, is diagnosed, never retried. C2's bounds are
-//     beta.20's (PRESS_TEST_MS, CODEX_TURN_MS); C4's are PRESS_TEST_MS plus 2
-//     times CLAUDE_TURN_MS, never raised. The CPU is read through every group
-//     (typeperf, once a second) for the diagnosis.
+//     there pasted and sent, the paste meeting 61 to 75% total CPU). C2 on
+//     the path route (the test switch, CCC_E2E_PATH_ROUTE=1, in its own app
+//     and serial group): each press recorded as a reading, never asserted;
+//     then ONE assertion: at 3 busy processes at least one of its two presses
+//     reaches Codex as text (main's image rule read "the composer held N
+//     characters of the path, as text"; in run 46084512071 both did). C2 on
+//     the clipboard route (its own app and group): every press asserted, as
+//     part two's C2 is. C4, Claude Code Snap on the clipboard route (its own
+//     app and group): every press asserted, its turn carrying the picture by
+//     its decoded pixels. A red on the clipboard route, or in C4, is
+//     diagnosed, never retried. C2's bounds are beta.20's (PRESS_TEST_MS,
+//     CODEX_TURN_MS); C4's are PRESS_TEST_MS plus 2 times CLAUDE_TURN_MS,
+//     never raised. The CPU is read through every group (typeperf, once a
+//     second) for the diagnosis.
 //   CLAUDE CODE'S OWN READ, ON A WARM POWERSHELL CACHE: Claude Code reads the
 //     clipboard by Windows PowerShell 5.1 (WinForms Clipboard.GetImage). In
 //     probe run 46128029706, with the app on a fresh, empty module analysis

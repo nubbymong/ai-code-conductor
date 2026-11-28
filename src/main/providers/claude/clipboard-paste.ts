@@ -134,7 +134,10 @@ export function readImagePasteBindings(text: string, defaultChord: string): { bo
  * The key for Claude Code's image paste on `platform`, from the text of the
  * account's keybindings file (null when there is none, or it could not be
  * read). A chord bound to the image paste in the file comes first (the first
- * one the table can express); else the default, unless the file took it away.
+ * one the table can express). A file that binds it only to chords the table
+ * cannot express gets no key (`unexpressible`, the hint, ADR-032), even where
+ * the default still stands. With nothing bound: the default, unless the file
+ * took it away (`unbound`).
  */
 export function claudeImagePasteKey(platform: NodeJS.Platform, keybindingsText: string | null): PasteKey {
   const defaultChord = claudeDefaultImagePasteChord(platform)

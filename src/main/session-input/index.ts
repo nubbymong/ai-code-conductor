@@ -596,16 +596,17 @@ export function submitImage(sessionId: string, imagePath: string, sentence: stri
  *  3 busy processes (4 of 4); the one placeholder seen, 13.7 s into the
  *  grade 1 Ctrl+V row, is most likely that grade's ESC v read ending late
  *  (Claude Code ignores Ctrl+V on Windows, run 46128921672). So its worst
- *  case is over 15 s and twice that is over the cap. On a warm cache (probe run 46128921672) it showed
- *  "[Image #1]" 926, 914, 1030 and 1250 ms after ESC v at 0, 1, 2 and 3 busy
- *  processes; Codex 0.157.1 31 to 76 ms there and 31 to 120 ms on the cold
- *  cache (it reads the clipboard without PowerShell); every turn carried
- *  the picture by its decoded pixels. (Claude Code ignored Ctrl+V on Windows
- *  at every grade, as its table says.) The gate's presses (runs 46129823039
- *  and 46130805592, at 2.5 s) stand: the poll stops at the placeholder, so
- *  the longer wait changes only a press whose CLI shows none, which then
- *  waits up to 10 s before it says so, instead of saying so while a slower
- *  computer's CLI is still reading the picture. */
+ *  case is over 15 s and twice that is over the cap. On a warm cache (probe
+ *  run 46128921672) it showed "[Image #1]" 926, 914, 1030 and 1250 ms after
+ *  ESC v at 0, 1, 2 and 3 busy processes; Codex 0.157.1 31 to 76 ms there and
+ *  31 to 120 ms on the cold cache (it reads the clipboard without
+ *  PowerShell); every turn carried the picture by its decoded pixels. (Claude
+ *  Code ignored Ctrl+V on Windows at every grade, as its table says.) The
+ *  gate's presses (runs 46129823039 and 46130805592, at 2.5 s) stand: the
+ *  poll stops at the placeholder, so the longer wait changes only a press
+ *  whose CLI shows none, which then waits up to 10 s before it says so,
+ *  instead of saying so while a slower computer's CLI is still reading the
+ *  picture. */
 export const CLIPBOARD_PLACEHOLDER_WAIT_MS = 10_000
 /** ADR-032: how long the Enter follows the sentence typed after the picture
  *  (the image door's own, IMAGE_ENTER_DELAY_MS). */
