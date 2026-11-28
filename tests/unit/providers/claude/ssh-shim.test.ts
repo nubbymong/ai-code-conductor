@@ -972,13 +972,15 @@ describe('getWindowsRemoteSetupCommand (item 3 — cmd.exe delivery)', () => {
     // fails on an existing path, so a squatted file is never written through);
     // the middle lines append the base64; the final line verifies the digest,
     // runs, and deletes in a `finally`.
-    expect(lines[0]).toContain('New-Item -ItemType File -Path ([IO.Path]::GetTempPath()')
-    expect(lines[0]).toContain('-ErrorAction Stop')
-    expect(lines[1]).toContain('Add-Content -LiteralPath ([IO.Path]::GetTempPath()')
+    // Each cmdlet is named with its module (no look through the remote's
+    // module path for it).
+    expect(lines[0]).toContain('-Command "Microsoft.PowerShell.Management\\New-Item -ItemType File -Path ([IO.Path]::GetTempPath()')
+    expect(lines[0]).toContain('-ErrorAction Stop|Microsoft.PowerShell.Core\\Out-Null"')
+    expect(lines[1]).toContain('-Command "Microsoft.PowerShell.Management\\Add-Content -LiteralPath ([IO.Path]::GetTempPath()')
     const last = lines[lines.length - 1]
-    expect(last).toContain('FromBase64String')
+    expect(last).toContain('FromBase64String((Microsoft.PowerShell.Management\\Get-Content -LiteralPath ([IO.Path]::GetTempPath()')
     expect(last).toContain('|node')
-    expect(last).toContain('}finally{Remove-Item -LiteralPath ([IO.Path]::GetTempPath()')
+    expect(last).toContain('}finally{Microsoft.PowerShell.Management\\Remove-Item -LiteralPath ([IO.Path]::GetTempPath()')
     // Integrity gate over the decoded program, mirroring TMUX_STAGE_SHA256.
     expect(last).toMatch(/SHA256\]::Create\(\)\.ComputeHash/)
     expect(last).toMatch(/-ne '[0-9a-f]{64}'\)\{exit 9\}/)

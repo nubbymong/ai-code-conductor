@@ -299,7 +299,7 @@ describe('the script: the owner and the rights written separately, then what is 
     const close = lines.findIndex((l, i) => i > gate && l === '    }')
     expect(close).toBeGreaterThan(gate)
     const body = lines.slice(gate + 1, close)
-    expect(body.map((l) => l.trim())).toEqual(['$o = New-Object Security.AccessControl.DirectorySecurity', '$o.SetOwner($user)', '[IO.Directory]::SetAccessControl($d, $o)'])
+    expect(body.map((l) => l.trim())).toEqual(['$o = Microsoft.PowerShell.Utility\\New-Object Security.AccessControl.DirectorySecurity', '$o.SetOwner($user)', '[IO.Directory]::SetAccessControl($d, $o)'])
     expect(OWNER_ONLY_SCRIPT.split('$o.SetOwner($user)').length - 1).toBe(1)
     expect(OWNER_ONLY_SCRIPT.split('[IO.Directory]::SetAccessControl($d, $o)').length - 1).toBe(1)
     // The rights write after it, outside it; then the read the verdict judges,

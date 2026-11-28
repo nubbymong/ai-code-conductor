@@ -60,7 +60,9 @@ const E = REGISTRY_PATH_ENV
  *  `append`: writes the user Path only when it still reads as the token it
  *  was given, then prints `result=written` and `broadcast=sent|failed`, or
  *  `result=changed` and writes nothing. A token is `none` or
- *  `<kind>:<base64 of the UTF-16 text>`. */
+ *  `<kind>:<base64 of the UTF-16 text>`. Its one cmdlet, Add-Type, is named
+ *  with its module, so Windows PowerShell 5.1 loads that module by name and
+ *  never looks through every module on its module path for it. */
 export const REGISTRY_PATH_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
   'function Token($k) {',
@@ -88,7 +90,7 @@ export const REGISTRY_PATH_SCRIPT = [
   '  } finally { $u.Close() }',
   "  'result=written'",
   '  try {',
-  "    Add-Type -Namespace CccRegistryPath -Name Native -MemberDefinition '[DllImport(\"user32.dll\", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'",
+  "    Microsoft.PowerShell.Utility\\Add-Type -Namespace CccRegistryPath -Name Native -MemberDefinition '[DllImport(\"user32.dll\", CharSet = CharSet.Unicode, SetLastError = true)] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);'",
   '    $r = [UIntPtr]::Zero',
   "    if ([CccRegistryPath.Native]::SendMessageTimeout([IntPtr]0xffff, 0x1a, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$r) -eq [IntPtr]::Zero) { 'broadcast=failed' } else { 'broadcast=sent' }",
   "  } catch { 'broadcast=failed' }",

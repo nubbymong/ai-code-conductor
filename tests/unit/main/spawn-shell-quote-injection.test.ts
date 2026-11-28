@@ -123,7 +123,7 @@ describe('win32: no PowerShell single-quote delimiter can escape the cwd quoting
       useResumePicker: false,
       pickerScript: null,
     })
-    expect(out).toContain("Set-Location -LiteralPath 'F:\\o''brien\\proj'")
+    expect(out).toContain("Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'F:\\o''brien\\proj'")
     expect(outsideSingleQuotes(out)).not.toContain('brien')
   })
 
@@ -290,6 +290,6 @@ describe('the binary and picker paths are single-quoted, so no shell expands the
       platform: 'win32', cwd: 'C:\\p', claudeBin: 'C:\\Program Files\\claude.exe',
       extraFlags: '', agentsFlag: '', useResumePicker: false, pickerScript: null,
     })
-    expect(spaced).toBe("Set-Location -LiteralPath 'C:\\p'; & 'C:\\Program Files\\claude.exe'; exit")
+    expect(spaced).toBe("Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\p'; & 'C:\\Program Files\\claude.exe'; exit")
   })
 })

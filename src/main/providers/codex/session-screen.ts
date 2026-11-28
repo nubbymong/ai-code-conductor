@@ -385,6 +385,15 @@ const PASTE_END = '\u001b[201~'
 /** One read: the screen, and the window title taken with it. */
 interface ImageShot { lines: ScreenLine[] | null; title: string | null }
 
+/** A composer draft for the log, by kind and length only (never its text). */
+function draftKind(draft: string | null, imagePath: string): string {
+  if (draft === null) return 'what could not be read'
+  if (draft === '') return 'nothing'
+  if (codexDraftIsImagePlaceholder(draft)) return 'the image placeholder'
+  const n = [...draft].length
+  return imagePath.replace(/\s+/g, '').includes(draft) ? `${n} characters of the path, as text` : `${n} characters that are not the paste`
+}
+
 /**
  * 2.1.3-beta.17 C6 (aicc_planning#415): a saved image's path into Codex's
  * composer as Codex's own paste, then the sentence, then Enter. PURE, as the
@@ -495,6 +504,10 @@ export async function pasteImageIntoCodexComposer(imagePath: string, sentence: s
       return notPasted(reason, true)
     }
     const draft = codexComposerDraft(before.lines, models)
+    // What the composer held then, by kind and length only (never the path),
+    // so a paste Codex took as text can be told from a placeholder drawn
+    // late: Snap e2e run 46023467484's one no-placeholder recorded neither.
+    log(`${reason}: ${Math.max(0, deps.now() - pastedAt)} ms after the paste the composer held ${draftKind(draft, imagePath)}`)
     if (draft === '') return notPasted(reason, false)
     if (draft === null || !(codexDraftIsImagePlaceholder(draft) || imagePath.replace(/\s+/g, '').includes(draft))) {
       log(draft === null ? 'the paste was not taken back: what the composer holds cannot be read' : 'the paste was not taken back: the composer holds more than the paste')

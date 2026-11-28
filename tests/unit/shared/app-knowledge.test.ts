@@ -2764,3 +2764,44 @@ describe('the 2.1.3-beta.20 final review', () => {
     expect(privacy).not.toContain('so the Usage page can read the account\'s allowance')
   })
 })
+
+// 2.1.3-beta.20 Snap e2e round 4 (R-3): a picture Snapped or pasted into a
+// Codex session on a very busy Windows computer can reach Codex as text. The
+// Snap e2e's C2 measured it under graded load (about three CPUs of other work
+// at the paste); the owner ships beta.20 with this entry, and the clipboard
+// paste that does not depend on key timing is planned.
+describe('the 2.1.3-beta.20 Snap into Codex known issue (R-3)', () => {
+  const body = (id: string) => APP_KNOWLEDGE_SECTIONS.find((x) => x.id === id)!.body
+  const entry = () => body('known-issues').split('\n\n').find((p) => p.startsWith('On Windows, when the computer is very busy, a picture you Snap into a Codex session'))
+
+  it('says what happens, when, and why, in plain words', () => {
+    const k = entry()
+    expect(k, 'the entry is in Known issues and workarounds').toBeDefined()
+    expect(k).toContain('or paste there with Alt+V from elsewhere in the app, can reach Codex as text naming the picture\'s file instead of as the picture itself ([Image #1]).')
+    expect(k).toContain('Codex on Windows tells a paste from typing only by how quickly the characters arrive (read in Codex 0.157.1)')
+    expect(k).toContain('The app then takes the path back and types its line naming the file instead, so Codex gets the file\'s name, not the picture.')
+  })
+
+  it('gives both workarounds, naming the key that reaches Codex, and says the fix is planned', () => {
+    const k = entry()!
+    expect(k).toContain('Workaround: delete that line if it is still at Codex\'s prompt, and Snap again once the computer is less busy.')
+    // Alt+V with the session's terminal focused goes to Codex itself (xterm
+    // sends it on; the app's paste chord leaves Alt out, terminalInput.ts
+    // isPasteChord), and Codex binds Alt+V to its own clipboard image paste.
+    // Ctrl+V is the app's text paste in a terminal (ADR-008), so it is not
+    // the key to name.
+    expect(k).toContain('click into the Codex session so it has the keyboard, and press Alt+V: Codex then takes the picture from the clipboard itself, which does not depend on timing.')
+    expect(k).not.toMatch(/Ctrl\+V/)
+    expect(k).toContain('A fix that pastes through the clipboard is planned.')
+    expect(k).not.toMatch(/beta\.21|2\.1\.3-beta/)
+  })
+
+  it('the Snap section points at it, and neither uses an em dash or says Codex tab', () => {
+    const snap = body('draw')
+    expect(snap).toContain('(on a very busy Windows computer it can reach Codex as text naming the file instead; see Known issues and workarounds)')
+    for (const text of [entry()!, snap]) {
+      expect(text, text.slice(0, 40)).not.toMatch(/—/)
+      expect(text, text.slice(0, 40)).not.toMatch(/\bCodex tab\b/)
+    }
+  })
+})

@@ -97,6 +97,7 @@ function sim(opts: SimOptions = {}) {
   let promptFrom = opts.promptAt ?? Number.POSITIVE_INFINITY
   const writes: Array<{ at: number; data: string }> = []
   const turns: Array<{ text: string; images: string[] }> = []
+  const logs: string[] = []
   const draw = (): void => {
     if (pending && t >= pending.at) {
       const d = pending.data
@@ -149,8 +150,9 @@ function sim(opts: SimOptions = {}) {
     live: () => alive,
     now: () => t,
     sleep: async (ms) => { t += Math.max(0, ms) },
+    log: (msg) => { logs.push(msg) },
   }
-  return { deps, writes, turns, end: () => { alive = false }, get now() { return t } }
+  return { deps, writes, turns, logs, end: () => { alive = false }, get now() { return t } }
 }
 
 const datas = (w: Array<{ data: string }>): string[] => w.map((x) => x.data)
@@ -239,6 +241,18 @@ describe('no placeholder after the paste', () => {
     expect(datas(s.writes)).toEqual(shows === 'nothing' ? [PASTE] : [PASTE, TAKE_BACK_KEY])
     expect(s.turns).toEqual([])
     expect(s.now).toBeGreaterThanOrEqual(IMAGE_PLACEHOLDER_WAIT_MS)
+  })
+
+  // Snap e2e run 46023467484: one no-placeholder whose log could not say
+  // whether Codex took the paste as text or drew its placeholder late. The
+  // take-back says what the composer held, by kind and length only.
+  it.each([['nothing drawn', 'nothing', /held nothing$/], ['the path drawn as text', 'text', /held \d+ characters of the path, as text$/]] as const)('%s: the log says what the composer held when the paste was taken back, never the path', async (_name, shows, held) => {
+    const s = sim({ pasteShows: shows })
+    await pasteImageIntoCodexComposer(PATH, SENTENCE, s.deps, { readyWaitMs: 5_000 })
+    const line = s.logs.find((l) => l.startsWith('no-placeholder: '))
+    expect(line, s.logs.join(' | ')).toMatch(held)
+    expect(Number(/^no-placeholder: (\d+) ms after the paste/.exec(line!)?.[1])).toBeGreaterThanOrEqual(IMAGE_PLACEHOLDER_WAIT_MS)
+    expect(s.logs.join(' | ')).not.toContain('screenshot-')
   })
 
   it('the user typed beside the paste: nothing taken back, and the answer says it may still be there', async () => {

@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-ledger/2",
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
-  "manifestPathDigest": "eabbf3d4702fb9cdc27782f56cd974a829432e62cbb1dd1d6189fba640147f3c",
-  "manifestHead": "5a64d4a0e0c2767562c6ccc651240486d19e11c9",
+  "manifestPathDigest": "dc9b0ea3c4ceb401d546946ed0913ba8b2047f91fbd3bcc8d9102d628ef4b615",
+  "manifestHead": "7205dc61706e1267709df4d6eff2f0a189ab4224",
   "dispositions": {
     "retain": "unchanged observable behaviour, characterization proof",
     "move": "moved behind a package boundary and/or adapted at the call site, regression proof (newPath when relocated)",
@@ -9413,6 +9413,16 @@
       "disposition": "retain",
       "evidence": "existing test retained unchanged; must stay green on the merge candidate (WP1.33); listed in docs/wp1/baseline-test-inventory.json",
       "note": ""
+    },
+    {
+      "path": "tests/unit/main/windows-powershell-module-qualified.test.ts",
+      "predicates": [
+        "P13"
+      ],
+      "category": "TEST",
+      "disposition": "added",
+      "evidence": "new 2.1.3-beta.20 test (tests/unit/main/windows-powershell-module-qualified.test.ts): every Windows PowerShell line and script the app runs, the Codex process table query among them, names each cmdlet with its module, so Windows PowerShell 5.1 never looks through every module on its module path for it (WP1.2)",
+      "note": "created by the beta.20 Snap e2e D1 fix (f317ef30); the round 3 change (7205dc61) added the Codex process table query, which made it match P13; it reads the scripts' text only and starts no process"
     },
     {
       "path": "tests/unit/memory-scanner.test.ts",

@@ -58,19 +58,19 @@ describe('a network folder on the npm launcher route is refused with the reason'
 
 describe('everything else starts as before', () => {
   it('the npm launcher in a drive folder', () => {
-    expect(build('C:\\proj', SHIM, ROUTES[0])).toBe(`Set-Location -LiteralPath 'C:\\proj'; ${LAUNCHER_PROGRAM_LOOKUP}& 'C:\\npm\\claude.cmd' --model opus; exit`)
-    expect(build('z:/proj', SHIM, ROUTES[2])).toBe(`Set-Location -LiteralPath 'z:/proj'; ${LAUNCHER_PROGRAM_LOOKUP}& 'C:\\npm\\claude.cmd' --resume ${UUID} --model opus; exit`)
+    expect(build('C:\\proj', SHIM, ROUTES[0])).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\proj'; ${LAUNCHER_PROGRAM_LOOKUP}& 'C:\\npm\\claude.cmd' --model opus; exit`)
+    expect(build('z:/proj', SHIM, ROUTES[2])).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'z:/proj'; ${LAUNCHER_PROGRAM_LOOKUP}& 'C:\\npm\\claude.cmd' --resume ${UUID} --model opus; exit`)
   })
 
   it('the native claude.exe in a network folder', () => {
     for (const r of ROUTES) {
-      for (const cwd of NETWORK) expect(build(cwd, EXE, r), `${r.name} ${cwd}`).toContain(`Set-Location -LiteralPath '${cwd}'; & '${EXE}'`)
+      for (const cwd of NETWORK) expect(build(cwd, EXE, r), `${r.name} ${cwd}`).toContain(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath '${cwd}'; & '${EXE}'`)
     }
   })
 
   it('the picker line in a network folder: node starts there, and the picker decides', () => {
     for (const cwd of NETWORK) {
-      expect(build(cwd, SHIM, { name: 'picker', useResumePicker: true, pickerScript: PICKER })).toBe(`Set-Location -LiteralPath '${cwd}'; $env:CCC_CLAUDE_BIN = '${SHIM}'; & 'C:\\nodejs\\node.exe' '${PICKER}' --model opus; exit`)
+      expect(build(cwd, SHIM, { name: 'picker', useResumePicker: true, pickerScript: PICKER })).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath '${cwd}'; $env:CCC_CLAUDE_BIN = '${SHIM}'; & 'C:\\nodejs\\node.exe' '${PICKER}' --model opus; exit`)
     }
   })
 

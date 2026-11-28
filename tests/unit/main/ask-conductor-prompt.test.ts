@@ -102,7 +102,7 @@ describe('buildClaudeLaunchCommand — opening prompt', () => {
   it('appends the env REFERENCE, not any text, on Windows', () => {
     const cmd = buildClaudeLaunchCommand({ ...BASE, platform: 'win32', askPrompt: true })
     expect(cmd).toContain('$env:CCC_ASK_PROMPT')
-    expect(cmd).toBe(`Set-Location -LiteralPath 'C:/work'; ${LAUNCHER_PROGRAM_LOOKUP}& 'claude' -- $env:CCC_ASK_PROMPT; exit`)
+    expect(cmd).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; ${LAUNCHER_PROGRAM_LOOKUP}& 'claude' -- $env:CCC_ASK_PROMPT; exit`)
   })
 
   it('appends the quoted env REFERENCE on POSIX', () => {
@@ -139,7 +139,7 @@ describe('buildClaudeLaunchCommand — opening prompt', () => {
   it('adds NOTHING when no prompt is requested (byte-identical to before)', () => {
     const without = buildClaudeLaunchCommand({ ...BASE, platform: 'win32' })
     const explicitlyOff = buildClaudeLaunchCommand({ ...BASE, platform: 'win32', askPrompt: false })
-    expect(without).toBe(`Set-Location -LiteralPath 'C:/work'; ${LAUNCHER_PROGRAM_LOOKUP}& 'claude'; exit`)
+    expect(without).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; ${LAUNCHER_PROGRAM_LOOKUP}& 'claude'; exit`)
     expect(explicitlyOff).toBe(without)
     expect(without).not.toContain('CCC_ASK_PROMPT')
   })
@@ -167,7 +167,7 @@ describe('buildClaudeLaunchCommand — opening prompt', () => {
       expect(cmd).toContain('$env:CCC_ASK_PROMPT')
       expect(cmd).not.toContain(q)
       // Nothing from the question survives into the parsed line.
-      expect(cmd).toBe(`Set-Location -LiteralPath 'C:/work'; ${LAUNCHER_PROGRAM_LOOKUP}& 'claude' -- $env:CCC_ASK_PROMPT; exit`)
+      expect(cmd).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:/work'; ${LAUNCHER_PROGRAM_LOOKUP}& 'claude' -- $env:CCC_ASK_PROMPT; exit`)
     }
   })
 })

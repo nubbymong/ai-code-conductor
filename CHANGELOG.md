@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - A Claude Code account that is still signed in no longer asks you to sign in again. The app now renews its sign-in itself, through the same address Claude Code uses, and shows Refreshing meanwhile. The primary account is renewed by asking Claude Code itself (claude auth status), with no window. The card says Sign in again only when the sign-in has expired, has been revoked, is missing, is the same account as another, or is the wrong account, and it names which. The forced sign-in countdown now follows the new sign-in.
+- On Windows, a Claude Code tab opened at start no longer waits 20 seconds or more before Claude Code starts on a computer with many Windows PowerShell modules installed and no list of them yet (Windows PowerShell writes that list only from a session that runs for a while). The app's PowerShell commands now name each command together with its module, so Windows PowerShell no longer searches every module first: a tab's start-up line, the folder checks at start, the look for Claude Code through your PowerShell profile, the app's checks of Codex and the vision browser, and the set-up on a Windows SSH host. A tab opened at start also no longer waits for the check of the folder kept ready for the next new account.
 
 ## [2.1.3-beta.19] - 2026-11-27
 

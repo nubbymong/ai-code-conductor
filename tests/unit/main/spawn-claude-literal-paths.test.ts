@@ -92,7 +92,7 @@ describe('Windows: the session folder is given to Set-Location by -LiteralPath o
             // A share folder is refused for npm's launcher on a line that starts Claude Code itself.
             if (claudeBin === CMD && cwd.startsWith('\\\\') && !route.startsPicker) continue
             const line = build(route, { cwd, claudeBin, ...(agentsFromEnv ? { agentsFromEnv: true, agentsValueLength: 10 } : {}) })
-            const head = `${agentsFromEnv ? LEAD : ''}Set-Location -LiteralPath `
+            const head = `${agentsFromEnv ? LEAD : ''}Microsoft.PowerShell.Management\\Set-Location -LiteralPath `
             expect(line.startsWith(head), line).toBe(true)
             const word = psSingleQuoted(line.slice(head.length))
             expect(word.value, line).toBe(cwd)
@@ -131,7 +131,7 @@ describe('Windows: a line that starts Claude Code itself refuses a Claude Code p
     const route = ROUTES.find((r) => r.startsPicker)!
     for (const claudeBin of BRACKETED) {
       const line = build(route, { claudeBin })
-      expect(line).toBe(`Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = '${claudeBin}'; & '${NODE}' '${PICKER}' --model opus; exit`)
+      expect(line).toBe(`Microsoft.PowerShell.Management\\Set-Location -LiteralPath 'C:\\work'; $env:CCC_CLAUDE_BIN = '${claudeBin}'; & '${NODE}' '${PICKER}' --model opus; exit`)
     }
   })
 

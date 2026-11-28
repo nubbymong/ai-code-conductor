@@ -1298,11 +1298,18 @@ function homeMirrorLinks(dirs: readonly string[]): string[] {
 }
 
 /** Start (main process): turns the owner-only rule on for the sign-in folders
- *  (Windows), checks every profile's folders and makes a checked home ready
- *  for the next new profile, THEN runs `steps` -- the start's profile steps
- *  that write a sign-in. The steps run once the check has ended, whatever it
- *  found: each write reads its own folder's verdict. `rule` is the app's own
- *  owner-only rule unless a test brings one. */
+ *  (Windows), checks every profile's folders, THEN runs `steps` -- the
+ *  start's profile steps that write a sign-in. The steps run once the check
+ *  has ended, whatever it found: each write reads its own folder's verdict.
+ *  The home kept ready for the next new profile is made and checked before
+ *  the steps only when they may make an account (startStepsMayMakeAccount:
+ *  the first-run capture writes the first account's sign-in into it), and
+ *  otherwise once they have run, so what waits for the steps (a tab started
+ *  at start, the account list) never waits for a check it does not use: on
+ *  the GitHub Windows runner that check's Windows PowerShell call took 8.4 s
+ *  and, in run 46028075097, ran to its 30 s limit and was asked once more,
+ *  and the Snap check's first Claude Code tab, started on no account, waited
+ *  for it. `rule` is the app's own owner-only rule unless a test brings one. */
 export async function startOwnerOnlyCredentialFolders(
   steps: () => void | Promise<void>,
   rule: CredentialFolderRule = signInFolderRule,
@@ -1311,13 +1318,71 @@ export async function startOwnerOnlyCredentialFolders(
   let settle!: () => void
   const settled = new Promise<void>((resolve) => { settle = resolve })
   startStepsPending = settled
+  let readyAfterSteps: CredentialFolderRule | null = null
   try {
-    try { await checkEveryProfileCredentialFolders() } catch { /* no verdict: every write refuses as pending */ }
+    try { readyAfterSteps = await checkFoldersBeforeSteps() } catch { /* no verdict: every write refuses as pending */ }
     await steps()
   } finally {
     if (startStepsPending === settled) startStepsPending = null
     settle()
+    // Started after the wait has settled, so nothing waits for it; kept only
+    // so a test can wait for it to end (_readyHomeAfterStepsSettledForTest).
+    if (readyAfterSteps) {
+      const after = readyAfterSteps
+      const run = (async () => { try { await prepareReadyHome(after) } catch { /* no home ready: a new profile is checked after it is made */ } })()
+      readyHomeAfterSteps = run
+      void run.then(() => { if (readyHomeAfterSteps === run) readyHomeAfterSteps = null })
+    }
   }
+}
+
+/** The start's checks before its profile steps: every listed profile's
+ *  sign-in folders, and the ready home too when the steps may make an
+ *  account. Answers the rule to check the ready home with after the steps,
+ *  or null (no rule on, or the ready home already checked). An async
+ *  function, so the steps always run after the start call has returned, also
+ *  with no rule on (macOS, Linux), as they did when the start awaited the
+ *  check of every profile and the ready home in one call
+ *  (_checkEveryProfileCredentialFoldersForTest now). */
+async function checkFoldersBeforeSteps(): Promise<CredentialFolderRule | null> {
+  const active = credentialFolderRule()
+  if (!active) return null
+  await checkListedProfileHomes(active)
+  if (startStepsMayMakeAccount()) { await prepareReadyHome(active); return null }
+  return active
+}
+
+/** The start's check of the ready home made after its profile steps, while it runs. */
+let readyHomeAfterSteps: Promise<void> | null = null
+
+/** Test seam: resolves once the start's check of the ready home that runs
+ *  after its profile steps has ended; at once when none runs. Never rejects.
+ *  A suite whose next test reads every Windows PowerShell call waits for it,
+ *  so none of that check's calls is read as the next test's. */
+export function _readyHomeAfterStepsSettledForTest(): Promise<void> {
+  return readyHomeAfterSteps ?? Promise.resolve()
+}
+
+/** Whether the start's profile steps may make an account: the first-run
+ *  capture (first-run-accounts.ts runFirstRunCapture) makes one only when the
+ *  account list reads, names no primary account (the first entry marked
+ *  primary has an id, read as the capture reads it), and this computer's own
+ *  sign-in names an account (readOwnSignIn, as captureGlobalLogin reads it).
+ *  A list that does not read counts as may, so the home is made ready first
+ *  as before: the capture then does nothing, so this only keeps the older,
+ *  slower order for that rare start. */
+function startStepsMayMakeAccount(): boolean {
+  const top = readProfilesFile()
+  if (!top) return true
+  if (top.profiles.filter(isProfileRecord).find((p) => p.isPrimary)?.id) return false
+  return readOwnSignIn() !== null
+}
+
+/** Every listed profile's sign-in folders checked (those without a verdict). */
+async function checkListedProfileHomes(rule: CredentialFolderRule): Promise<void> {
+  const homes: string[] = []
+  try { for (const p of listProfiles()) if (isValidProfileId(p.id)) homes.push(getProfileConfigDir(p.id)) } catch { /* none listed */ }
+  await checkHomesAnswering(homes, rule)
 }
 
 /** Resolves once the start's profile steps have run (or failed); at once when
@@ -1336,14 +1401,18 @@ export function startProfileStepsPending(): boolean {
   return startStepsPending !== null
 }
 
-/** Every listed profile's sign-in folders checked (those without a verdict),
- *  then a checked home made ready for the next new profile. Never rejects. */
-export async function checkEveryProfileCredentialFolders(): Promise<void> {
+/** Test seam: every listed profile's sign-in folders checked (those without
+ *  a verdict), then a checked home made ready for the next new profile.
+ *  Never rejects. Nothing in the app calls it: the start checks the ready
+ *  home after its profile steps when they make no account, and before them
+ *  only when they may make one (startOwnerOnlyCredentialFolders), so a start
+ *  path wired to this instead would hold a first tab for the ready home
+ *  again. The tests that check every profile and the ready home in one call
+ *  use it. */
+export async function _checkEveryProfileCredentialFoldersForTest(): Promise<void> {
   const rule = credentialFolderRule()
   if (!rule) return
-  const homes: string[] = []
-  try { for (const p of listProfiles()) if (isValidProfileId(p.id)) homes.push(getProfileConfigDir(p.id)) } catch { /* none listed */ }
-  await checkHomesAnswering(homes, rule)
+  await checkListedProfileHomes(rule)
   await prepareReadyHome(rule)
 }
 
@@ -3113,10 +3182,10 @@ export function writeCanonicalIdentity(
   }
 }
 
-/** Capture the CURRENT global login (~/.claude.json + ~/.claude/.credentials.json)
- *  into a fresh canonical profile. Read-only on the real home. Returns the new
- *  profile, or null if there is no global login to capture. */
-export function captureGlobalLogin(name?: string): AccountProfile | null {
+/** This computer's own sign-in, as the first-run capture reads it: the home
+ *  root's .claude.json and the account it names; null when the file does not
+ *  read or names no account. */
+function readOwnSignIn(): { claudeJson: string; email: string } | null {
   const homeRoot = path.dirname(sharedRoot())
   let claudeJson: string
   try { claudeJson = fs.readFileSync(path.join(homeRoot, '.claude.json'), 'utf8') } catch { return null }
@@ -3125,6 +3194,16 @@ export function captureGlobalLogin(name?: string): AccountProfile | null {
     catch { return undefined }
   })()
   if (typeof email !== 'string' || !email) return null
+  return { claudeJson, email }
+}
+
+/** Capture the CURRENT global login (~/.claude.json + ~/.claude/.credentials.json)
+ *  into a fresh canonical profile. Read-only on the real home. Returns the new
+ *  profile, or null if there is no global login to capture. */
+export function captureGlobalLogin(name?: string): AccountProfile | null {
+  const own = readOwnSignIn()
+  if (!own) return null
+  const { claudeJson, email } = own
   let credentials: string | undefined
   try { credentials = fs.readFileSync(path.join(sharedRoot(), '.credentials.json'), 'utf8') } catch { credentials = undefined }
 

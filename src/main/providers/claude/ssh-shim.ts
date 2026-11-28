@@ -1728,10 +1728,16 @@ export function getWindowsRemoteSetupCommand(
   // Digest of the DECODED program — what actually gets piped to node.
   const scriptSha256 = crypto.createHash('sha256').update(Buffer.from(script, 'utf-8')).digest('hex')
   const CHUNK = 4000
+  // Each cmdlet is named with its module (Microsoft.PowerShell.Management,
+  // ...Core), so the remote Windows PowerShell 5.1 loads that module by name.
+  // A cmdlet named bare makes it look through every module on its module path
+  // first, and each line here is a new Windows PowerShell that exits within a
+  // second or two, before Windows PowerShell writes its module analysis cache,
+  // so on a host with no cache yet every line would make that look again.
   const lines: string[] = []
-  lines.push(`powershell -NoProfile -NonInteractive -Command "New-Item -ItemType File -Path ${b64Path} -ErrorAction Stop|Out-Null"`)
+  lines.push(`powershell -NoProfile -NonInteractive -Command "Microsoft.PowerShell.Management\\New-Item -ItemType File -Path ${b64Path} -ErrorAction Stop|Microsoft.PowerShell.Core\\Out-Null"`)
   for (let i = 0; i < nodeB64.length; i += CHUNK) {
-    lines.push(`powershell -NoProfile -NonInteractive -Command "Add-Content -LiteralPath ${b64Path} -Encoding ascii -Value '${nodeB64.slice(i, i + CHUNK)}'"`)
+    lines.push(`powershell -NoProfile -NonInteractive -Command "Microsoft.PowerShell.Management\\Add-Content -LiteralPath ${b64Path} -Encoding ascii -Value '${nodeB64.slice(i, i + CHUNK)}'"`)
   }
   // The base64 is decoded TWICE — once to hash, once to run. That is deliberate:
   // it keeps the line free of any variable (the no-`$` invariant) without
@@ -1743,9 +1749,9 @@ export function getWindowsRemoteSetupCommand(
   // the temp file is gone in both cases.
   lines.push(
     `powershell -NoProfile -NonInteractive -Command "try{` +
-      `if(([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Convert]::FromBase64String((Get-Content -LiteralPath ${b64Path} -Raw)))).Replace('-','').ToLower()) -ne '${scriptSha256}'){exit 9};` +
-      `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Get-Content -LiteralPath ${b64Path} -Raw)))|node` +
-    `}finally{Remove-Item -LiteralPath ${b64Path} -Force -ErrorAction SilentlyContinue}"`,
+      `if(([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Convert]::FromBase64String((Microsoft.PowerShell.Management\\Get-Content -LiteralPath ${b64Path} -Raw)))).Replace('-','').ToLower()) -ne '${scriptSha256}'){exit 9};` +
+      `[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String((Microsoft.PowerShell.Management\\Get-Content -LiteralPath ${b64Path} -Raw)))|node` +
+    `}finally{Microsoft.PowerShell.Management\\Remove-Item -LiteralPath ${b64Path} -Force -ErrorAction SilentlyContinue}"`,
   )
   return lines.join('\r')
 }

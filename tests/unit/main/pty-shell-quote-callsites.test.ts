@@ -20,6 +20,7 @@ import { describe, it, expect } from 'vitest'
 import * as fs from 'fs'
 import * as path from 'path'
 import { quoteArgForShell } from '../../../src/main/spawn-claude-command'
+import { PS_SET_LOCATION } from '../../../src/main/terminal-launch-line'
 
 const PS_QUOTE_CHARS = ['\u0027', '\u2018', '\u2019', '\u201A', '\u201B']
 const PAYLOAD = 'Write-Output PWNED'
@@ -52,9 +53,9 @@ describe('shell-only session: the Set-Location line', () => {
   for (const q of PS_QUOTE_CHARS) {
     it(`U+${q.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')} in the working directory cannot escape`, () => {
       const cwd = `C:\\proj${q}; ${PAYLOAD}; ${q}\\end`
-      const cdCmd = `Set-Location -LiteralPath ${quoteArgForShell(cwd, true)}`
+      const cdCmd = `${PS_SET_LOCATION} -LiteralPath ${quoteArgForShell(cwd, true)}`
       expect(outsideQuotes(cdCmd)).not.toContain('PWNED')
-      expect(outsideQuotes(cdCmd).trim()).toBe('Set-Location -LiteralPath')
+      expect(outsideQuotes(cdCmd).trim()).toBe('Microsoft.PowerShell.Management\\Set-Location -LiteralPath')
     })
   }
 
@@ -62,7 +63,7 @@ describe('shell-only session: the Set-Location line', () => {
     // Set-Location treats its argument as a WILDCARD by default: a genuine
     // folder named `proj[1m]` matches nothing and the session silently starts
     // in the wrong directory (the #144 bracket class, one layer down).
-    const cdCmd = `Set-Location -LiteralPath ${quoteArgForShell('C:\\proj[1m]', true)}`
+    const cdCmd = `${PS_SET_LOCATION} -LiteralPath ${quoteArgForShell('C:\\proj[1m]', true)}`
     expect(cdCmd).toContain('-LiteralPath')
     expect(cdCmd).toContain("'C:\\proj[1m]'")
   })
@@ -99,7 +100,9 @@ describe('neither call site hand-rolls its escaping any more', () => {
   )
 
   it('the shell-only cd goes through quoteArgForShell', () => {
-    expect(src).toMatch(/Set-Location -LiteralPath \$\{quoteArgForShell\(resolvedCwd, true\)\}/)
+    // Set-Location named with its module (PS_SET_LOCATION), as the Claude
+    // Code launch line names it.
+    expect(src).toMatch(/\$\{PS_SET_LOCATION\} -LiteralPath \$\{quoteArgForShell\(resolvedCwd, true\)\}/)
     expect(src).not.toMatch(/escapedShellCwd/)
   })
 
