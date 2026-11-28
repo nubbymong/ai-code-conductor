@@ -25,7 +25,12 @@
  * after the rc files, for a login shell of the sh family
  * (CLIP_STAND_IN_WRAPPER), else in front of the host account's PATH. The
  * CLI's own image paste then reads the picture the app sent the session;
- * nothing of this computer is named there.
+ * nothing of this computer is named there. The app's paste route for the tab
+ * (src/main/paste/helper-route.ts, through the remote helper's
+ * remoteTabPaste) sends the picture by putPicture, then the key the launch
+ * read from the host's own keybindings file (imagePasteKey); such a tab's
+ * own connection also reads its holder's screen (screenRead), where the
+ * Claude package reads the paste's placeholder.
  *
  * Its own files (2.1.3-beta.18 section 3.2): before the hold, one exec reads
  * the host files the provider names (its hostReads: for Claude Code, the
@@ -105,10 +110,10 @@ import { createHash } from 'crypto'
 import type { IDisposable, IEvent, IPty } from 'node-pty'
 import { HolderConnection, HolderError } from '../session-helper/connection'
 import { HelperPty, LOST_EXIT_CODE, NothingStartedError, type HelperPtyDriver } from '../session-helper/helper-pty'
-import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec } from '../session-helper/protocol'
+import { checkLaunch, readListing, readRecord, type HolderRecord, type LaunchSpec, type ScreenRows } from '../session-helper/protocol'
 import { stripSpoofableText } from '../../shared/safe-text'
 import type { ProviderId } from '../../shared/providers/ids'
-import type { ProviderRemoteLaunch, RemoteAccounts, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
+import type { PasteKey, ProviderRemoteLaunch, RemoteAccounts, RemoteHelperCommands, RemoteHostFile, RemoteHostRead, RemoteLaunch, RemoteLaunchOptions } from '../providers/types'
 import type { HostAccountNotice, HostLaunchRefusal } from '../../shared/host-accounts'
 import { accountBinding, machineAccounts, prepareAccountFolder, readMachineAccounts, type HostProfile } from './host-accounts'
 import { holderLabel, type HolderKind } from './scripts'
@@ -395,9 +400,21 @@ export class RemoteDriver implements HelperPtyDriver {
    *  folder). A start that attaches to a kept session runs no `files` exec,
    *  so a driver that launched nothing (a kept tab after the app restarts)
    *  has false, although that session's CLI may have the stand-in: the host
-   *  is not asked yet. The app route that reads this (plan block 5.1, its
-   *  App bullet) decides readiness on attach too. */
+   *  is not asked. The app's paste route reads this (RemoteHelperPty
+   *  pasteStandIn, plan block 5.1): false is "image paste is not available
+   *  yet", the plan's s5 fallback until probe PR1 passes on a host, so such
+   *  an attach sends no picture and types no key, never a path. */
   clipStandInReady = false
+  /** 2.1.3-beta.21 (ADR-032 row 14): the key this start's launch gave for
+   *  the CLI's image paste, from the host reads it made (the host's own
+   *  keybindings file), set again at every start, launch or attach; none
+   *  for a start that made no host read (an attach its account's read
+   *  stopped from launching), never Ctrl+V unread. */
+  imagePasteKey: PasteKey | undefined
+  /** 2.1.3-beta.21: a take-over of a kept session reads no holder size first
+   *  (HelperPtyDriver): the tab's connection acks `screen` only for its
+   *  paste's placeholder read, and its replay is shown as before. */
+  readonly sizeFromHolder = false
   /** The start prepare() made, for HelperPty's hold to take (once). */
   private prepared: { record: HolderRecord } | { error: Error } | undefined
   /** This tab's holder runs until it is ended, its own or one it attached to. */
@@ -486,6 +503,9 @@ export class RemoteDriver implements HelperPtyDriver {
           this.signals?.launched(first)
           this.filesSent = first.files.length > 0
         }
+        // 2.1.3-beta.21: no host read was made, so no key was read (the
+        // host's keybindings file may rebind it): none, rather than Ctrl+V.
+        this.imagePasteKey = undefined
         this.adopted = true
         this.untilEnded = true
         return { record: kept, attach: true }
@@ -505,10 +525,20 @@ export class RemoteDriver implements HelperPtyDriver {
     }
     if (launch) {
       this.signals?.launched(launch)
+      // 2.1.3-beta.21: the key this start read for the CLI's image paste.
+      this.imagePasteKey = launch.imagePasteKey
       if (held.attach) this.filesSent = launch.files.length > 0
       else if (launch.files.length > 0) await this.writeFiles(sid, held.record, launch)
     }
     return held
+  }
+
+  /** 2.1.3-beta.21: the tab's own connection reads its holder's screen (for
+   *  its clipboard paste's placeholder, ADR-032) only when its CLI reads
+   *  pictures through the stand-in: its launch asks for it on a Linux host. */
+  private readsScreen(): boolean {
+    const plan = this.current.plan
+    return !!plan && clipStandInFolder(this.o.machine, plan.first, plan.helper.folder) !== null
   }
 
   /** What prepare() made, for HelperPty's hold to take. */
@@ -914,6 +944,10 @@ export class RemoteDriver implements HelperPtyDriver {
         // 2.1.3-beta.21 (ADR-032): the tab's own connection sends its pictures
         // (file.put, RemoteHelperPty.putPicture); an end's own link sends none.
         ...(tabs ? { paste: true } : {}),
+        // And, for a CLI that reads them through the stand-in, reads the
+        // holder's screen for the paste's placeholder (RemoteHelperPty
+        // screenRead); the title beside it, as HelperPty's read takes it.
+        ...(tabs && this.readsScreen() ? { screen: true, title: true } : {}),
       })
       if (endAgain) this.wrapRequests(conn, record)
       if (asks) this.signals?.connected(conn)
@@ -1133,6 +1167,21 @@ export class RemoteHelperPty implements IPty {
   get everShown(): boolean { return this.driver.wasAttached }
   /** 2.1.3-beta.21: this start wrote the clipboard stand-in (RemoteDriver clipStandInReady). */
   get clipStandInReady(): boolean { return this.driver.clipStandInReady }
+  /** 2.1.3-beta.21 (plan block 5.1): the stand-in serves this tab's CLI, as
+   *  the app's paste route takes it: written by this start's launch
+   *  (clipStandInReady). An attach to a kept session wrote none, so its
+   *  image paste is not available yet (the plan's s5 fallback until probe
+   *  PR1), whatever that session's own launch wrote. */
+  get pasteStandIn(): boolean { return this.driver.clipStandInReady }
+  /** 2.1.3-beta.21 (ADR-032 row 14): the key for the CLI's image paste this
+   *  start's launch gave, from the host's own keybindings file; undefined
+   *  before the start read it, and for a launch that takes no image paste. */
+  get imagePasteKey(): PasteKey | undefined { return this.driver.imagePasteKey }
+  /** 2.1.3-beta.21 (ADR-032): the holder's screen read, on the tab's own
+   *  connection now, for the paste's placeholder: only while it is attached
+   *  through a connection that acked `screen` and `title` (a CLI that reads
+   *  pictures through the stand-in), else undefined (HelperPty screenRead). */
+  get screenRead(): (() => Promise<ScreenRows>) | undefined { return this.inner?.screenRead }
 
   /** The next picture's number (its name's `<n>`): from the clock in seconds,
    *  so a new run of the app on a session kept there does not take the name

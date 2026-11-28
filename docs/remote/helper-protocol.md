@@ -1763,7 +1763,14 @@ for that session reads `screen.read` each time it looks, in place of a pane of
 its own (src/main/providers/codex/session-screen.ts). From 2.1.3-beta.15 only
 a connection that acked both reads it: one that acked `screen` alone (a holder
 that offers no `title`) gets main's own pane, since the title's spinner is the
-rule's only busy sign while a reply streams. Nothing else in the app asks yet.
+rule's only busy sign while a reply streams. From 2.1.3-beta.21 (ADR-032) a
+helper tab on another machine whose CLI reads pictures through the clipboard
+stand-in (below) acks `screen` and `title` on its own connection, and the
+Claude package's clipboard paste reads `screen.read` for Claude Code's
+`[Image #N]` placeholder after the paste key (src/main/providers/claude/
+run-screen.ts holderPlaceholders); that tab's take-over asks no size first
+(helper-pty.ts `sizeFromHolder`), so its replay is shown as before. Nothing
+else in the app asks yet.
 
 - **`screen.read`** `{id}` is answered `screen.rows`: `cols` and `rows`, the
   screen's size; `cursor` `{row, col}`, the cursor's cell from 0 (its column

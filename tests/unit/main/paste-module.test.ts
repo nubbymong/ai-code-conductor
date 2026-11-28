@@ -35,7 +35,15 @@
 // the token was taken for no session (R1-2). Red on 713c585f: the door's
 // `prompt-on-screen` (a prompt up before the sentence was sent) had no hint
 // line of its own, so it was told to press Enter (review round 2, R2-1).
+// Red on e89996bb on macOS and Linux only: the saved files' paths here were
+// Windows-shaped, and the module's basename there does not split a
+// backslash, so the request named the whole path; they are now built in the
+// shape of the OS the test runs on, as main's own saved paths are. The
+// session's account folder is built the same way since the audit after
+// 7e068f5e: the table joins it to its keybindings file, and on macOS and
+// Linux a joined Windows-shaped folder is a relative path, not the folder.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { join, parse } from 'node:path'
 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
 vi.mock('../../../src/main/session-input', () => ({ pasteFromClipboard: vi.fn(), providerOfSession: () => null }))
@@ -50,7 +58,16 @@ import type { PasteSessionWhere } from '../../../src/main/paste'
 
 const picture = (empty = false) => ({ isEmpty: () => empty, toPNG: () => Buffer.from([0x89, 0x50]) }) as unknown as NativeImage
 const FILE = 'C:\\Users\\me\\Pictures\\shot.png'
-const SNAP_FILE = 'C:\\res\\screenshots\\screenshot-2026-11-28-101500.jpg'
+/**
+ * The shared screenshots folder, in this OS's own shape (`<drive>\res\screenshots`
+ * on Windows, `/res/screenshots` on macOS and Linux): main saves its pictures
+ * at paths of the OS it runs on, so the module's basename meets that shape
+ * here too.
+ */
+const SHOTS = join(parse(process.cwd()).root, 'res', 'screenshots')
+const SNAP_FILE = join(SHOTS, 'screenshot-2026-11-28-101500.jpg')
+/** A session's account folder, in this OS's own shape, as main's profile folders are. */
+const ACCOUNT_DIR = join(parse(process.cwd()).root, 'acct', 'one')
 const ESC_V = '\u001bv'
 
 let where: PasteSessionWhere | null
@@ -84,7 +101,7 @@ beforeEach(() => {
   door = []
   doorAnswer = { outcome: 'sent' }
   saves = 0
-  saved = { path: 'C:\\res\\screenshots\\clipboard-1-abcd.jpg' }
+  saved = { path: join(SHOTS, 'clipboard-1-abcd.jpg') }
   pathRoute = false
   keyCtx = []
   accountDir = null
@@ -226,9 +243,9 @@ describe('a Claude Code or Codex session on this computer', () => {
 
   it('the session\'s account folder (the profile it spawned under) reaches the table; none is this computer\'s own sign-in', async () => {
     await press('image', true)
-    accountDir = 'C:\\acct\\one'
+    accountDir = ACCOUNT_DIR
     await press('image', true)
-    expect(keyCtx).toEqual([{ platform: 'win32', accountDir: null }, { platform: 'win32', accountDir: 'C:\\acct\\one' }])
+    expect(keyCtx).toEqual([{ platform: 'win32', accountDir: null }, { platform: 'win32', accountDir: ACCOUNT_DIR }])
   })
 
   it('a plain shell (no provider) or a provider with no table: not available, nothing read or typed', async () => {

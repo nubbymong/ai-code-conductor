@@ -117,7 +117,7 @@ import { MARKER_FALLBACK_FLUSH_MS } from '../canvas/canvas-marker-queue'
 import { logInfo } from '../debug-logger'
 import { PasteQueue } from '../paste-queue'
 import { runChunkedWrite, WRITE_CHUNK_SIZE, WRITE_CHUNK_DELAY } from '../pty-chunked-write'
-import { isRemoteHelperTab } from '../remote-helper'
+import { isRemoteHelperTab, remoteTabScreen } from '../remote-helper'
 import { PROMPT_ENTER_DELAY_MS, REPEAT_WINDOW_MS } from './enter-delay'
 
 /** What the PTY manager lends this module, registered when it loads. */
@@ -184,7 +184,9 @@ function notTaken(sessionId: string, what: string): void {
  *  asked), whether the session is a tab through the session helper on its
  *  machine (wholeWrites, read now too, from the remote helper's own record of
  *  the tabs it started), whether the run is still the session's, and
- *  textSettled.
+ *  textSettled; for such a tab whose connection reads its holder's screen,
+ *  that read (heldScreen, 2.1.3-beta.21: Claude Code's clipboard paste reads
+ *  its placeholder there, ADR-032).
  *  #85: the wheel opens tmux's scrollback view on an SSH Persistent session,
  *  and copy-mode swallows input, so a pane the user scrolled up in would take
  *  a retry or a prompt instead of the CLI. The leave key is given for every
@@ -192,12 +194,15 @@ function notTaken(sessionId: string, what: string): void {
  *  table binds that key to nothing (verified against tmux 3.4, 2026-09-20). */
 function typingFor(sessionId: string, run: IPty | undefined): RunScreenTyping {
   const p = port()
+  const helperTab = isRemoteHelperTab(sessionId)
+  const heldScreen = helperTab ? remoteTabScreen(sessionId) : undefined
   return {
     leave: p.tmuxWrapped(sessionId) ? TMUX_WHEEL_EXIT_KEY : '',
-    wholeWrites: isRemoteHelperTab(sessionId),
+    wholeWrites: helperTab,
     live: () => !!run && p.run(sessionId) === run,
     write: (data) => p.write(sessionId, data),
     settled: (data, delayMs) => textSettled(data, delayMs),
+    ...(heldScreen ? { heldScreen } : {}),
   }
 }
 

@@ -202,6 +202,48 @@ describe('ci.yml: the Remote helper e2e job only reads, runs its file once, and 
     for (const v of ['REMOTE_HELPER_HOSTS', 'REMOTE_HELPER_BIN', 'REMOTE_HELPER_MANIFEST', 'REMOTE_HELPER_FAKE_CLI', 'REMOTE_REVIEW_CODEX']) expect(read('tests/live/remote-review.live.ts')).toContain(v)
   })
 
+  // 2.1.3-beta.21 (plan block 5.3's CI line, ADR-032): a picture into a
+  // Claude Code tab through the helper, with the real Claude Code 2.1.332.
+  it('then runs the paste check: real Claude Code 2.1.332 from its platform package with scripts off into its own prefix, its own live file, retries off, its own report that must show a pass', () => {
+    const at = (start: string) => names().findIndex((n) => n.startsWith(start))
+    const pkg = step('Resolve this runner\'s Claude Code package')
+    expect(String(pkg.run).trim()).toBe('node tests/integration/claude-conformance-ci.mjs package')
+    const install = step('Install Claude Code 2.1.332 into its own prefix')
+    expect(String(install.run).trim()).toBe('npm install --global --prefix "$PREFIX" --ignore-scripts --cache "$NPM_CACHE" --no-audit --no-fund "$CLAUDE_PACKAGE@$CLAUDE_VERSION"')
+    expect(install.env?.CLAUDE_VERSION).toBe('2.1.332')
+    expect(install.env?.CLAUDE_PACKAGE).toBe('${{ steps.claudepkg.outputs.package }}')
+    const locate = step('Locate the installed Claude Code')
+    expect(String(locate.run).trim()).toBe('node tests/integration/claude-conformance-ci.mjs bin "$PREFIX" "$CLAUDE_PACKAGE"')
+    expect(locate.env?.PREFIX).toBe(install.env?.PREFIX)
+    // The rc step's interactive login shell reads the check's env file (the model stand-in's address), and only that shell.
+    const rc = String(step('Give the account rc files').run)
+    expect(rc).toContain(`echo 'case $- in *i*) [ -f "$HOME/.aicc-e2e-paste-env" ] && . "$HOME/.aicc-e2e-paste-env";; esac'`)
+    expect(read('tests/live/remote-paste.live.ts')).toContain("const ENV_FILE = '.aicc-e2e-paste-env'")
+    const run = step('Run the clipboard paste check on the machine')
+    const cmd = String(run.run).trim()
+    expect(cmd.startsWith('npx vitest run --config vitest.live.config.ts tests/live/remote-paste.live.ts '), cmd).toBe(true)
+    expect(cmd.split(/\s+/)).toContain('--retry=0')
+    expect(cmd.match(/--retry\b/g)).toHaveLength(1)
+    expect(cmd).not.toMatch(/--passWithNoTests|\|\||continue-on-error/)
+    expect(cmd).toContain('--outputFile.json="$REMOTE_HELPER_OUT/vitest-paste.json"')
+    expect(run.if).toBe('${{ !cancelled() }}')
+    expect(run.env?.REMOTE_PASTE_CLAUDE).toBe('${{ steps.claudebin.outputs.bin }}')
+    expect(run.env?.REMOTE_HELPER_BIN).toBe(DEV_LINUX_HELPER)
+    expect(run.env?.REMOTE_HELPER_MANIFEST).toBe(DEV_MANIFEST)
+    const check = step('Fail the paste check when no test ran')
+    expect(String(check.run).trim()).toBe('node scripts/ci/vitest-ran.mjs "$REPORT"')
+    expect(check.if).toBe('${{ !cancelled() }}')
+    expect(check.env?.REPORT).toBe('${{ runner.temp }}/remote-helper-e2e/vitest-paste.json')
+    // Installed before any check runs; after the review check and its verdict; before the upload.
+    expect(at('Locate the installed Claude Code')).toBeGreaterThan(at('Install Claude Code 2.1.332'))
+    expect(at('Install Claude Code 2.1.332')).toBeGreaterThan(at('Resolve this runner\'s Claude Code package'))
+    expect(at('Run the remote helper device check')).toBeGreaterThan(at('Locate the installed Claude Code'))
+    expect(at('Run the clipboard paste check on the machine')).toBeGreaterThan(at('Fail the review check when no test ran'))
+    expect(at('Fail the paste check when no test ran')).toBeGreaterThan(at('Run the clipboard paste check on the machine'))
+    expect(at('Upload the two programs')).toBeGreaterThan(at('Fail the paste check when no test ran'))
+    for (const v of ['REMOTE_HELPER_HOSTS', 'REMOTE_HELPER_BIN', 'REMOTE_HELPER_MANIFEST', 'REMOTE_PASTE_CLAUDE']) expect(read('tests/live/remote-paste.live.ts')).toContain(v)
+  })
+
   it('fails the job when no test ran or one did not pass, even after a red check step', () => {
     const check = step('Fail a run in which no test ran')
     expect(String(check.run).trim()).toBe('node scripts/ci/vitest-ran.mjs "$REPORT"')
