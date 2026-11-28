@@ -27,7 +27,7 @@ vi.mock('../../../src/main/codex-review-usage', () => ({
 }))
 import fs from 'fs'
 import {
-  runRemoteCodexReview, runCodexReview, chooseRemoteCodexReview, registerRemoteCodexReviewTool, remoteCodexReviewOffered, abortSessionReviews,
+  runRemoteCodexReview, runCodexReview, chooseRemoteCodexReview, registerRemoteCodexReviewTool, remoteCodexReviewOffered, abortSessionReviews, setRemoteReviewDeps,
   type RemoteReviewDeps, type ReviewToolDeps,
 } from '../../../src/main/codex-review-mcp-tool'
 import type { RemoteMachineRecord } from '../../../src/main/remote-helper/machines'
@@ -63,13 +63,14 @@ interface Fake { deps: RemoteReviewDeps; read: ReturnType<typeof vi.fn>; run: Re
 function fake(over: Partial<RemoteReviewDeps> = {}): Fake {
   const machine = { value: MACHINE as RemoteMachineRecord | null }
   const read = vi.fn(async (_m: RemoteMachineRecord, _i: HostReadInput): Promise<HostMaterial> => ({ ok: true, kind: 'diff', diff: DIFF }))
-  const run = vi.fn(async (_m: RemoteMachineRecord, _s: HostRunSpec, _input: string, _t: number, _signal?: AbortSignal): Promise<HostRunResult> => ({ exit: 0, stdout: EVENTS, stderr: '', timedOut: false, cancelled: false }))
+  const run = vi.fn(async (_m: RemoteMachineRecord, _s: HostRunSpec, _input: string, _t: number, _signal?: AbortSignal): Promise<HostRunResult> => ({ outcome: { code: 0, signal: null, timeout: false, cut: false }, stdout: EVENTS, stderr: '', timedOut: false, cancelled: false }))
   const deps: RemoteReviewDeps = {
     machine: () => machine.value,
     read: read as never,
     run: run as never,
     env: (m) => ({ HOME: m.home, PATH: m.path, LANG: 'C.UTF-8' }),
     registry: () => LOCAL,
+    launchRefusal: () => null,
     ...over,
   }
   return { deps, read, run, machine }
@@ -151,11 +152,28 @@ describe('a review on the machine runs ADR-031\'s argv there, never here', () =>
 })
 
 describe('the footer names the machine and its own sign-in, the model, the effort and their sources', () => {
-  it('a model and an effort the caller chose', async () => {
-    const f = fake()
+  it('a model and an effort the caller chose; the usage goes to the deps\' record', async () => {
+    const onUsage = vi.fn()
+    const f = fake({ onUsage })
     const r = await review(f, { model: 'gpt-host-1', effort: 'high' })
     expect(r.text).toBe(`1. A finding on the machine.\n\n---\nCodex review on ${NAME}, with ${NAME}'s own Codex sign-in, on gpt-host-1 (caller), effort high (caller)${FOOT}`)
-    expect(recordReview).toHaveBeenCalledWith(SID, { inputTokens: 1200, outputTokens: 80, rateLimit: null })
+    expect(onUsage).toHaveBeenCalledWith(SID, { inputTokens: 1200, cachedInputTokens: 200, outputTokens: 80 })
+  })
+
+  it('in the running app, the usage goes to this app\'s review record, as a review here does', async () => {
+    const f = fake()
+    const host = { machine: f.deps.machine, read: f.deps.read, run: f.deps.run, env: f.deps.env }
+    setRemoteReviewDeps(host)
+    try {
+      let handler: ((args: Record<string, unknown>) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>) | null = null
+      const server = { tool: (_n: string, _d: string, _s: unknown, h: typeof handler) => { handler = h } }
+      registerRemoteCodexReviewTool(server, (await import('zod')).z, () => SID, (sid) => (sid === SID ? TARGET : null))
+      const r = await handler!({ mode: 'working' })
+      expect(r.isError, r.content[0].text).toBeFalsy()
+      expect(recordReview).toHaveBeenCalledWith(SID, { inputTokens: 1200, outputTokens: 80, rateLimit: null })
+    } finally {
+      setRemoteReviewDeps(null)
+    }
   })
 
   it('the defaults', async () => {
@@ -241,6 +259,13 @@ describe('refused before anything is read or run there, and never run here inste
     })
   }
 
+  it('Codex switched off in this app (main\'s one launch rule): refused, and nothing is read or run there', async () => {
+    const f = fake({ launchRefusal: () => ({ code: 'disabled', message: 'Codex is switched off (Settings, Accounts).' }) as never })
+    const r = await review(f)
+    expect(r).toEqual({ isError: true, text: 'Codex review is unavailable. Codex is switched off (Settings, Accounts).' })
+    nothingRan(f)
+  })
+
   it('a session that is not a registered remote tab, or no remote wiring, runs nothing', async () => {
     const f = fake()
     expect((await review(f, {}, null as never)).text).toMatch(/^Codex review is not enabled for this session/)
@@ -271,31 +296,39 @@ describe('the material is the host\'s', () => {
 describe('how a run there ends', () => {
   const ending = async (result: Partial<HostRunResult>, args: Record<string, unknown> = {}) => {
     const f = fake()
-    f.run.mockResolvedValueOnce({ exit: 0, stdout: '', stderr: '', timedOut: false, cancelled: false, ...result })
+    f.run.mockResolvedValueOnce({ outcome: { code: 0, signal: null, timeout: false, cut: false }, stdout: '', stderr: '', timedOut: false, cancelled: false, ...result })
     return review(f, args)
   }
-  it('timed out', async () => {
-    const r = await ending({ exit: 4, timedOut: true }, { timeoutSeconds: 900 })
+  const ended = (more: Partial<NonNullable<HostRunResult['outcome']>>) => ({ outcome: { code: 0, signal: null, timeout: false, cut: false, ...more } })
+  it('timed out there, by the run mode\'s own timeout or the exec\'s', async () => {
+    const r = await ending(ended({ code: null, signal: 1, timeout: true }), { timeoutSeconds: 900 })
     expect(r.text).toMatch(/^Codex review timed out on Rocky \(nick@rocky\.lan:22\) after 15 minutes \(on /)
+    const exec = await ending({ outcome: null, timedOut: true }, { timeoutSeconds: 900 })
+    expect(exec.text).toMatch(/^Codex review timed out on Rocky \(nick@rocky\.lan:22\) after 15 minutes\. /)
   })
-  it('not started there: no model named in its footer', async () => {
-    const r = await ending({ exit: 3, stderr: 'aicc-helper: run: the program /home/nick/.npm-global/bin/codex is not a file there\n' })
-    expect(r.text).toMatch(/^Codex could not be started on Rocky \(nick@rocky\.lan:22\): aicc-helper: run: the program/)
+  it('not started there: nothing ran, so no model is named in its footer', async () => {
+    const r = await ending({ outcome: null, failure: 'the session helper started nothing there: the program /home/nick/.npm-global/bin/codex is not a file there, so nothing was started', stderr: 'aicc-helper: run: the program /home/nick/.npm-global/bin/codex is not a file there, so nothing was started\n' })
+    expect(r.text).toMatch(/^Codex review did not run on Rocky \(nick@rocky\.lan:22\): the session helper started nothing there: the program /)
     expect(r.text).toMatch(/own Codex sign-in -- 1 message used\. Usage data unavailable\.$/)
+    expect(r.text).not.toMatch(/effort/)
   })
   it('Codex failing there, by its own error event', async () => {
-    const r = await ending({ exit: 1, stdout: `${JSON.stringify({ type: 'error', message: 'stream error: 401 Unauthorized' })}\n`, stderr: 'aicc-helper: run: the program exited with code 1\n' })
-    expect(r.text).toMatch(/^Codex review failed on Rocky \(nick@rocky\.lan:22\): Codex exited with an error: stream error: 401 Unauthorized\./)
+    const r = await ending({ ...ended({ code: 1 }), stdout: `${JSON.stringify({ type: 'error', message: 'stream error: 401 Unauthorized' })}\n` })
+    expect(r.text).toMatch(/^Codex review failed on Rocky \(nick@rocky\.lan:22\): Codex exited with code 1: stream error: 401 Unauthorized\./)
+  })
+  it('Codex ended by a signal there, with its last error line', async () => {
+    const r = await ending({ ...ended({ code: null, signal: 9 }), stderr: 'thread main panicked\nkilled\n' })
+    expect(r.text).toMatch(/^Codex review failed on Rocky \(nick@rocky\.lan:22\): Codex was ended by signal 9: thread main panicked killed\./)
   })
   it('the machine not reached', async () => {
-    const r = await ending({ exit: null, failure: 'rocky.lan could not be reached: it did not answer' })
+    const r = await ending({ outcome: null, failure: 'rocky.lan could not be reached: it did not answer' })
     expect(r.text).toMatch(/^Codex review did not run on Rocky \(nick@rocky\.lan:22\): rocky\.lan could not be reached: it did not answer\./)
   })
   it('the output cap there', async () => {
-    expect((await ending({ exit: 5 })).text).toMatch(/Codex printed more than this app reads/)
+    expect((await ending(ended({ code: null, signal: 13, cut: true }))).text).toMatch(/^Codex review failed on Rocky \(nick@rocky\.lan:22\): Codex printed more than 4 MiB, more than this app reads, so it was ended\./)
   })
   it('no review in what it printed', async () => {
-    expect((await ending({ exit: 0, stdout: '' })).text).toMatch(/^Codex review failed on Rocky \(nick@rocky\.lan:22\): Codex returned no review\./)
+    expect((await ending({ ...ended({}), stdout: '' })).text).toMatch(/^Codex review failed on Rocky \(nick@rocky\.lan:22\): Codex returned no review\./)
   })
 })
 
@@ -307,7 +340,7 @@ describe('one review per session, and a cancel stops the run there', () => {
     f.run.mockImplementationOnce(async (_m: RemoteMachineRecord, _s: HostRunSpec, _i: string, _t: number, signal?: AbortSignal) => {
       seen = signal
       await new Promise<void>((r) => { release = r; signal?.addEventListener('abort', () => r(), { once: true }) })
-      return { exit: null, stdout: '', stderr: '', timedOut: false, cancelled: true }
+      return { outcome: null, stdout: '', stderr: '', timedOut: false, cancelled: true }
     })
     const first = review(f)
     await vi.waitFor(() => expect(f.run).toHaveBeenCalledTimes(1))

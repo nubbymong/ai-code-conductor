@@ -15,10 +15,15 @@
  * - The host read: its request on standard input; the change or the files
  *   back as data; its refusals in review-diff.ts's words; the bound checked
  *   again here on what came back (a host that sends more is refused).
- * - The run: the spec line and the input on standard input, nothing of the
- *   host on the command line; the run mode's exit statuses; its exec's limit
- *   the review's own plus 30 s; a cancel ends ssh; and a 900 s review is not
- *   cut by the relay's limit or the host read's.
+ * - The run (docs/remote/helper-protocol.md section 4): the request line and
+ *   the input on standard input, each within its bound, nothing of the host
+ *   on the command line but the nonce and the timeout (30 to 900 s); the
+ *   result line read as the exec's last line, with this exec's nonce and
+ *   exactly its object, and anything else a failure; the program's output
+ *   everything between the hash line and it; the exec's limit the review's
+ *   own plus 30 s, its standard output cap above the run mode's; a cancel
+ *   ends ssh; and a 900 s review is not cut by the relay's limit or the host
+ *   read's.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 vi.mock('../../../src/main/provider-launch-gate', () => ({ providerLaunchRefusal: () => null, providerProbeRefusal: () => null }))
@@ -29,7 +34,7 @@ import type { ChildProcess } from 'child_process'
 import { FakeSsh, parseCommand, result, type ExecCall, type FakeAnswer } from './fake-ssh'
 import { RemoteMachines, type MachineStore, type RemoteMachineRecord, gitVersionOf, reviewProbesOf } from '../../../src/main/remote-helper/machines'
 import type { BundledLinuxHelper } from '../../../src/main/remote-helper/manifest'
-import { readHostReviewMaterial, runOnHost, remoteReviewLimits, hostReviewPaths, REMOTE_RELAY_MAX_MS, REMOTE_RUN_EXTRA_MS, RUN_EXIT, type HostReviewCtx } from '../../../src/main/remote-helper/review'
+import { readHostReviewMaterial, runOnHost, remoteReviewLimits, hostReviewPaths, parseRunResult, REMOTE_RELAY_MAX_MS, REMOTE_RUN_EXTRA_MS, RUN_INPUT_MAX, RUN_OUTPUT_MAX, RUN_REQUEST_MAX, RUN_STDOUT_MAX, type HostReviewCtx } from '../../../src/main/remote-helper/review'
 import { registerRemoteReviewSession, remoteReviewTarget, forgetRemoteReviewSession, hostFolderIsHomeOrAbove } from '../../../src/main/remote-helper/review-sessions'
 import { scriptText, scriptCommand, RUN_TIMEOUT_RE, REVIEW_PROBES_FILE } from '../../../src/main/remote-helper/scripts'
 import { hostRunEnv } from '../../../src/main/remote-helper/session'
@@ -43,6 +48,8 @@ import { runRemoteCodexReview, type RemoteReviewDeps } from '../../../src/main/c
 import { GIT_HARDENING, DIFF_HARDENING, REVIEW_DIFF_MAX_BYTES, WORK_TREE_KEYS_PATTERN } from '../../../src/main/review-diff'
 import { codexCommandLine } from '../../../src/main/providers/codex/cli-runner'
 import { codexModelListRead } from '../../../src/main/providers/codex/model-catalogue'
+import { mergeRegistry, type ModelRegistry } from '../../../src/shared/model-registry'
+import registryJson from '../../../resources/model-registry.json'
 
 const SHA = 'a'.repeat(64)
 const HELPER: BundledLinuxHelper = { arch: 'x86_64', path: 'linux-x64/aicc-helper', file: '/x/linux-x64/aicc-helper', version: '0.1.0', sha256: SHA, size: 4096, folder: `0.1.0-${SHA.slice(0, 12)}` }
@@ -297,6 +304,19 @@ describe('the change, read on the machine', () => {
     expect(await over.read({ cwd: '/home/nick/proj', mode: 'paths', paths: ['a.ts'] })).toEqual({ ok: false, message: `the files are larger than ${REVIEW_DIFF_MAX_BYTES / 1024} KB together; name fewer or smaller files` })
   })
 
+  it('a range this computer would refuse is refused before ssh starts, in the same words; a good one goes as review-diff.ts reads it', async () => {
+    const { ssh, read } = reading((c) => ({ stdout: result(c.values[0], { diff: hex('') }) }))
+    for (const range of ['-x..HEAD', 'HEAD', 'HEAD~1..HEAD:src', 'a b..c', '..', `${'a'.repeat(201)}..HEAD`, 'HEAD~1..--output=x']) {
+      const r = await read({ cwd: '/home/nick/proj', mode: 'range', range })
+      expect(r, range).toEqual({ ok: false, message: 'the range must be two revisions joined by ".." or "..." (for example HEAD~1..HEAD): no spaces, no leading "-", no ":"' })
+    }
+    expect(ssh.calls).toHaveLength(0)
+    for (const range of ['HEAD~1..HEAD', 'main...feature/x', '..HEAD', 'abc123..']) {
+      expect((await read({ cwd: '/home/nick/proj', mode: 'range', range })).ok, range).toBe(true)
+    }
+    expect(ssh.calls.map((c) => c.stdin.toString('utf8').split('\n')[2])).toEqual(['HEAD~1..HEAD', 'main...feature/x', '..HEAD', 'abc123..'])
+  })
+
   it('a request that holds a line end, or names past the bound, is refused before ssh starts', async () => {
     const { ssh, read } = reading(() => ({ code: 0 }))
     expect((await read({ cwd: '/home/nick/proj', mode: 'range', range: 'HEAD\nx' })).ok).toBe(false)
@@ -326,37 +346,105 @@ describe('the change, read on the machine', () => {
 // ── the run ──────────────────────────────────────────────────────────────────
 
 const SPEC = { argv: ['/home/nick/.npm-global/bin/codex', 'exec', '--json', '-'], cwd: '/home/nick/proj', env: hostRunEnv(MACHINE) }
+/** The run mode's result line for nonce `n` (helper/src/run.rs). */
+const ok = (n: string, more: { code?: number | null; signal?: number | null; timeout?: boolean; cut?: boolean } = {}) =>
+  `AICC-RESULT ${n} ${JSON.stringify({ code: 0, signal: null, timeout: false, cut: false, ...more })}\n`
 
 describe('one program run on the machine through the helper\'s run mode', () => {
-  it('the spec line, then the input, on standard input; nothing of the machine on the command line', async () => {
-    const ssh = new FakeSsh({ answer: (c) => ({ stdout: `rc text\nAICC-HASH ${c.values[0]} ok ${SHA}\n{"type":"x"}\n`, code: RUN_EXIT.ok }) })
+  it('the request line, then the input, on standard input; on the command line only the nonce and the timeout', async () => {
+    const ssh = new FakeSsh({ answer: (c) => ({ stdout: `rc text\nAICC-HASH ${c.values[0]} ok ${SHA}\n{"type":"x"}\n${ok(c.values[0])}`, code: 0 }) })
     const r = await runOnHost(ctx(ssh), MACHINE, SPEC, 'the prompt\n', 300_000)
-    expect(r).toEqual({ exit: 0, stdout: '{"type":"x"}\n', stderr: '', timedOut: false, cancelled: false })
+    expect(r).toEqual({ outcome: { code: 0, signal: null, timeout: false, cut: false }, stdout: '{"type":"x"}\n', stderr: '', timedOut: false, cancelled: false })
     const call = ssh.calls[0]
     expect(call.script).toBe('run')
     expect(call.values.slice(1)).toEqual([MACHINE.did, INSTALL, MACHINE.helper.folder, MACHINE.helper.sha256, '300'])
     const [head, ...rest] = call.stdin.toString('utf8').split('\n')
     expect(JSON.parse(head)).toEqual({ argv: SPEC.argv, cwd: SPEC.cwd, env: SPEC.env })
+    expect(Object.keys(JSON.parse(head))).toEqual(['argv', 'cwd', 'env'])
     expect(rest.join('\n')).toBe('the prompt\n')
     const command = call.args[call.args.length - 1]
     for (const v of [SPEC.argv[0], SPEC.cwd, MACHINE.home]) expect(command).not.toContain(v)
     // The program's environment is the host account's own and LANG: nothing of this computer's.
     expect(SPEC.env).toEqual({ HOME: '/home/nick', USER: 'nick', LOGNAME: 'nick', SHELL: '/bin/bash', PATH: MACHINE.path, LANG: 'C.UTF-8' })
+    // The exec keeps more than the run mode copies: its 4 MiB, the line end
+    // it may add, the preamble, the hash line and the result line.
+    expect(RUN_OUTPUT_MAX).toBe(4 * 1024 * 1024)
+    expect(RUN_STDOUT_MAX).toBeGreaterThan(RUN_OUTPUT_MAX + 1 + 64 * 1024 + 2 * 200)
   })
 
-  it('its timeout goes on the command line in whole seconds, 1 to 900', async () => {
-    expect(RUN_TIMEOUT_RE.test('1') && RUN_TIMEOUT_RE.test('900') && RUN_TIMEOUT_RE.test('330')).toBe(true)
-    for (const bad of ['0', '901', '1000', '01', '-5', '5s']) expect(RUN_TIMEOUT_RE.test(bad), bad).toBe(false)
+  it("output up to the run mode's 4 MiB is read whole: the exec's cap is above it, not the one-shot exec's 2 MiB", async () => {
+    const big = `${"e".repeat(1023)}
+`.repeat(4 * 1024)
+    const ssh = new FakeSsh({ answer: (c) => ({ stdout: `AICC-HASH ${c.values[0]} ok ${SHA}
+${big}${ok(c.values[0])}`, code: 0 }) })
+    const r = await runOnHost(ctx(ssh), MACHINE, SPEC, "", 300_000)
+    expect(r.failure).toBeUndefined()
+    expect(r.stdout.length).toBe(RUN_OUTPUT_MAX)
+    expect(r.outcome).toEqual({ code: 0, signal: null, timeout: false, cut: false })
+  })
+
+  it('the launcher runs the helper\'s run mode with the nonce and the timeout, after the hash check', () => {
+    const t = scriptText('run')
+    expect(t).toContain('exec "$P" run --nonce "$N" --timeout "$T"')
+    expect(t.indexOf('echo "AICC-HASH $N ok $x"')).toBeGreaterThan(-1)
+    expect(t.indexOf('echo "AICC-HASH $N ok $x"')).toBeLessThan(t.indexOf('exec "$P" run'))
+  })
+
+  it('its timeout goes on the command line in whole seconds, 30 to 900', async () => {
+    for (const good of ['30', '99', '100', '330', '899', '900']) expect(RUN_TIMEOUT_RE.test(good), good).toBe(true)
+    for (const bad of ['0', '1', '29', '030', '901', '1000', '01', '-5', '5s', '']) expect(RUN_TIMEOUT_RE.test(bad), bad).toBe(false)
     expect(() => scriptCommand('run', ['0'.repeat(32), MACHINE.did, INSTALL, MACHINE.helper.folder, SHA, '901'])).toThrow(/run timeout/)
+    expect(() => scriptCommand('run', ['0'.repeat(32), MACHINE.did, INSTALL, MACHINE.helper.folder, SHA, '29'])).toThrow(/run timeout/)
     const ssh = new FakeSsh({ answer: () => ({ code: 0 }) })
-    expect((await runOnHost(ctx(ssh), MACHINE, SPEC, '', 901_000)).failure).toMatch(/1 to 900 seconds/)
+    expect((await runOnHost(ctx(ssh), MACHINE, SPEC, '', 901_000)).failure).toMatch(/30 to 900 seconds/)
+    expect((await runOnHost(ctx(ssh), MACHINE, SPEC, '', 29_000)).failure).toMatch(/30 to 900 seconds/)
     expect(ssh.calls).toHaveLength(0)
   })
 
-  it('the run mode\'s exit, a hash that is not the app\'s, and a machine not reached', async () => {
-    const answering = (a: FakeAnswer) => runOnHost(ctx(new FakeSsh({ answer: (c) => ({ ...a, stdout: (a.stdout ?? '').replace('NONCE', c.values[0]) }) })), MACHINE, SPEC, '', 60_000)
-    expect(await answering({ stdout: `AICC-HASH NONCE ok ${SHA}\n`, stderr: 'aicc-helper: run: the program ran past its 60 s and was ended\n', code: RUN_EXIT.timedOut })).toMatchObject({ exit: 4, timedOut: true })
-    expect(await answering({ stdout: `AICC-HASH NONCE ok ${SHA}\n`, code: RUN_EXIT.notStarted })).toMatchObject({ exit: 3, timedOut: false })
+  it('a request or an input past its bound is refused here, before ssh starts', async () => {
+    const ssh = new FakeSsh({ answer: () => ({ code: 0 }) })
+    expect(RUN_REQUEST_MAX).toBe(64 * 1024)
+    expect(RUN_INPUT_MAX).toBe(2 * 1024 * 1024)
+    const fat = { ...SPEC, env: { ...SPEC.env, BIG: 'x'.repeat(RUN_REQUEST_MAX) } }
+    expect((await runOnHost(ctx(ssh), MACHINE, fat, '', 300_000)).failure).toMatch(/request line is over 64 KiB/)
+    expect((await runOnHost(ctx(ssh), MACHINE, SPEC, 'p'.repeat(RUN_INPUT_MAX + 1), 300_000)).failure).toMatch(/over 2 MiB/)
+    expect(ssh.calls).toHaveLength(0)
+    // At the bound, it is sent.
+    await runOnHost(ctx(ssh), MACHINE, SPEC, 'p'.repeat(RUN_INPUT_MAX), 300_000)
+    expect(ssh.calls).toHaveLength(1)
+  })
+
+  it('the result line is the exec\'s last line, with this exec\'s nonce and exactly its object', () => {
+    const N = '0123456789abcdef0123456789abcdef'
+    expect(parseRunResult(`out 1\nout 2\n${ok(N)}`, N)).toEqual({ outcome: { code: 0, signal: null, timeout: false, cut: false }, output: 'out 1\nout 2\n' })
+    expect(parseRunResult(ok(N, { code: null, signal: 1, timeout: true }), N)).toEqual({ outcome: { code: null, signal: 1, timeout: true, cut: false }, output: '' })
+    // A line in the output that looks like a result is the program's own: only the last line counts.
+    expect(parseRunResult(`${ok(N)}more\n${ok(N, { code: 3 })}`, N)).toEqual({ outcome: { code: 3, signal: null, timeout: false, cut: false }, output: `${ok(N)}more\n` })
+    for (const bad of [
+      '', 'out\n', `${ok(N)}after\n`, ok(N).trimEnd(), ok('f'.repeat(32)),
+      `AICC-RESULT ${N} {"code":0,"signal":null,"timeout":false}\n`,
+      `AICC-RESULT ${N} {"code":0,"signal":null,"timeout":false,"cut":false,"extra":1}\n`,
+      `AICC-RESULT ${N} {"code":"0","signal":null,"timeout":false,"cut":false}\n`,
+      `AICC-RESULT ${N} {"code":0.5,"signal":null,"timeout":false,"cut":false}\n`,
+      `AICC-RESULT ${N} {"code":0,"signal":null,"timeout":"no","cut":false}\n`,
+      `AICC-RESULT ${N} [0]\n`,
+      `AICC-RESULT ${N} not json\n`,
+    ]) expect(parseRunResult(bad, N), JSON.stringify(bad)).toBeNull()
+  })
+
+  it('how the run ended, from its result line; anything else is a failure, never a result', async () => {
+    const answering = (a: FakeAnswer) => runOnHost(ctx(new FakeSsh({ answer: (c) => ({ ...a, stdout: (a.stdout ?? '').split('NONCE').join(c.values[0]) }) })), MACHINE, SPEC, '', 60_000)
+    const hash = `AICC-HASH NONCE ok ${SHA}\n`
+    expect(await answering({ stdout: `${hash}partial\nAICC-RESULT NONCE {"code":null,"signal":1,"timeout":true,"cut":false}\n`, code: 0 }))
+      .toEqual({ outcome: { code: null, signal: 1, timeout: true, cut: false }, stdout: 'partial\n', stderr: '', timedOut: false, cancelled: false })
+    expect((await answering({ stdout: `${hash}AICC-RESULT NONCE {"code":141,"signal":null,"timeout":false,"cut":true}\n`, code: 0 })).outcome).toEqual({ code: 141, signal: null, timeout: false, cut: true })
+    // The run mode refused, or could not start the program: exit 1, its words on standard error.
+    const refused = await answering({ stdout: hash, stderr: 'aicc-helper: run: the program /home/nick/.npm-global/bin/codex is not a file there, so nothing was started\n', code: 1 })
+    expect(refused.outcome).toBeNull()
+    expect(refused.failure).toBe('the session helper started nothing there: the program /home/nick/.npm-global/bin/codex is not a file there, so nothing was started')
+    // A result line with an exit that is not 0, or an exit 0 with none: failures, never results.
+    expect((await answering({ stdout: `${hash}AICC-RESULT NONCE {"code":0,"signal":null,"timeout":false,"cut":false}\n`, code: 1 })).failure).toMatch(/no result line/)
+    expect((await answering({ stdout: `${hash}{"type":"x"}\n`, code: 0 })).failure).toMatch(/no result line/)
     expect((await answering({ stdout: 'AICC-HASH NONCE mismatch bb\n', code: 97 })).failure).toMatch(/did not pass its hash check \(mismatch\)/)
     expect((await answering({ stdout: 'nothing\n', code: 0 })).failure).toMatch(/did not answer the session helper/)
     expect((await answering({ stderr: 'ssh: connect to host rocky.lan port 22: Connection refused', code: 255 })).failure).toMatch(/could not be reached: it refused the connection/)
@@ -424,20 +512,22 @@ describe('the limits, and a stop', () => {
     const p = runOnHost(ctx(ssh), MACHINE, SPEC, '', 300_000, stop.signal)
     await vi.waitFor(() => expect(ssh.calls).toHaveLength(1))
     stop.abort()
-    expect(await p).toMatchObject({ cancelled: true, exit: null })
+    expect(await p).toMatchObject({ cancelled: true, outcome: null })
     expect(ssh.killed).toBe(1)
   })
 
   it('a 900 s review on the machine is not cut short: neither by the host read\'s 60 s nor by a 10 minute limit', async () => {
     vi.useFakeTimers()
     const events = `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Slow but fine.' } })}\n`
-    const ssh = new SlowSsh(899_000, (n) => `AICC-HASH ${n} ok ${SHA}\n${events}`)
+    const ssh = new SlowSsh(899_000, (n) => `AICC-HASH ${n} ok ${SHA}\n${events}${ok(n)}`)
     const m: RemoteMachineRecord = MACHINE
     const deps: RemoteReviewDeps = {
       machine: () => m,
       read: async () => ({ ok: true, kind: 'diff', diff: 'diff --git a/x b/x\n+x\n' }),
       run: (rec, spec, input, timeoutMs, signal) => runOnHost(ctx(ssh), rec, spec, input, timeoutMs, signal),
       env: hostRunEnv,
+      registry: () => mergeRegistry(registryJson as unknown as ModelRegistry, null),
+      launchRefusal: () => null,
     }
     let done = false
     const p = runRemoteCodexReview({ cccSessionId: 'rr-slow', mode: 'working', timeoutSeconds: 900 }, { did: m.did, cwd: '/home/nick/proj' }, deps).then((r) => { done = true; return r })

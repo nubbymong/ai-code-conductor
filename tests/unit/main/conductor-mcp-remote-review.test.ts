@@ -93,7 +93,7 @@ const MACHINE: RemoteMachineRecord = {
   codex: { path: '/home/nick/.npm-global/bin/codex', version: '0.157.1' }, git: '2.47.1', reviewProbes: { codex: '0.157.1', git: '2.47.1' },
 }
 const machine = { value: MACHINE as RemoteMachineRecord }
-const run = vi.fn(async () => ({ exit: 0, stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Reviewed on the machine.' } })}\n`, stderr: '', timedOut: false, cancelled: false }))
+const run = vi.fn(async () => ({ outcome: { code: 0, signal: null, timeout: false, cut: false }, stdout: `${JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'Reviewed on the machine.' } })}\n`, stderr: '', timedOut: false, cancelled: false }))
 const read = vi.fn(async () => ({ ok: true as const, kind: 'diff' as const, diff: 'diff --git a/x b/x\n+x\n' }))
 const links: FakeLink[] = []
 

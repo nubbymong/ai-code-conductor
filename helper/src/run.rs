@@ -1,98 +1,102 @@
-//! `aicc-helper run --timeout <seconds>` (macOS and Linux, from
-//! 2.1.3-beta.21): the one-shot run mode (ADR-030 protocol change 6). The app
-//! starts one program on a machine through it, in one `ssh -T` exec, and reads
-//! what the program prints: a review on the machine a remote session runs on
+//! `aicc-helper run --nonce <n> --timeout <seconds>` (macOS and Linux, from
+//! 2.1.3-beta.21): the one-shot run mode (ADR-030 protocol change 6,
+//! docs/remote/helper-protocol.md section 4). The app starts one program on
+//! a machine through it, in one `ssh -T` exec, and reads what the program
+//! prints: a review on the machine a remote session runs on
 //! (nubbymong/aicc_planning#446) is its first use.
 //!
-//! What it reads, on standard input: one line of JSON, the spec, at most
-//! `MAX_SPEC_BYTES`, then everything up to the end of standard input, at most
-//! `MAX_INPUT_BYTES`, which is the program's own standard input (a review's
-//! prompt). The spec has exactly three fields:
+//! What it reads, on standard input: one line holding a JSON object with
+//! exactly `argv`, `cwd` and `env`, at most `MAX_REQUEST_BYTES` with its line
+//! end, then the rest of standard input, at most `MAX_INPUT_BYTES`, which is
+//! the program's own standard input (a review's prompt). It reads the whole
+//! input before it starts anything; a request that is not one line, is over
+//! its bound or is not exactly that object, and an input over its bound, are
+//! refused, never cut. The request comes on standard input, never on the
+//! command line: the program's path and the folder are values the machine
+//! reported (protocol section 4).
+//!
+//! `argv`, `cwd` and `env` follow `term.launch`'s rules (protocol section 15,
+//! Launch; `request.rs`'s bounds): `argv[0]` is an absolute path, started by
+//! that exact path with no search of `PATH` and no shell between; `cwd` is
+//! an absolute folder; `env` is the program's whole environment, with nothing
+//! of this process's own added.
+//!
+//! The program leads a new session (and so a new process group), and its
+//! standard input is closed once the input is written. Its standard output is
+//! copied to this mode's, byte for byte, at most `MAX_OUTPUT_BYTES`: the first
+//! byte past that ends the run (`cut`). Its standard error is copied at most
+//! `MAX_ERROR_BYTES`; the rest is read and dropped, which ends nothing.
+//!
+//! The program's whole session is ended (a hangup, then a kill after
+//! `GRACE`, as a holder ends a tree: `pty::signal_session`) when the program
+//! exits, when `--timeout` seconds have passed since it started (`timeout`),
+//! when its output passes its cap (`cut`), and when this mode's own standard
+//! output closes before the program has exited (the app ended the exec). The
+//! end of standard input is not an end: it comes once the input is read.
+//!
+//! Then, unless its standard output has closed, it writes a line end if the
+//! copied output did not end with one, and last of all one line:
 //!
 //! ```text
-//! {"argv":["/abs/program","arg",...],"cwd":"/abs/folder","env":{"NAME":"value",...}}
+//! AICC-RESULT <nonce> {"code":<n>|null,"signal":<n>|null,"timeout":<bool>,"cut":<bool>}
 //! ```
 //!
-//! The spec comes on standard input, never on the command line: the program's
-//! path and the folder are values the machine reported (protocol section 4).
+//! and exits `EXIT_DONE` (0), whatever the program's own exit was. It exits
+//! `EXIT_NOT_RUN` (1), with one line on standard error and nothing started,
+//! when the request is refused or the program cannot start, and also when its
+//! standard output closed first (nothing can be written then); `EXIT_USAGE`
+//! (2) on a command line it does not take (`main.rs`). It writes no file,
+//! opens no connection and starts nothing but `argv`. On Windows it does not
+//! run (`main.rs`).
 //!
-//! How it runs the program:
-//! - Only `argv`, with no shell: `argv[0]` is an absolute path to a file, run
-//!   as it is (no `PATH` lookup), with the rest as its arguments, each exactly
-//!   as given. A spec that is not this shape starts nothing.
-//! - In `cwd`, an absolute path to a folder.
-//! - With `env` alone: nothing of this process's own environment reaches it.
-//! - In a process group of its own. When the run ends for any reason, the
-//!   whole group is ended: a hangup of the exec (standard output closed), the
-//!   timeout, or output past `MAX_OUTPUT_BYTES` first get a terminate signal
-//!   and `GRACE` to go, then a kill; a program that exits by itself has what it
-//!   left in its group killed. Each signal goes before the program is reaped,
-//!   so its id still names its group then.
-//! - Its standard output is copied to this mode's, byte for byte, up to
-//!   `MAX_OUTPUT_BYTES`; its standard error to this mode's, up to
-//!   `MAX_ERROR_BYTES` (the rest is read and dropped).
-//! - `--timeout` is the run's own limit, 1 to `MAX_TIMEOUT_SECS` seconds (a
-//!   review's own timeout: 300 s by default, at most 900 s). The app's exec
-//!   gives it 30 s more (docs/remote/helper-protocol.md section 10).
+//! The program is reaped in one place (`reaped`, `Child::try_wait`), and
+//! its session is signalled only while its id cannot name anyone else: before
+//! it is reaped, or while anything is still in its session (the rule of
+//! `pty/unix.rs`). An exit watch thread learns of the exit with `waitid` and
+//! `WNOWAIT`, which leaves the program unreaped.
 //!
-//! Exit statuses: `EXIT_OK` (0) the program exited 0; `EXIT_PROGRAM_FAILED`
-//! (1) it exited with another code or was ended by a signal; `EXIT_USAGE` (2)
-//! a command line or a spec it does not take (nothing started); `EXIT_NOT_STARTED`
-//! (3) the program or the folder is not there, or it could not be started;
-//! `EXIT_TIMED_OUT` (4); `EXIT_OUTPUT_CAP` (5); `EXIT_CLOSED` (6) the exec
-//! closed (standard output went away) before the program ended. Every one but
-//! 0 also writes one line on standard error, after anything the program wrote
-//! there. On Windows the mode does not run (`main.rs`).
-//!
-//! Unsafe code: `poll` on standard output, `waitid` with `WNOWAIT` (the exit,
-//! with the program left unreaped) and `killpg`, which `std` has no safe form of.
+//! Unsafe code: `setsid` in the child before exec, `poll` on standard output,
+//! `waitid` with `WNOWAIT` and `signal`, which `std` has no safe form of.
 #![allow(unsafe_code)]
 
+use crate::hello::{valid_nonce, RESULT_PREFIX};
 use crate::json::{self, Value};
+use crate::pty::{session_left, signal_session};
+use crate::request::{MAX_ARGV_ITEMS, MAX_ARG_CHARS, MAX_CWD_CHARS, MAX_ENV_ENTRIES, MAX_ENV_NAME_CHARS, MAX_ENV_VALUE_CHARS};
 use std::io::{self, BufRead, Read, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// The program exited 0.
-pub const EXIT_OK: u8 = 0;
-/// The program exited with another code, or a signal ended it.
-pub const EXIT_PROGRAM_FAILED: u8 = 1;
-/// A command line or a spec this mode does not take: nothing was started.
+/// The result line was written (the program ran, however it ended).
+pub const EXIT_DONE: u8 = 0;
+/// The request was refused, the program could not start, or this mode's
+/// standard output closed before the result line: one line on standard error.
+pub const EXIT_NOT_RUN: u8 = 1;
+/// A command line this mode does not take (`main.rs`).
 pub const EXIT_USAGE: u8 = 2;
-/// The program or its folder is not there, or it could not be started.
-pub const EXIT_NOT_STARTED: u8 = 3;
-/// The program ran past the timeout, and its group was ended.
-pub const EXIT_TIMED_OUT: u8 = 4;
-/// The program printed more than `MAX_OUTPUT_BYTES`, and its group was ended.
-pub const EXIT_OUTPUT_CAP: u8 = 5;
-/// The exec closed before the program ended, and its group was ended.
-pub const EXIT_CLOSED: u8 = 6;
 
-/// The longest run: a review's own longest timeout.
+/// `--timeout`'s bounds: a review's own timeout, 30 to 900 seconds.
+pub const MIN_TIMEOUT_SECS: u64 = 30;
 pub const MAX_TIMEOUT_SECS: u64 = 900;
-/// The spec line, at most, its line end included.
-pub const MAX_SPEC_BYTES: usize = 64 * 1024;
-/// The program's standard input, at most (a review's prompt: its change is at most 512 KB).
-pub const MAX_INPUT_BYTES: usize = 4 * 1024 * 1024;
-/// The program's standard output passed on, at most.
-pub const MAX_OUTPUT_BYTES: usize = 8 * 1024 * 1024;
-/// The program's standard error passed on, at most.
-pub const MAX_ERROR_BYTES: usize = 32 * 1024;
-/// The most elements `argv` may have, and the longest one.
-pub const MAX_ARGS: usize = 128;
-pub const MAX_ARG_BYTES: usize = 4096;
-/// The most variables `env` may name, the longest name and the longest value.
-pub const MAX_ENV: usize = 64;
-pub const MAX_ENV_NAME_BYTES: usize = 64;
-pub const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
-/// How long the program's group has after a terminate signal, before the kill.
+/// The request line, at most, its line end included.
+pub const MAX_REQUEST_BYTES: usize = 64 * 1024;
+/// The program's standard input (a review's prompt), at most.
+pub const MAX_INPUT_BYTES: usize = 2 * 1024 * 1024;
+/// The program's standard output copied, at most; one byte more is a cut.
+pub const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+/// The program's standard error copied, at most; the rest is dropped.
+pub const MAX_ERROR_BYTES: usize = 64 * 1024;
+/// How long the program's session has after the hangup, before the kill.
 pub const GRACE: Duration = Duration::from_secs(2);
-/// How long the program's output may stay open after it exited (something it
-/// left holds it), before what it left is killed.
+/// How long the copy of the program's output may still run once its session
+/// has been ended (a process that left the session on purpose may hold it).
 pub const DRAIN_WAIT: Duration = Duration::from_secs(2);
+/// How long a killed program has to be reaped.
+const KILL_WAIT: Duration = Duration::from_secs(5);
 /// How often the run looks at whether the exec has closed.
 const WATCH_EVERY: Duration = Duration::from_millis(200);
 /// The most read at once from the program.
@@ -100,126 +104,144 @@ const CHUNK: usize = 64 * 1024;
 
 /// What the program is started with.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Spec {
+pub struct Request {
     pub argv: Vec<String>,
     pub cwd: String,
     pub env: Vec<(String, String)>,
 }
 
-/// `--timeout`'s value: whole seconds, 1 to `MAX_TIMEOUT_SECS`, digits only.
+/// How the program's run ended, as the result line says it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Outcome {
+    /// Its exit code; None when a signal ended it or it was not reaped.
+    pub code: Option<i32>,
+    /// The signal that ended it; None when it exited by itself.
+    pub signal: Option<i32>,
+    /// `--timeout` seconds passed and its session was ended.
+    pub timeout: bool,
+    /// Its output passed `MAX_OUTPUT_BYTES` and its session was ended.
+    pub cut: bool,
+}
+
+/// `--timeout`'s value: whole seconds from `MIN_TIMEOUT_SECS` to
+/// `MAX_TIMEOUT_SECS`, digits only, no leading zero.
 pub fn parse_timeout(text: &str) -> Option<u64> {
-    if text.is_empty() || text.len() > 4 || !text.bytes().all(|b| b.is_ascii_digit()) {
+    let b = text.as_bytes();
+    if b.is_empty() || b.len() > 3 || b[0] == b'0' || !b.iter().all(u8::is_ascii_digit) {
         return None;
     }
     match text.parse::<u64>() {
-        Ok(n) if (1..=MAX_TIMEOUT_SECS).contains(&n) => Some(n),
+        Ok(n) if (MIN_TIMEOUT_SECS..=MAX_TIMEOUT_SECS).contains(&n) => Some(n),
         _ => None,
     }
 }
 
-/// A variable's name: a letter or `_`, then letters, digits and `_`.
-fn valid_env_name(name: &str) -> bool {
-    let b = name.as_bytes();
-    !b.is_empty()
-        && b.len() <= MAX_ENV_NAME_BYTES
-        && (b[0].is_ascii_alphabetic() || b[0] == b'_')
-        && b.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_')
+/// `--nonce`'s value: 32 lower-case hex characters (protocol section 1).
+pub fn parse_nonce(text: &str) -> Option<&str> {
+    if valid_nonce(text) {
+        Some(text)
+    } else {
+        None
+    }
 }
 
-/// The spec line (without its line end), read strictly: exactly the three
-/// fields, each once and of its own shape.
-pub fn parse_spec(line: &[u8]) -> Result<Spec, String> {
-    let v = json::parse(line).map_err(|_| "the spec is not one JSON value".to_string())?;
+/// The request line (without its line end), read strictly: exactly the three
+/// fields, each once, each by `term.launch`'s rules.
+pub fn parse_request(line: &[u8]) -> Result<Request, String> {
+    let v = json::parse(line).map_err(|_| "the request is not one JSON value".to_string())?;
     let keys = match v.keys() {
         Some(k) => k,
-        None => return Err("the spec is not a JSON object".to_string()),
+        None => return Err("the request is not a JSON object".to_string()),
     };
-    for k in &keys {
-        if !matches!(*k, "argv" | "cwd" | "env") {
-            return Err(format!("the spec has a field it does not take: {k}"));
-        }
-    }
-    for name in ["argv", "cwd", "env"] {
-        if keys.iter().filter(|k| **k == name).count() != 1 {
-            return Err(format!("the spec needs {name} exactly once"));
-        }
+    if keys.len() != 3 || ["argv", "cwd", "env"].iter().any(|name| keys.iter().filter(|k| *k == name).count() != 1) {
+        return Err("the request must hold exactly argv, cwd and env, each once".to_string());
     }
     let items = match v.get("argv").and_then(Value::as_array) {
         Some(items) => items,
-        None => return Err("argv is not a list".to_string()),
+        None => return Err("argv must be an array of strings".to_string()),
     };
-    if items.is_empty() || items.len() > MAX_ARGS {
-        return Err(format!("argv must have 1 to {MAX_ARGS} elements"));
+    if items.is_empty() || items.len() > MAX_ARGV_ITEMS {
+        return Err(format!("argv must hold 1 to {MAX_ARGV_ITEMS} strings"));
     }
     let mut argv = Vec::with_capacity(items.len());
     for item in items {
         let s = match item.as_str() {
             Some(s) => s,
-            None => return Err("an element of argv is not a string".to_string()),
+            None => return Err("argv must be an array of strings".to_string()),
         };
-        if s.len() > MAX_ARG_BYTES || s.contains('\0') {
-            return Err(format!("an element of argv is over {MAX_ARG_BYTES} bytes or holds a NUL"));
+        if s.chars().count() > MAX_ARG_CHARS || s.contains('\0') {
+            return Err(format!("an argument is over {MAX_ARG_CHARS} characters or holds a NUL character"));
         }
         argv.push(s.to_string());
     }
     if !argv[0].starts_with('/') {
-        return Err("argv[0] is not an absolute path".to_string());
+        return Err("argv[0] must be an absolute path".to_string());
     }
     let cwd = match v.get("cwd").and_then(Value::as_str) {
-        Some(s) => s.to_string(),
-        None => return Err("cwd is not a string".to_string()),
+        Some(s) => s,
+        None => return Err("cwd must be a string".to_string()),
     };
-    if !cwd.starts_with('/') || cwd.len() > MAX_ARG_BYTES || cwd.contains('\0') {
-        return Err("cwd is not an absolute path".to_string());
+    if cwd.chars().count() > MAX_CWD_CHARS || cwd.contains('\0') || !cwd.starts_with('/') {
+        return Err(format!("cwd must be an absolute path of at most {MAX_CWD_CHARS} characters with no NUL character"));
     }
     let members = match v.get("env") {
         Some(Value::Obj(members)) => members,
-        _ => return Err("env is not an object".to_string()),
+        _ => return Err("env must be an object of strings".to_string()),
     };
-    if members.len() > MAX_ENV {
-        return Err(format!("env names more than {MAX_ENV} variables"));
+    if members.len() > MAX_ENV_ENTRIES {
+        return Err(format!("env has more than {MAX_ENV_ENTRIES} entries"));
     }
     let mut env: Vec<(String, String)> = Vec::with_capacity(members.len());
+    let mut folded: Vec<String> = Vec::with_capacity(members.len());
     for (name, value) in members {
-        if !valid_env_name(name) {
-            return Err("env names a variable whose name it does not take".to_string());
+        if name.is_empty() || name.chars().count() > MAX_ENV_NAME_CHARS || name.contains('=') || name.contains('\0') {
+            return Err(format!("an environment name must be 1 to {MAX_ENV_NAME_CHARS} characters with no = or NUL character"));
         }
-        if env.iter().any(|(k, _)| k == name) {
-            return Err("env names a variable twice".to_string());
-        }
-        let s = match value.as_str() {
+        let value = match value.as_str() {
             Some(s) => s,
-            None => return Err("a value in env is not a string".to_string()),
+            None => return Err("an environment value is not a string".to_string()),
         };
-        if s.len() > MAX_ENV_VALUE_BYTES || s.contains('\0') {
-            return Err(format!("a value in env is over {MAX_ENV_VALUE_BYTES} bytes or holds a NUL"));
+        if value.chars().count() > MAX_ENV_VALUE_CHARS || value.contains('\0') {
+            return Err(format!("an environment value is over {MAX_ENV_VALUE_CHARS} characters or holds a NUL character"));
         }
-        env.push((name.clone(), s.to_string()));
+        // As term.launch: names that differ only in case are refused.
+        let key = name.to_uppercase();
+        if folded.contains(&key) {
+            return Err("an environment name is given twice (case ignored)".to_string());
+        }
+        folded.push(key);
+        env.push((name.clone(), value.to_string()));
     }
-    Ok(Spec { argv, cwd, env })
+    Ok(Request { argv, cwd: cwd.to_string(), env })
 }
 
-/// The spec line and the program's input, from standard input, each within its bound.
-fn read_request() -> Result<(Spec, Vec<u8>), String> {
-    let stdin = io::stdin();
-    let mut lock = stdin.lock();
+/// The request line and the program's input, from `from`, each within its
+/// bound. Nothing past `MAX_INPUT_BYTES` and one byte is read.
+pub fn read_request(from: &mut impl BufRead) -> Result<(Request, Vec<u8>), String> {
     let mut line = Vec::new();
-    if let Err(e) = (&mut lock).take(MAX_SPEC_BYTES as u64).read_until(b'\n', &mut line) {
+    if let Err(e) = from.by_ref().take(MAX_REQUEST_BYTES as u64).read_until(b'\n', &mut line) {
         return Err(format!("standard input cannot be read: {e}"));
     }
     if line.last() != Some(&b'\n') {
-        return Err(format!("standard input does not start with a spec line of at most {MAX_SPEC_BYTES} bytes"));
+        return Err(format!("standard input does not start with a request line of at most {} KiB", MAX_REQUEST_BYTES / 1024));
     }
     line.pop();
-    let spec = parse_spec(&line)?;
+    let request = parse_request(&line)?;
     let mut input = Vec::new();
-    if let Err(e) = (&mut lock).take(MAX_INPUT_BYTES as u64 + 1).read_to_end(&mut input) {
+    if let Err(e) = from.by_ref().take(MAX_INPUT_BYTES as u64 + 1).read_to_end(&mut input) {
         return Err(format!("standard input cannot be read: {e}"));
     }
     if input.len() > MAX_INPUT_BYTES {
-        return Err(format!("the program's input is over {} MiB", MAX_INPUT_BYTES / (1024 * 1024)));
+        return Err(format!("the program's input is over {} MiB, so nothing was started", MAX_INPUT_BYTES / (1024 * 1024)));
     }
-    Ok((spec, input))
+    Ok((request, input))
+}
+
+/// The result line, without its line end.
+pub fn result_line(nonce: &str, o: &Outcome) -> String {
+    let num = |n: Option<i32>| n.map_or(Value::Null, |n| Value::Num(n.to_string()));
+    let body = Value::obj(vec![("code", num(o.code)), ("signal", num(o.signal)), ("timeout", Value::Bool(o.timeout)), ("cut", Value::Bool(o.cut))]);
+    format!("{RESULT_PREFIX} {nonce} {}", body.to_json())
 }
 
 /// One line on standard error, then the exit status. Not eprintln!: it panics
@@ -233,12 +255,23 @@ fn said(code: u8, msg: &str) -> u8 {
 enum Event {
     /// The program exited (it is not reaped yet).
     Exited,
-    /// Its standard output ended, and everything it printed was passed on.
+    /// Its standard output ended, and everything it printed was copied.
     OutputDone,
     /// It printed more than `MAX_OUTPUT_BYTES`.
-    OutputCap,
+    Cut,
     /// This mode's standard output cannot be written: the exec closed.
     Closed,
+}
+
+/// The copy of the program's output, shared with the thread that copies it:
+/// once `sealed`, nothing more is copied, so the result line is the last line.
+#[derive(Default)]
+struct Copied {
+    sealed: bool,
+    total: usize,
+    /// The last byte copied was not a line end.
+    open_line: bool,
+    cut: bool,
 }
 
 /// True when this mode's standard output has gone away (the exec closed):
@@ -249,17 +282,8 @@ fn stdout_closed() -> bool {
     rc > 0 && (fd.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL)) != 0
 }
 
-/// Send `sig` to process group `pgid`; never to group 0 (this one's) or 1.
-fn signal_group(pgid: libc::pid_t, sig: libc::c_int) {
-    if pgid > 1 {
-        unsafe {
-            libc::killpg(pgid, sig);
-        }
-    }
-}
-
 /// Block until the program has exited, leaving it unreaped (as
-/// `pty::unix::ExitWatch::wait`), so its id still names its group.
+/// `pty::unix::ExitWatch::wait`), so its id still names its session.
 fn wait_exited(pid: libc::pid_t) {
     loop {
         let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
@@ -274,22 +298,9 @@ fn wait_exited(pid: libc::pid_t) {
     }
 }
 
-/// Wait for `Exited` until `deadline`, dropping every other event.
-fn exited_by(events: &Receiver<Event>, deadline: Instant) -> bool {
-    loop {
-        match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(Event::Exited) => return true,
-            Ok(_) => {}
-            Err(_) => return false,
-        }
-    }
-}
-
 /// Copy the program's standard output to this mode's, up to the cap.
-fn copy_output(mut from: impl Read, events: &Sender<Event>) {
-    let stdout = io::stdout();
+fn copy_output(mut from: impl Read, copied: &Mutex<Copied>, events: &Sender<Event>) {
     let mut buf = vec![0u8; CHUNK];
-    let mut total = 0usize;
     loop {
         let n = match from.read(&mut buf) {
             Ok(0) => {
@@ -303,18 +314,30 @@ fn copy_output(mut from: impl Read, events: &Sender<Event>) {
                 return;
             }
         };
-        let room = MAX_OUTPUT_BYTES - total;
+        let mut c = match copied.lock() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if c.sealed {
+            return;
+        }
+        let room = MAX_OUTPUT_BYTES - c.total;
         let take = n.min(room);
         if take > 0 {
+            let stdout = io::stdout();
             let mut out = stdout.lock();
             if out.write_all(&buf[..take]).and_then(|_| out.flush()).is_err() {
+                drop(c);
                 let _ = events.send(Event::Closed);
                 return;
             }
-            total += take;
+            c.total += take;
+            c.open_line = buf[take - 1] != b'\n';
         }
         if n > room {
-            let _ = events.send(Event::OutputCap);
+            c.cut = true;
+            drop(c);
+            let _ = events.send(Event::Cut);
             return;
         }
     }
@@ -340,50 +363,117 @@ fn copy_errors(mut from: impl Read) {
     }
 }
 
-/// Run the mode: read the request, start the program, pass its output on,
-/// end its group, and return the exit status. The command line is `main.rs`'s.
-pub fn run(timeout: Duration) -> u8 {
-    let (spec, input) = match read_request() {
+/// True once the program has been reaped (`status` keeps how it ended).
+fn reaped(child: &mut Child, status: &mut Option<ExitStatus>) -> bool {
+    if status.is_some() {
+        return true;
+    }
+    if let Ok(Some(s)) = child.try_wait() {
+        *status = Some(s);
+        return true;
+    }
+    false
+}
+
+/// True when the program has been reaped and nothing is left in its session.
+fn over(child: &mut Child, status: &mut Option<ExitStatus>, sid: libc::pid_t) -> bool {
+    reaped(child, status) && !session_left(sid)
+}
+
+/// End the program's whole session, as a holder ends a tree
+/// (`pty::unix::Pty::end_tree`): nothing when it has exited and left nothing,
+/// else a hangup, `GRACE` to go, then a kill, and the program reaped.
+fn end_session(child: &mut Child, status: &mut Option<ExitStatus>) {
+    let sid = child.id() as libc::pid_t;
+    if sid <= 1 {
+        // Never group 0 (this one's) or 1; such an id is not a child's.
+        return;
+    }
+    if over(child, status, sid) {
+        return;
+    }
+    signal_session(sid, libc::SIGHUP);
+    signal_session(sid, libc::SIGCONT);
+    let deadline = Instant::now() + GRACE;
+    while Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(20));
+        if over(child, status, sid) {
+            return;
+        }
+    }
+    signal_session(sid, libc::SIGKILL);
+    let deadline = Instant::now() + KILL_WAIT;
+    while !reaped(child, status) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Wait for `OutputDone` until `deadline`; true when it came. A `Closed`
+/// that comes first is remembered in `closed`.
+fn output_done_by(events: &Receiver<Event>, deadline: Instant, closed: &mut bool) -> bool {
+    loop {
+        match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Event::OutputDone) => return true,
+            Ok(Event::Closed) => *closed = true,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+}
+
+/// Run the mode: read the request, start the program, copy its output, end
+/// its session, write the result line, and return the exit status. The
+/// command line is `main.rs`'s.
+pub fn run(nonce: &str, timeout: Duration) -> u8 {
+    let (request, input) = match read_request(&mut io::stdin().lock()) {
         Ok(r) => r,
-        Err(why) => return said(EXIT_USAGE, &why),
+        Err(why) => return said(EXIT_NOT_RUN, &why),
     };
-    match std::fs::metadata(&spec.argv[0]) {
+    match std::fs::metadata(&request.argv[0]) {
         Ok(m) if m.is_file() => {}
-        _ => return said(EXIT_NOT_STARTED, &format!("the program {} is not a file there", spec.argv[0])),
+        _ => return said(EXIT_NOT_RUN, &format!("the program {} is not a file there, so nothing was started", request.argv[0])),
     }
-    match std::fs::metadata(&spec.cwd) {
+    match std::fs::metadata(&request.cwd) {
         Ok(m) if m.is_dir() => {}
-        _ => return said(EXIT_NOT_STARTED, &format!("the folder {} is not there", spec.cwd)),
+        _ => return said(EXIT_NOT_RUN, &format!("the folder {} is not there, so nothing was started", request.cwd)),
     }
-    // The program alone is waited for, and only through `waitid` below and
-    // `wait` at the end, so SIGCHLD must not be ignored when it starts.
+    // The program alone is waited for, through `waitid` and `try_wait`, so
+    // SIGCHLD must not be ignored (a starter may leave it so).
     unsafe {
         libc::signal(libc::SIGCHLD, libc::SIG_DFL);
     }
-    let mut cmd = Command::new(&spec.argv[0]);
-    cmd.args(&spec.argv[1..])
+    let mut cmd = Command::new(&request.argv[0]);
+    cmd.args(&request.argv[1..])
         .env_clear()
-        .envs(spec.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-        .current_dir(&spec.cwd)
-        .process_group(0)
+        .envs(request.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .current_dir(&request.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // A new session, and with it a new process group whose id is the
+    // program's: the whole of what it starts can be ended at once.
+    unsafe {
+        cmd.pre_exec(|| if libc::setsid() == -1 { Err(io::Error::last_os_error()) } else { Ok(()) });
+    }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
-        Err(e) => return said(EXIT_NOT_STARTED, &format!("the program could not be started: {e}")),
+        Err(e) => return said(EXIT_NOT_RUN, &format!("the program could not be started: {e}")),
     };
+    let started = Instant::now();
     let pid = child.id() as libc::pid_t;
+    let copied = Arc::new(Mutex::new(Copied::default()));
     let (events_tx, events) = mpsc::channel::<Event>();
     if let Some(mut stdin) = child.stdin.take() {
         let _ = thread::Builder::new().spawn(move || {
-            // A program that does not read its input gets a closed pipe: not this mode's failure.
+            // Then its standard input closes (dropped). A program that does
+            // not read it gets a closed pipe: not this mode's failure.
             let _ = stdin.write_all(&input);
         });
     }
     if let Some(out) = child.stdout.take() {
         let tx = events_tx.clone();
-        let _ = thread::Builder::new().spawn(move || copy_output(out, &tx));
+        let c = Arc::clone(&copied);
+        let _ = thread::Builder::new().spawn(move || copy_output(out, &c, &tx));
     }
     if let Some(err) = child.stderr.take() {
         let _ = thread::Builder::new().spawn(move || copy_errors(err));
@@ -397,43 +487,30 @@ pub fn run(timeout: Duration) -> u8 {
     }
     drop(events_tx);
 
-    let deadline = Instant::now() + timeout;
-    let mut exited = false;
+    let deadline = started + timeout;
+    let mut timed_out = false;
+    let mut closed = false;
+    let mut cut = false;
     let mut output_done = false;
-    let mut drained_by: Option<Instant> = None;
-    let mut ended: Option<(u8, String)> = None;
-    while !(exited && output_done) {
+    loop {
         let now = Instant::now();
         if now >= deadline {
-            ended = Some((EXIT_TIMED_OUT, format!("the program ran past its {} s and was ended", timeout.as_secs())));
+            timed_out = true;
             break;
         }
         if stdout_closed() {
-            ended = Some((EXIT_CLOSED, "the exec closed before the program ended, so it was ended".to_string()));
+            closed = true;
             break;
         }
-        if let Some(by) = drained_by {
-            // The program has exited and what it left still holds its output.
-            if now >= by {
-                break;
-            }
-        }
-        let mut wait = WATCH_EVERY.min(deadline.saturating_duration_since(now));
-        if let Some(by) = drained_by {
-            wait = wait.min(by.saturating_duration_since(now));
-        }
-        match events.recv_timeout(wait) {
-            Ok(Event::Exited) => {
-                exited = true;
-                drained_by = Some(Instant::now() + DRAIN_WAIT);
-            }
+        match events.recv_timeout(WATCH_EVERY.min(deadline.saturating_duration_since(now))) {
+            Ok(Event::Exited) => break,
             Ok(Event::OutputDone) => output_done = true,
-            Ok(Event::OutputCap) => {
-                ended = Some((EXIT_OUTPUT_CAP, format!("the program printed more than {} MiB, so it was ended", MAX_OUTPUT_BYTES / (1024 * 1024))));
+            Ok(Event::Cut) => {
+                cut = true;
                 break;
             }
             Ok(Event::Closed) => {
-                ended = Some((EXIT_CLOSED, "the exec closed before the program ended, so it was ended".to_string()));
+                closed = true;
                 break;
             }
             Err(RecvTimeoutError::Timeout) => {}
@@ -441,36 +518,35 @@ pub fn run(timeout: Duration) -> u8 {
         }
     }
 
-    // The program's group is ended before the program is reaped, so its id
-    // names nothing else while it is signalled.
-    if !exited {
-        signal_group(pid, libc::SIGTERM);
-        exited = exited_by(&events, Instant::now() + GRACE);
-        if !exited {
-            signal_group(pid, libc::SIGKILL);
-            exited = exited_by(&events, Instant::now() + Duration::from_secs(5));
-        }
+    let mut status: Option<ExitStatus> = None;
+    end_session(&mut child, &mut status);
+    // What the program printed before its end is still in the pipe: copy it,
+    // unless the copy has stopped already.
+    if !output_done && !cut && !closed {
+        output_done_by(&events, Instant::now() + DRAIN_WAIT, &mut closed);
     }
-    // What it left in its group goes with it.
-    signal_group(pid, libc::SIGKILL);
-    if !exited {
-        // Not reaped: one kill could not end it in time. It is the machine's
-        // to reap once this mode has exited.
-        return said(ended.map_or(EXIT_PROGRAM_FAILED, |(c, _)| c), "the program did not end after a kill");
+    if closed {
+        return said(EXIT_NOT_RUN, "the exec closed before the program ended, so its session was ended");
     }
-    let status = child.wait();
-    if let Some((code, why)) = ended {
-        return said(code, &why);
+    // Sealed first, so nothing the copy still holds comes after the result line.
+    let mut c = match copied.lock() {
+        Ok(c) => c,
+        Err(p) => p.into_inner(),
+    };
+    c.sealed = true;
+    let outcome = Outcome {
+        code: status.and_then(|s| s.code()),
+        signal: status.and_then(|s| s.signal()),
+        timeout: timed_out,
+        cut: cut || c.cut,
+    };
+    let lead = if c.open_line { "\n" } else { "" };
+    let stdout = io::stdout();
+    let mut out = stdout.lock();
+    if writeln!(out, "{lead}{}", result_line(nonce, &outcome)).and_then(|_| out.flush()).is_err() {
+        return said(EXIT_NOT_RUN, "the result line could not be written: the exec closed");
     }
-    match status {
-        Ok(s) if s.code() == Some(0) => EXIT_OK,
-        Ok(s) => match (s.code(), s.signal()) {
-            (Some(code), _) => said(EXIT_PROGRAM_FAILED, &format!("the program exited with code {code}")),
-            (None, Some(sig)) => said(EXIT_PROGRAM_FAILED, &format!("the program was ended by signal {sig}")),
-            (None, None) => said(EXIT_PROGRAM_FAILED, "the program ended with no exit code"),
-        },
-        Err(e) => said(EXIT_PROGRAM_FAILED, &format!("the program's end could not be read: {e}")),
-    }
+    EXIT_DONE
 }
 
 #[cfg(test)]
@@ -478,54 +554,111 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_exit_statuses_and_limits_are_the_documented_ones() {
-        assert_eq!((EXIT_OK, EXIT_PROGRAM_FAILED, EXIT_USAGE, EXIT_NOT_STARTED, EXIT_TIMED_OUT, EXIT_OUTPUT_CAP, EXIT_CLOSED), (0, 1, 2, 3, 4, 5, 6));
-        assert_eq!(MAX_TIMEOUT_SECS, 900);
-        assert_eq!((MAX_SPEC_BYTES, MAX_INPUT_BYTES, MAX_OUTPUT_BYTES, MAX_ERROR_BYTES), (64 * 1024, 4 * 1024 * 1024, 8 * 1024 * 1024, 32 * 1024));
+    fn the_exit_statuses_and_limits_are_the_protocols() {
+        assert_eq!((EXIT_DONE, EXIT_NOT_RUN, EXIT_USAGE), (0, 1, 2));
+        assert_eq!((MIN_TIMEOUT_SECS, MAX_TIMEOUT_SECS), (30, 900));
+        assert_eq!((MAX_REQUEST_BYTES, MAX_INPUT_BYTES, MAX_OUTPUT_BYTES, MAX_ERROR_BYTES), (64 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024, 64 * 1024));
         assert_eq!((GRACE, DRAIN_WAIT), (Duration::from_secs(2), Duration::from_secs(2)));
     }
 
     #[test]
-    fn the_timeout_is_whole_seconds_from_1_to_900() {
-        assert_eq!(parse_timeout("1"), Some(1));
+    fn the_timeout_is_whole_seconds_from_30_to_900() {
+        assert_eq!(parse_timeout("30"), Some(30));
         assert_eq!(parse_timeout("330"), Some(330));
         assert_eq!(parse_timeout("900"), Some(900));
-        for bad in ["", "0", "901", "1000", "-1", "+5", "5s", " 5", "1.5", "00001"] {
+        for bad in ["", "0", "1", "29", "901", "1000", "-1", "+50", "50s", " 50", "50.0", "030", "0900"] {
             assert_eq!(parse_timeout(bad), None, "{bad:?}");
         }
     }
 
     #[test]
-    fn a_spec_of_the_three_fields_reads() {
-        let s = parse_spec(br#"{"argv":["/bin/echo","a b","$(x)"],"cwd":"/tmp","env":{"HOME":"/h","A_1":""}}"#).unwrap();
-        assert_eq!(s.argv, vec!["/bin/echo", "a b", "$(x)"]);
-        assert_eq!(s.cwd, "/tmp");
-        assert_eq!(s.env, vec![("HOME".to_string(), "/h".to_string()), ("A_1".to_string(), String::new())]);
+    fn the_nonce_is_32_lower_case_hex_characters() {
+        assert_eq!(parse_nonce("0123456789abcdef0123456789abcdef"), Some("0123456789abcdef0123456789abcdef"));
+        for bad in ["", "0123456789ABCDEF0123456789ABCDEF", "0123456789abcdef0123456789abcde", "0123456789abcdef0123456789abcdef0", "0123456789abcdef 123456789abcdef"] {
+            assert_eq!(parse_nonce(bad), None, "{bad:?}");
+        }
     }
 
     #[test]
-    fn any_other_spec_is_refused() {
+    fn a_request_of_the_three_fields_reads() {
+        let r = parse_request(br#"{"argv":["/bin/echo","a b","$(x)"],"cwd":"/tmp","env":{"HOME":"/h","A_1":""}}"#).unwrap();
+        assert_eq!(r.argv, vec!["/bin/echo", "a b", "$(x)"]);
+        assert_eq!(r.cwd, "/tmp");
+        assert_eq!(r.env, vec![("HOME".to_string(), "/h".to_string()), ("A_1".to_string(), String::new())]);
+        // The bounds term.launch has, at the bound.
+        let at = format!(r#"{{"argv":["/{}"],"cwd":"/{}","env":{{"{}":"{}"}}}}"#, "a".repeat(MAX_ARG_CHARS - 1), "c".repeat(MAX_CWD_CHARS - 1), "N".repeat(MAX_ENV_NAME_CHARS), "v".repeat(MAX_ENV_VALUE_CHARS));
+        assert!(parse_request(at.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn any_other_request_is_refused() {
         for bad in [
             &b"not json"[..],
             br#"[]"#,
             br#"{"argv":["/bin/echo"],"cwd":"/"}"#,
             br#"{"argv":["/bin/echo"],"cwd":"/","env":{},"shell":true}"#,
             br#"{"argv":["/bin/echo"],"argv":["/bin/sh"],"cwd":"/","env":{}}"#,
+            br#"{"argv":["/bin/echo"],"cwd":"/","cwd":"/tmp","env":{}}"#,
             br#"{"argv":[],"cwd":"/","env":{}}"#,
             br#"{"argv":["echo"],"cwd":"/","env":{}}"#,
+            br#"{"argv":["./echo"],"cwd":"/","env":{}}"#,
             br#"{"argv":["/bin/echo",1],"cwd":"/","env":{}}"#,
+            br#"{"argv":"/bin/echo","cwd":"/","env":{}}"#,
             br#"{"argv":["/bin/echo"],"cwd":"tmp","env":{}}"#,
+            br#"{"argv":["/bin/echo"],"cwd":1,"env":{}}"#,
             br#"{"argv":["/bin/echo"],"cwd":"/","env":{"A=B":"x"}}"#,
-            br#"{"argv":["/bin/echo"],"cwd":"/","env":{"1A":"x"}}"#,
+            br#"{"argv":["/bin/echo"],"cwd":"/","env":{"":"x"}}"#,
             br#"{"argv":["/bin/echo"],"cwd":"/","env":{"A":"x","A":"y"}}"#,
+            br#"{"argv":["/bin/echo"],"cwd":"/","env":{"Path":"x","PATH":"y"}}"#,
             br#"{"argv":["/bin/echo"],"cwd":"/","env":{"A":1}}"#,
             br#"{"argv":["/bin/echo"],"cwd":"/","env":[]}"#,
             br#"{"argv":["/bin/ec\u0000ho"],"cwd":"/","env":{}}"#,
+            br#"{"argv":["/bin/echo"],"cwd":"/","env":{"A":"x\u0000"}}"#,
         ] {
-            assert!(parse_spec(bad).is_err(), "{}", String::from_utf8_lossy(bad));
+            assert!(parse_request(bad).is_err(), "{}", String::from_utf8_lossy(bad));
         }
-        let many: Vec<String> = (0..=MAX_ARGS).map(|i| format!("\"a{i}\"")).collect();
-        let line = format!("{{\"argv\":[\"/bin/echo\",{}],\"cwd\":\"/\",\"env\":{{}}}}", many.join(","));
-        assert!(parse_spec(line.as_bytes()).is_err());
+        let over = |argv: String, cwd: String, env: String| format!(r#"{{"argv":[{argv}],"cwd":"{cwd}","env":{{{env}}}}}"#);
+        let many: Vec<String> = (0..=MAX_ARGV_ITEMS).map(|i| format!("\"/a{i}\"")).collect();
+        for line in [
+            over(many.join(","), "/".into(), String::new()),
+            over(format!("\"/{}\"", "a".repeat(MAX_ARG_CHARS)), "/".into(), String::new()),
+            over("\"/x\"".into(), format!("/{}", "c".repeat(MAX_CWD_CHARS)), String::new()),
+            over("\"/x\"".into(), "/".into(), format!("\"{}\":\"v\"", "N".repeat(MAX_ENV_NAME_CHARS + 1))),
+            over("\"/x\"".into(), "/".into(), format!("\"N\":\"{}\"", "v".repeat(MAX_ENV_VALUE_CHARS + 1))),
+            over("\"/x\"".into(), "/".into(), (0..=MAX_ENV_ENTRIES).map(|i| format!("\"N{i}\":\"\"")).collect::<Vec<_>>().join(",")),
+        ] {
+            assert!(parse_request(line.as_bytes()).is_err(), "{} bytes", line.len());
+        }
+    }
+
+    #[test]
+    fn the_request_line_and_the_input_are_read_within_their_bounds() {
+        let line = br#"{"argv":["/bin/cat"],"cwd":"/","env":{}}"#;
+        let mut ok = line.to_vec();
+        ok.push(b'\n');
+        ok.extend_from_slice(b"the prompt\n{\"not\":\"a request\"}");
+        let (r, input) = read_request(&mut &ok[..]).unwrap();
+        assert_eq!(r.argv, vec!["/bin/cat"]);
+        assert_eq!(input, b"the prompt\n{\"not\":\"a request\"}");
+        // No line end: never one line.
+        assert!(read_request(&mut &line[..]).is_err());
+        // A line past its bound, line end included.
+        let mut long = format!(r#"{{"argv":["/{}"],"cwd":"/","env":{{}}}}"#, "a".repeat(MAX_REQUEST_BYTES)).into_bytes();
+        long.push(b'\n');
+        assert!(read_request(&mut &long[..]).is_err());
+        // The input at its bound, and one byte past it.
+        let mut at = ok[..line.len() + 1].to_vec();
+        at.extend(std::iter::repeat(b'x').take(MAX_INPUT_BYTES));
+        assert_eq!(read_request(&mut &at[..]).unwrap().1.len(), MAX_INPUT_BYTES);
+        at.push(b'x');
+        assert!(read_request(&mut &at[..]).unwrap_err().contains("over 2 MiB"));
+    }
+
+    #[test]
+    fn the_result_line_is_the_documented_shape() {
+        let n = "0123456789abcdef0123456789abcdef";
+        assert_eq!(result_line(n, &Outcome { code: Some(0), signal: None, timeout: false, cut: false }), format!("AICC-RESULT {n} {{\"code\":0,\"signal\":null,\"timeout\":false,\"cut\":false}}"));
+        assert_eq!(result_line(n, &Outcome { code: None, signal: Some(9), timeout: true, cut: false }), format!("AICC-RESULT {n} {{\"code\":null,\"signal\":9,\"timeout\":true,\"cut\":false}}"));
+        assert_eq!(result_line(n, &Outcome { code: Some(141), signal: None, timeout: false, cut: true }), format!("AICC-RESULT {n} {{\"code\":141,\"signal\":null,\"timeout\":false,\"cut\":true}}"));
     }
 }

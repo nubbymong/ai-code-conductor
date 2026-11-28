@@ -30,7 +30,7 @@ import { createCodexExecEventReader } from './providers/codex/review'
 import { CODEX_MIN_SUPPORTED_VERSION, classifyCodexVersion } from './providers/codex/cli-contract'
 import { clip, finishReview, redactFailure, redactHead, MAX_MESSAGE } from './providers/review-support'
 import { machineName, type RemoteMachineRecord } from './remote-helper/machines'
-import { RUN_EXIT, hostReviewPaths, type HostMaterial, type HostReadInput, type HostRunResult, type HostRunSpec } from './remote-helper/review'
+import { RUN_OUTPUT_MAX, hostReviewPaths, type HostMaterial, type HostReadInput, type HostRunResult, type HostRunSpec } from './remote-helper/review'
 import type { RemoteReviewTarget } from './remote-helper/review-sessions'
 import {
   MAX_REVIEWS_PER_SESSION, REVIEW_TIMEOUT_MS, TIMEOUT_SECONDS_MAX, buildCodexPrompt, chooseCodexReview, codexRanOn, formatTimeoutForMessage, reviewArgsSchema, reviewsInFlight,
@@ -192,25 +192,22 @@ export async function runRemoteCodexReview(
     const reader = createCodexExecEventReader()
     reader.push(r.stdout)
     const out = reader.end()
-    // A run that never started ran on no model: its footer names none.
-    const started = !(r.failure !== undefined || r.exit === RUN_EXIT.notStarted || r.exit === RUN_EXIT.usage)
-    const ranOn = started ? codexRanOn(pick) : null
-    logInfo(`[codex-review] session ${sid}: on ${m.host}, ${r.exit === RUN_EXIT.ok ? 'reviewed' : `ended (${r.cancelled ? 'cancelled' : r.timedOut ? 'timed out' : r.failure ? 'not run' : `run ${r.exit ?? 'none'}`})`}`)
+    // The run mode's result line says how Codex's run ended there; with none,
+    // Codex is not known to have run, so the footer names no model.
+    const ended = r.outcome
+    const ranOn = ended ? codexRanOn(pick) : null
+    logInfo(`[codex-review] session ${sid}: on ${m.host}, ${ended && ended.code === 0 && !ended.timeout && !ended.cut ? 'reviewed' : `ended (${r.cancelled ? 'cancelled' : r.timedOut || ended?.timeout ? 'timed out' : ended?.cut ? 'cut' : ended ? `code ${ended.code ?? 'none'}, signal ${ended.signal ?? 'none'}` : 'not run'})`}`)
     if (out.usage) { try { deps.onUsage?.(sid, out.usage) } catch { /* the usage record never replaces the result */ } }
     if (r.cancelled || stop.signal.aborted) return { isError: true, text: 'Codex review was cancelled.' }
-    if (r.failure !== undefined) return { isError: true, text: `Codex review did not run on ${name}: ${r.failure}.${formatRemoteFooter(undefined, name, null)}` }
-    if (r.timedOut) {
+    if (r.timedOut || ended?.timeout) {
       return { isError: true, text: `Codex review timed out on ${name} after ${formatTimeoutForMessage(timeoutMs)}${ranOn !== null ? ` (on ${ranOn})` : ''}. Try a smaller scope (e.g. mode: "paths") or raise timeoutSeconds (max ${TIMEOUT_SECONDS_MAX}).` }
     }
-    const tail = hostErrorTail(r.stderr)
-    if (r.exit === RUN_EXIT.notStarted || r.exit === RUN_EXIT.usage) {
-      return { isError: true, text: `Codex could not be started on ${name}${tail ? `: ${clip(tail)}` : ''}.${formatRemoteFooter(undefined, name, null)}` }
-    }
-    if (r.exit === RUN_EXIT.outputCap) return { isError: true, text: `Codex review failed on ${name}: Codex printed more than this app reads, so it was ended.${formatRemoteFooter(out.usage, name, ranOn)}` }
-    if (r.exit === RUN_EXIT.closed) return { isError: true, text: `Codex review failed on ${name}: the link to the machine closed before the review ended.${formatRemoteFooter(out.usage, name, ranOn)}` }
-    if (r.exit !== RUN_EXIT.ok) {
-      const detail = out.error !== undefined ? clip(redactHead(out.error, redactFailure)) : tail
-      return { isError: true, text: `Codex review failed on ${name}: Codex exited with an error${detail ? `: ${detail}` : ''}.${formatRemoteFooter(out.usage, name, ranOn)}` }
+    if (!ended) return { isError: true, text: `Codex review did not run on ${name}: ${r.failure ?? 'the session helper gave no result'}.${formatRemoteFooter(undefined, name, null)}` }
+    if (ended.cut) return { isError: true, text: `Codex review failed on ${name}: Codex printed more than ${RUN_OUTPUT_MAX / (1024 * 1024)} MiB, more than this app reads, so it was ended.${formatRemoteFooter(out.usage, name, ranOn)}` }
+    if (ended.code !== 0) {
+      const how = ended.code !== null ? `exited with code ${ended.code}` : `was ended by signal ${ended.signal ?? 'unknown'}`
+      const detail = out.error !== undefined ? clip(redactHead(out.error, redactFailure)) : clip(hostErrorTail(r.stderr))
+      return { isError: true, text: `Codex review failed on ${name}: Codex ${how}${detail ? `: ${detail}` : ''}.${formatRemoteFooter(out.usage, name, ranOn)}` }
     }
     if (out.text === null || !out.text.trim()) {
       const why = out.error !== undefined ? clip(redactHead(out.error, redactFailure)) : out.dropped ? 'Codex printed an event larger than this app reads, and no review after it.' : 'Codex returned no review.'

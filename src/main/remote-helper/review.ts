@@ -13,10 +13,12 @@
  *   path. A folder that is the host's home folder or above it is refused
  *   there too, as registration refuses it here (./review-sessions.ts).
  * - The program runs through the helper's one-shot run mode (ADR-030
- *   protocol change 6; helper/src/run.rs): one `ssh -T` exec of the `run`
- *   script, the spec (its argv, its folder and its environment) and its input
- *   on standard input, its output back. No shell starts it, and a stop here
- *   ends ssh, which ends the program's process group there.
+ *   protocol change 6; docs/remote/helper-protocol.md section 4;
+ *   helper/src/run.rs): one `ssh -T` exec of the `run` script, the request
+ *   line (its argv, its folder and its environment) and its input on
+ *   standard input, its output back, then the run mode's result line, last.
+ *   No shell starts it, and a stop here ends ssh, which closes the exec there,
+ *   and the run mode ends the program's session.
  * - Limits (docs/remote/helper-protocol.md section 10): the host read is a
  *   one-shot exec (EXEC_TIMEOUT_MS, 60 s); the run mode's own limit is the
  *   review's timeout, and its exec gets REMOTE_RUN_EXTRA_MS (30 s) more; an
@@ -30,9 +32,9 @@
  * This file imports nothing of Electron.
  */
 import * as path from 'path'
-import { REVIEW_DIFF_MAX_BYTES, REVIEW_FILE_LINE_BYTES, type ReviewFile } from '../review-diff'
+import { REVIEW_DIFF_MAX_BYTES, REVIEW_FILE_LINE_BYTES, parseReviewRange, type ReviewFile } from '../review-diff'
 import { REVIEW_READ_MAX, RUN_TIMEOUT_RE } from './scripts'
-import { EXEC_TIMEOUT_MS, afterHashLine, markedLines, newNonce, notStartedLogLine, readHashLine, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
+import { EXEC_TIMEOUT_MS, PREAMBLE_MAX, afterHashLine, markedLines, newNonce, notStartedLogLine, readHashLine, runScript, sshFailure, type SshRunner, type SshTarget } from './ssh-exec'
 import { machineName, refusalText, type RemoteMachineRecord } from './machines'
 
 /** The run mode's exec past the review's own timeout. */
@@ -48,14 +50,20 @@ export function remoteReviewLimits(timeoutMs: number): { readMs: number; runMs: 
   return { readMs: EXEC_TIMEOUT_MS, runMs: timeoutMs + REMOTE_RUN_EXTRA_MS, relayMs: Math.min(timeoutMs + REMOTE_RELAY_EXTRA_MS, REMOTE_RELAY_MAX_MS) }
 }
 
-/** The run mode's output kept, at most: its own cap (8 MiB, run.rs
- *  MAX_OUTPUT_BYTES) and what rc files may print before the hash line. */
-export const RUN_STDOUT_MAX = 8 * 1024 * 1024 + 128 * 1024
+/** The run mode's request line, at most, its line end included (run.rs MAX_REQUEST_BYTES). */
+export const RUN_REQUEST_MAX = 64 * 1024
+/** The program's input (a review's prompt), at most (run.rs MAX_INPUT_BYTES):
+ *  past it the run mode refuses, never cuts, so the app refuses first. */
+export const RUN_INPUT_MAX = 2 * 1024 * 1024
+/** What the run mode copies of the program's output, at most (run.rs MAX_OUTPUT_BYTES). */
+export const RUN_OUTPUT_MAX = 4 * 1024 * 1024
+/** What the run's exec keeps, at most: above the run mode's own cap, the
+ *  line end it may add, what rc files print before the hash line
+ *  (PREAMBLE_MAX), the hash line and the result line (section 4), not
+ *  EXEC_STDOUT_MAX's 2 MiB. */
+export const RUN_STDOUT_MAX = RUN_OUTPUT_MAX + 1 + PREAMBLE_MAX + 4 * 1024
 /** The host read's output kept: the material as hex, and room for its lines. */
 export const READ_STDOUT_MAX = 2 * REVIEW_READ_MAX + 256 * 1024
-
-/** The run mode's exit statuses (helper/src/run.rs). */
-export const RUN_EXIT = { ok: 0, failed: 1, usage: 2, notStarted: 3, timedOut: 4, outputCap: 5, closed: 6 } as const
 
 /** Where a host review's execs run. */
 export interface HostReviewCtx {
@@ -140,7 +148,13 @@ function readRefusal(word: string | null, m: RemoteMachineRecord, fileHex: strin
  */
 export async function readHostReviewMaterial(ctx: HostReviewCtx, m: RemoteMachineRecord, input: HostReadInput): Promise<HostMaterial> {
   const lines = [input.cwd, input.mode]
-  if (input.mode === 'range') lines.push(input.range ?? '')
+  if (input.mode === 'range') {
+    // The range as this computer reads it (review-diff.ts parseReviewRange),
+    // so the host's git is given only what a review here would give its own.
+    const range = parseReviewRange(input.range ?? '')
+    if (!range) return { ok: false, message: readRefusal('bad-range', m, undefined, null) }
+    lines.push(`${range.from}${range.op}${range.to}`)
+  }
   if (input.mode === 'paths') lines.push(...(input.paths ?? []))
   if (!lines.every((l) => PLAIN_LINE.test(l))) return { ok: false, message: 'the request holds a line end or a NUL, so it was not sent' }
   const scope = (input.paths ?? []).reduce((n, p) => n + Buffer.byteLength(p) + 2, 0)
@@ -198,46 +212,106 @@ export interface HostRunSpec {
   env: Readonly<Record<string, string>>
 }
 
-/** How one run on the host ended. `exit`: the run mode's status (RUN_EXIT),
- *  null when ssh ended otherwise; `failure`: why ssh itself failed. */
+/** How the program's run ended, as the run mode's result line says it
+ *  (docs/remote/helper-protocol.md section 4). */
+export interface RunOutcome {
+  /** Its exit code; null when a signal ended it, or it was not reaped. */
+  code: number | null
+  /** The signal that ended it; null when it exited by itself. */
+  signal: number | null
+  /** The review's own timeout passed there (`--timeout`), and its session was ended. */
+  timeout: boolean
+  /** It printed more than RUN_OUTPUT_MAX, and its session was ended. */
+  cut: boolean
+}
+
+/** How one run on the host ended. */
 export interface HostRunResult {
-  exit: number | null
-  /** What the program printed on its standard output. */
+  /** The run mode's result line: the program ran there, and this is how it
+   *  ended. Null when no result line came (`failure`, `timedOut`, `cancelled`). */
+  outcome: RunOutcome | null
+  /** What the program printed on its standard output: everything between
+   *  the launcher's hash line and the result line, as data. */
   stdout: string
   /** What the program and the run mode wrote on standard error (64 KiB at most). */
   stderr: string
+  /** The exec itself ran past the review's own timeout and 30 s, and ssh was stopped. */
   timedOut: boolean
   cancelled: boolean
+  /** Why no result line came: ssh failed, the helper did not pass its hash
+   *  check, or the run mode started nothing (its own words). */
   failure?: string
 }
 
+const RESULT_KEYS = ['code', 'signal', 'timeout', 'cut']
+const intOrNull = (v: unknown): v is number | null => v === null || (typeof v === 'number' && Number.isSafeInteger(v))
+
+/**
+ * The run mode's result line, read from what followed the launcher's hash
+ * line: the LAST line, ended by a line end, `AICC-RESULT <nonce> <object>`
+ * with this exec's nonce and exactly the object's four fields, each of its
+ * type. Everything before it is the program's output. Null for anything
+ * else: such an exec is failed (section 4), never read as a result.
+ */
+export function parseRunResult(afterHash: string, nonce: string): { outcome: RunOutcome; output: string } | null {
+  if (!afterHash.endsWith('\n')) return null
+  const body = afterHash.slice(0, -1)
+  const at = body.lastIndexOf('\n') + 1
+  const prefix = `AICC-RESULT ${nonce} `
+  const last = body.slice(at)
+  if (!last.startsWith(prefix)) return null
+  let v: unknown
+  try { v = JSON.parse(last.slice(prefix.length)) } catch { return null }
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const o = v as Record<string, unknown>
+  const keys = Object.keys(o)
+  if (keys.length !== RESULT_KEYS.length || !RESULT_KEYS.every((k) => keys.includes(k))) return null
+  if (!intOrNull(o.code) || !intOrNull(o.signal) || typeof o.timeout !== 'boolean' || typeof o.cut !== 'boolean') return null
+  return { outcome: { code: o.code, signal: o.signal, timeout: o.timeout, cut: o.cut }, output: afterHash.slice(0, at) }
+}
+
+/** What the run mode writes first on standard error when it starts nothing (run.rs `said`). */
+const RUN_SAYS = 'aicc-helper: run: '
+
 /**
  * Run one program on the host through the helper's run mode (the `run`
- * script). `timeoutMs` is the run's own limit (whole seconds, 1 to 900 s);
- * the exec gets REMOTE_RUN_EXTRA_MS more. A stop (`signal`) ends ssh, which
- * closes the exec, and the run mode ends the program's group there. Never
- * throws.
+ * script). `timeoutMs` is the review's own timeout, the run mode's
+ * `--timeout` (whole seconds, 30 to 900); the exec gets REMOTE_RUN_EXTRA_MS
+ * more (section 10). The request line and the input are checked against the
+ * run mode's bounds here first, so nothing is sent that it would refuse. A
+ * stop (`signal`) ends ssh, which closes the exec, and the run mode ends the
+ * program's session there. Never throws.
  */
 export async function runOnHost(ctx: HostReviewCtx, m: RemoteMachineRecord, spec: HostRunSpec, input: string, timeoutMs: number, signal?: AbortSignal): Promise<HostRunResult> {
+  const none = (failure: string, stderr = ''): HostRunResult => ({ outcome: null, stdout: '', stderr, timedOut: false, cancelled: false, failure })
   const secs = String(Math.ceil(timeoutMs / 1000))
-  const none = (failure: string): HostRunResult => ({ exit: null, stdout: '', stderr: '', timedOut: false, cancelled: false, failure })
-  if (!RUN_TIMEOUT_RE.test(secs)) return none('its timeout is not 1 to 900 seconds')
+  if (!RUN_TIMEOUT_RE.test(secs)) return none('its timeout is not 30 to 900 seconds')
+  const head = Buffer.from(`${JSON.stringify({ argv: [...spec.argv], cwd: spec.cwd, env: { ...spec.env } })}\n`, 'utf8')
+  if (head.length > RUN_REQUEST_MAX) return none(`its request line is over ${RUN_REQUEST_MAX / 1024} KiB, so it was not sent`)
+  const body = Buffer.from(input, 'utf8')
+  if (body.length > RUN_INPUT_MAX) return none(`its input is over ${RUN_INPUT_MAX / (1024 * 1024)} MiB, so it was not sent`)
   if (signal?.aborted) return { ...none('cancelled'), cancelled: true }
   const nonce = newNonce()
-  const head = `${JSON.stringify({ argv: [...spec.argv], cwd: spec.cwd, env: { ...spec.env } })}\n`
   const r = await runScript(ctx.runner, targetOf(m), 'run', [nonce, m.did, ctx.installId, m.helper.folder, m.helper.sha256, secs], {
-    stdin: Buffer.concat([Buffer.from(head, 'utf8'), Buffer.from(input, 'utf8')]),
+    stdin: Buffer.concat([head, body]),
     timeoutMs: timeoutMs + REMOTE_RUN_EXTRA_MS,
     stdoutMax: RUN_STDOUT_MAX,
     ...(signal ? { signal } : {}),
   })
-  if (signal?.aborted) return { exit: null, stdout: '', stderr: r.stderr, timedOut: false, cancelled: true }
+  if (signal?.aborted) return { outcome: null, stdout: '', stderr: r.stderr, timedOut: false, cancelled: true }
   if (r.notStarted) ctx.log(notStartedLogLine(m.host, r.stderr))
-  if (r.timedOut) return { exit: null, stdout: '', stderr: r.stderr, timedOut: true, cancelled: false }
+  if (r.timedOut) return { outcome: null, stdout: '', stderr: r.stderr, timedOut: true, cancelled: false }
   const failed = sshFailure(r)
-  if (failed) return { ...none(`${m.host} could not be reached: ${failed}`), stderr: r.stderr }
+  if (failed) return none(`${m.host} could not be reached: ${failed}`, r.stderr)
   const hash = readHashLine(r.stdout, nonce)
-  if (!hash) return { ...none(`${machineName(m)} did not answer the session helper (is it still added? press Check on the Machines page)`), stderr: r.stderr }
-  if (hash.state !== 'ok') return { ...none(`the session helper file on ${m.host} did not pass its hash check (${hash.state}); press Check on the Machines page`), stderr: r.stderr }
-  return { exit: r.code, stdout: afterHashLine(r.stdout, nonce), stderr: r.stderr, timedOut: r.code === RUN_EXIT.timedOut, cancelled: false }
+  if (!hash) return none(`${machineName(m)} did not answer the session helper (is it still added? press Check on the Machines page)`, r.stderr)
+  if (hash.state !== 'ok') return none(`the session helper file on ${m.host} did not pass its hash check (${hash.state}); press Check on the Machines page`, r.stderr)
+  const parsed = r.code === 0 ? parseRunResult(afterHashLine(r.stdout, nonce), nonce) : null
+  if (parsed) return { outcome: parsed.outcome, stdout: parsed.output, stderr: r.stderr, timedOut: false, cancelled: false }
+  // No result line: the run mode started nothing (exit 1, its words on
+  // standard error), or the exec ended some other way. Either way nothing is
+  // read as the program's.
+  const said = r.code === 1 ? r.stderr.split(/\r?\n/).find((l) => l.startsWith(RUN_SAYS)) : undefined
+  if (said) return none(`the session helper started nothing there: ${said.slice(RUN_SAYS.length).slice(0, 300)}`, r.stderr)
+  return none(`the session helper's run mode gave no result line (exit ${r.code ?? 'none'}), so nothing it printed is read`, r.stderr)
 }

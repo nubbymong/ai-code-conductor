@@ -380,8 +380,9 @@ const REVIEW_PROBE_READS = [
   `Q=$HOME/.aicc/${REVIEW_PROBES_FILE}; if [ -f "$Q" ] && [ ! -L "$Q" ]; then set -- $(ls -ldn "$Q"); [ "$3" = "$u" ] && r review-probes "$(head -c 300 "$Q" 2>/dev/null | head -n 1)"; fi`,
 ]
 
-/** The run mode's timeout, in whole seconds: 1 to 900 (a review's own). */
-export const RUN_TIMEOUT_RE = /^([1-9][0-9]?|[1-8][0-9]{2}|900)$/
+/** The run mode's timeout, in whole seconds: 30 to 900, a review's own
+ *  (docs/remote/helper-protocol.md section 4; helper/src/run.rs parse_timeout). */
+export const RUN_TIMEOUT_RE = /^([3-9][0-9]|[1-8][0-9]{2}|900)$/
 
 /** The most of a review's material a host read prints (the change, or the
  *  named files with their names): REVIEW_DIFF_MAX_BYTES, as on this computer. */
@@ -912,13 +913,14 @@ const SPECS = {
       'r end ok',
     ]),
   },
-  /** 2.1.3-beta.21 (aicc_planning#446; ADR-030 protocol change 6): the
-   *  helper's one-shot run mode, through the launcher: after the hash line,
-   *  `aicc-helper run --timeout <T>` reads its spec line and the program's
-   *  input from standard input, as the app sent them, and its standard output
-   *  is the program's (helper/src/run.rs). The program's path and folder are
-   *  in the spec, never on this command line: they are values the machine
-   *  reported. */
+  /** 2.1.3-beta.21 (aicc_planning#446; ADR-030 protocol change 6,
+   *  docs/remote/helper-protocol.md section 4): the helper's one-shot run
+   *  mode, through the launcher. After the hash line, `aicc-helper run
+   *  --nonce <N> --timeout <T>` reads its request line and the program's
+   *  input from standard input, as the app sent them; its standard output is
+   *  the program's, then its result line, last (helper/src/run.rs). The
+   *  program's path and folder are in the request, never on this command
+   *  line: they are values the machine reported. */
   run: {
     values: [FOLDER, HASH, { name: 'run timeout', re: RUN_TIMEOUT_RE }],
     text: join([
@@ -926,7 +928,7 @@ const SPECS = {
       ...CHECKS,
       'case "$T" in *[!0-9]*|"") no bad-timeout;; esac',
       ...LAUNCH,
-      'exec "$P" run --timeout "$T"',
+      'exec "$P" run --nonce "$N" --timeout "$T"',
     ]),
   },
   /** 2.1.3-beta.21 (aicc_planning#446): the material of a review on the
