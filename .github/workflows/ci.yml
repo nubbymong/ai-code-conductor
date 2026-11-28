@@ -1475,9 +1475,10 @@ jobs:
   # Linux runs under Xvfb (X11; Wayland is not measured here, and is written
   # down as not measured). Claude Code reads the clipboard there by running
   # xclip or wl-paste, so the spec runs once per state of the two: neither
-  # (both removed first), xclip, and for `probe` wl-clipboard alone; each run
-  # is its own Playwright run with PASTE_E2E_LINUX_TOOLS naming the state, and
-  # the next state's run goes on whatever the last one answered. Electron's
+  # (both removed first), xclip, then wl-clipboard alone (which, under X11,
+  # probe PL1 read does not serve Claude Code); each run is its own
+  # Playwright run with PASTE_E2E_LINUX_TOOLS naming the state, and the next
+  # state's run goes on whatever the last one answered. Electron's
   # sandbox helper is made root's and setuid, as Electron's own Linux CI does,
   # so the app starts with its sandbox on.
   #
@@ -1486,10 +1487,9 @@ jobs:
   # (scripts/ci/playwright-no-retry.mjs). A red run is answered by its cause,
   # never by a retry, a longer timer or a looser bound. The timeout is set
   # from the presses: about 10 minutes of build and installs; macOS about 12
-  # for either part; Linux, per state, two tabs' start (4 min) and its
-  # presses (about 4 min for `probe`, 9 for `readings`), three states for
-  # `probe` and two for `readings`: 60 and 50 minutes. Never raised to answer
-  # a red run.
+  # for either part; Linux, three states, each two tabs' start (4 min) and
+  # its presses (about 4 min for `probe`; for `readings` 9 with xclip and
+  # 3 without): 60 and 50 minutes. Never raised to answer a red run.
   #
   # It runs ONLY on a dispatch that names it (`paste_e2e`, `probe` or
   # `readings`), never on a pull request or a push. It is section evidence:
@@ -1656,15 +1656,15 @@ jobs:
           REPORT: ${{ runner.temp }}/paste-e2e/report-linux-xclip.json
         run: node scripts/ci/playwright-no-retry.mjs "$REPORT"
 
-      - name: Swap xclip for wl-clipboard (Linux, probe only)
-        if: ${{ runner.os == 'Linux' && inputs.paste_e2e == 'probe' && !cancelled() }}
+      - name: Swap xclip for wl-clipboard (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
         shell: bash
         run: |
           sudo apt-get remove -y -q xclip
           sudo apt-get install -y -q wl-clipboard
 
-      - name: Run the paste end-to-end check, wl-paste alone (Linux, probe only)
-        if: ${{ runner.os == 'Linux' && inputs.paste_e2e == 'probe' && !cancelled() }}
+      - name: Run the paste end-to-end check, wl-paste alone (Linux)
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
         shell: bash
         env:
           PASTE_E2E: ${{ inputs.paste_e2e }}
@@ -1676,7 +1676,7 @@ jobs:
         run: xvfb-run -a --server-args="-screen 0 1920x1080x24" npx playwright test tests/e2e/paste-unix.spec.ts --retries=0 --workers=1 --reporter=list,json
 
       - name: Fail a Linux run Playwright retried or reported flaky, wl-paste alone
-        if: ${{ runner.os == 'Linux' && inputs.paste_e2e == 'probe' && !cancelled() }}
+        if: ${{ runner.os == 'Linux' && !cancelled() }}
         shell: bash
         env:
           REPORT: ${{ runner.temp }}/paste-e2e/report-linux-wl-paste.json

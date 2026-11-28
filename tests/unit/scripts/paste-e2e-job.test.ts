@@ -17,7 +17,7 @@ import { TEST_JOB_RE } from '../../../scripts/release-gate.mjs'
  * retries off, and each run's report is read by the no-retry check, which
  * runs even after a red Playwright step. On Linux the spec runs once per
  * state of the programs Claude Code reads the clipboard with, under Xvfb,
- * in the order neither, xclip, then (probe only) wl-paste alone. Its
+ * in the order neither, xclip, then wl-paste alone. Its
  * condition is EVALUATED here for each event, as snap-e2e-job.test.ts does.
  * Red on e89996bb: no such job.
  *
@@ -156,7 +156,7 @@ describe('ci.yml: the Paste e2e job only reads, runs Playwright once per test, a
       'Run the paste end-to-end check (macOS)',
       'Run the paste end-to-end check, neither program (Linux)',
       'Run the paste end-to-end check, xclip (Linux)',
-      'Run the paste end-to-end check, wl-paste alone (Linux, probe only)',
+      'Run the paste end-to-end check, wl-paste alone (Linux)',
     ])
     for (const run of runSteps) {
       const cmd = String(run.run).trim()
@@ -182,25 +182,25 @@ describe('ci.yml: the Paste e2e job only reads, runs Playwright once per test, a
     expect(read(SPEC)).toContain('PASTE_E2E_CLAUDE')
   })
 
-  it('on Linux: under Xvfb, neither program first (both removed), then xclip, then (probe only) wl-paste alone; each state named to the spec', () => {
+  it('on Linux: under Xvfb, neither program first (both removed), then xclip, then wl-paste alone; each state named to the spec, for both parts', () => {
     const linux = job.steps.filter((s) => on(s, 'Linux', 'probe') && !on(s, 'macOS', 'probe'))
-    const order = ['Let Electron\'s sandbox helper run (Linux)', 'Install Xvfb (Linux)', 'Remove xclip and wl-clipboard (Linux)', 'Run the paste end-to-end check, neither program (Linux)', 'Install xclip (Linux)', 'Run the paste end-to-end check, xclip (Linux)', 'Swap xclip for wl-clipboard (Linux, probe only)', 'Run the paste end-to-end check, wl-paste alone (Linux, probe only)']
+    const order = ['Let Electron\'s sandbox helper run (Linux)', 'Install Xvfb (Linux)', 'Remove xclip and wl-clipboard (Linux)', 'Run the paste end-to-end check, neither program (Linux)', 'Install xclip (Linux)', 'Run the paste end-to-end check, xclip (Linux)', 'Swap xclip for wl-clipboard (Linux)', 'Run the paste end-to-end check, wl-paste alone (Linux)']
     const at = order.map((n) => names().indexOf(n))
     expect(at.every((i) => i >= 0), JSON.stringify(names())).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
     for (const n of order) expect(linux.map((s) => s.name), n).toContain(n)
     expect(String(step('Remove xclip and wl-clipboard (Linux)').run)).toMatch(/apt-get remove -y -q xclip wl-clipboard/)
     expect(String(step('Install xclip (Linux)').run)).toMatch(/apt-get install -y -q xclip$/)
-    expect(String(step('Swap xclip for wl-clipboard (Linux, probe only)').run)).toMatch(/apt-get remove -y -q xclip\n.*apt-get install -y -q wl-clipboard/)
+    expect(String(step('Swap xclip for wl-clipboard (Linux)').run)).toMatch(/apt-get remove -y -q xclip\n.*apt-get install -y -q wl-clipboard/)
     const tools = { 'neither program': 'none', xclip: 'xclip', 'wl-paste alone': 'wl-paste' } as const
     for (const [label, value] of Object.entries(tools)) {
       const run = job.steps.find((s) => String(s.name).startsWith(`Run the paste end-to-end check, ${label}`))!
       expect(run.env?.PASTE_E2E_LINUX_TOOLS, label).toBe(value)
       expect(String(run.run).startsWith('xvfb-run -a '), label).toBe(true)
     }
-    // The wl-paste state is the probe's only; readings run the other two.
-    expect(on(step('Run the paste end-to-end check, wl-paste alone (Linux, probe only)'), 'Linux', 'readings')).toBe(false)
-    expect(on(step('Run the paste end-to-end check, xclip (Linux)'), 'Linux', 'readings')).toBe(true)
+    // Every state for both parts: readings check the hint without xclip,
+    // with neither program and with wl-paste alone (PL1).
+    for (const n of order) expect(on(step(n), 'Linux', 'readings'), n).toBe(true)
     // None of it on macOS, and the macOS run not on Linux.
     for (const n of order) expect(on(step(n), 'macOS', 'probe'), n).toBe(false)
     expect(on(step('Run the paste end-to-end check (macOS)'), 'Linux', 'probe')).toBe(false)

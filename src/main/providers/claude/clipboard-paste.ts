@@ -23,9 +23,9 @@
 // a copied file list, so the app writes a copied image file as a picture for
 // it. macOS: osascript, `«class PNGf»`. Linux: wl-paste or xclip; a copied
 // image file is not read on Linux (src/main/clipboard-file.ts), as before.
-// With neither program installed on Linux, Claude Code's own paste cannot
-// read the picture, so the app sends no key and the hint names the two
-// (plan 2.1.3-beta.21 phase 3, 3.1; claudeClipboardToolMissing below).
+// Without the program its read needs on Linux, Claude Code's own paste
+// cannot read the picture, so the app sends no key and the hint names the
+// two (plan 2.1.3-beta.21 phase 3, 3.1; claudeClipboardToolMissing below).
 import { readFileSync, statSync } from 'fs'
 import { join } from 'path'
 import * as os from 'os'
@@ -39,16 +39,21 @@ export const CLAUDE_LINUX_CLIPBOARD_TOOLS = ['xclip', 'wl-paste'] as const
 const SYSTEM_PROGRAM_FOLDERS = ['/usr/local/bin', '/usr/bin', '/bin']
 
 /**
- * Whether neither program Claude Code reads the clipboard with on Linux is
- * installed: neither `xclip` nor `wl-paste` in PATH's absolute folders or the
- * system's, as a file this user may run. Never on Windows or macOS, where
- * Claude Code reads the clipboard with a program the system ships
- * (PowerShell, osascript).
+ * Whether the program Claude Code reads the clipboard with on Linux is
+ * missing, looked for in PATH's absolute folders and the system's as a file
+ * this user may run. Under X11 (WAYLAND_DISPLAY unset or empty) it needs
+ * xclip: probe PL1 (run 46139776011, the GitHub Ubuntu runner under Xvfb)
+ * read Claude Code 2.1.332 attach a picture with xclip and not with wl-paste
+ * alone. Under Wayland, which no probe has measured, either one is taken.
+ * Never on Windows or macOS, where Claude Code reads the clipboard with a
+ * program the system ships (PowerShell, osascript).
  */
-export function claudeClipboardToolMissing(platform: NodeJS.Platform, pathValue: string, runnable?: (p: string) => boolean): boolean {
+export function claudeClipboardToolMissing(platform: NodeJS.Platform, env: Readonly<Record<string, string | undefined>>, runnable?: (p: string) => boolean): boolean {
   if (platform !== 'linux') return false
-  const folders = [pathValue, ...SYSTEM_PROGRAM_FOLDERS].join(':')
-  return CLAUDE_LINUX_CLIPBOARD_TOOLS.every((name) => findOnPosixPath(name, folders, runnable) === null)
+  const folders = [env.PATH ?? '', ...SYSTEM_PROGRAM_FOLDERS].join(':')
+  const there = (name: string) => findOnPosixPath(name, folders, runnable) !== null
+  const wayland = typeof env.WAYLAND_DISPLAY === 'string' && env.WAYLAND_DISPLAY !== ''
+  return wayland ? !CLAUDE_LINUX_CLIPBOARD_TOOLS.some(there) : !there('xclip')
 }
 
 /** Claude Code's action name for its image paste. */
@@ -195,10 +200,11 @@ export const CLAUDE_CLIPBOARD_PASTE: ClipboardPasteRule = {
   // copied file is not read on Linux by anyone.
   readsCopiedFile: () => false,
   formats: (platform) => (platform === 'win32' ? ['CF_DIB', 'PNG'] : platform === 'darwin' ? ['public.png'] : ['image/png']),
-  // The app's own PATH and the system folders: a local session's login
-  // shell (login-shell.ts) builds its PATH from the user's profile, which
-  // names the system folders too.
-  clipboardToolMissing: (platform) => claudeClipboardToolMissing(platform, process.env.PATH ?? ''),
+  // The app's own environment, which a local session's Claude Code
+  // inherits: its PATH and the system folders (the session's login shell,
+  // login-shell.ts, builds its PATH from the user's profile, which names the
+  // system folders too), and WAYLAND_DISPLAY.
+  clipboardToolMissing: (platform) => claudeClipboardToolMissing(platform, process.env),
   // The path route behind the test switch only (plan Q5; deleted in
   // 2.1.3-beta.22): what the renderer types when main did not paste the path.
   pathRouteLine: 'enter',

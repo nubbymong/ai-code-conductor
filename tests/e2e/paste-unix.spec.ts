@@ -43,6 +43,19 @@
  *     xclip is installed. If a CLI does not attach under X11 (with its
  *     program there), Snap on Linux says it is not available on this
  *     computer in this beta, and the owner is told.
+ *   READ, probe run 46139776011 (b33fd288). PM1: the app's write left
+ *     «class PNGf» and TIFF picture (with the system's own translations
+ *     beside them); Claude Code showed "[Image #N]" 345 ms after Ctrl+V and
+ *     Codex 213 ms, each turn carrying the picture by its pixels: PM1 PASSES,
+ *     and the writer stays as built. The W3C write alone and the W3C write
+ *     with the TIFF were read the same way by both CLIs (recorded). PM2: the
+ *     square root sign was typed into both CLIs' composers and no placeholder
+ *     showed: beta.20's focused Option+V pasted nothing, as suspected. PL1:
+ *     Codex attached in all three states (54 ms); Claude Code attached with
+ *     xclip (59 ms; TARGETS listed image/png) and not with wl-paste alone or
+ *     with neither. Both writes the same. So under X11 Claude Code needs
+ *     xclip, and the hint's rule follows that reading (the Claude package's
+ *     claudeClipboardToolMissing); no CLI is shown not available.
  * NOT MEASURED HERE, and written down as not measured: Wayland desktops, and
  * the macOS privacy prompt (Paste from Other Apps). The real-Mac check is
  * 2.1.3-beta.23's, with aicc_planning#448.
@@ -60,8 +73,9 @@
  *   - macOS: a copied PNG file (a file URL, as Finder leaves it) and the key
  *     from outside: Claude Code gets the picture the app writes, Codex reads
  *     the file itself; `clipboard info` after it is the app writer's own;
- *   - Linux with neither xclip nor wl-paste: Claude Code gets no key and the
- *     paste hint names both programs; Codex pastes as before.
+ *   - Linux under X11 without xclip (neither program, or wl-paste alone,
+ *     which PL1 read does not serve Claude Code there): Claude Code gets no
+ *     key and the paste hint names both programs; Codex pastes as before.
  * A red press is diagnosed from its readings, never retried.
  */
 import { test, expect, type ElectronApplication, type Page } from '@playwright/test'
@@ -123,7 +137,9 @@ function save(name: string, value: unknown): void {
 // ── the environment: a minimal one, never the runner's whole ───────────────
 /** The runner's variables a launched app or CLI keeps, beside the ones the
  *  isolated launch sets itself (helpers/isolated-env.ts). */
-const KEEP = IS_LINUX ? ['USER', 'LOGNAME', 'LANG', 'DISPLAY', 'XAUTHORITY'] : ['USER', 'LOGNAME', 'LANG']
+// TMPDIR stays the runner's own: Chromium's single-instance socket is made
+// in it, and a deeper folder would pass macOS's 104-byte socket path limit.
+const KEEP = IS_LINUX ? ['USER', 'LOGNAME', 'LANG', 'TMPDIR', 'DISPLAY', 'XAUTHORITY'] : ['USER', 'LOGNAME', 'LANG', 'TMPDIR']
 const FIXED_BY_LAUNCH = new Set(['NODE_ENV', 'E2E_HEADLESS', 'CCC_E2E_DATA_DIR', 'CCC_FORCE_SPLASH', 'USERPROFILE', 'HOME'])
 const SYSTEM_PATH = ['/usr/local/bin', '/usr/bin', '/bin', '/usr/sbin', '/sbin']
 const nodeDir = path.dirname(process.execPath)
@@ -221,7 +237,6 @@ async function launch(name: string): Promise<{ claudeProject: string; codexProje
       DISABLE_TELEMETRY: '1',
       DISABLE_ERROR_REPORTING: '1',
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
-      TMPDIR: (() => { const d = path.join(dataDir, 'tmp'); fs.mkdirSync(d, { recursive: true }); return d })(),
       ...DEAD_PROXY,
     }),
   })
@@ -235,11 +250,42 @@ async function launch(name: string): Promise<{ claudeProject: string; codexProje
   return { claudeProject, codexProject }
 }
 
-async function closeAll(): Promise<void> {
+/** This run's processes still running: their command line names its own
+ *  data folder (a mkdtemp folder no other run has). */
+function leftovers(dataDir: string): Array<{ pid: number; args: string }> {
+  const r = spawnSync('/bin/ps', ['-A', '-o', 'pid=,args='], { env: minimalEnv(), encoding: 'utf8', timeout: 30_000 })
+  return (r.stdout ?? '').split('\n').map((l) => /^\s*(\d+)\s+(.*)$/.exec(l)).filter((m): m is RegExpExecArray => !!m)
+    .map((m) => ({ pid: Number(m[1]), args: m[2] })).filter((p) => p.pid !== process.pid && p.args.includes(dataDir))
+}
+
+/** The end of a run: each CLI ended first (Ctrl+C twice), so no session's
+ *  program outlives the app; then the app, the stand-in, and any process of
+ *  this run still running, each stopped only while its command line still
+ *  names this run's folder. Each step's time is recorded, for a cause (run
+ *  46139776011's Linux run with neither program hit Playwright's 30 s worker
+ *  teardown after this step had ended). */
+async function closeAll(name: string): Promise<void> {
+  const t0 = Date.now()
+  const marks: Record<string, number> = {}
+  const dataDir = ctx?.dataDir
+  for (const cli of ['claude', 'codex'] as const) {
+    if (!ctx || !tabs[cli].sid) continue
+    for (let i = 0; i < 2; i++) { await ptyWrite(ctx.page, tabs[cli].sid, '\u0003').catch(() => undefined); await sleep(400) }
+  }
+  marks.clisEnded = Date.now() - t0
   await closeIsolatedApp(ctx)
   ctx = undefined
+  marks.appClosed = Date.now() - t0
   await standIn?.close()
   standIn = undefined
+  marks.standInClosed = Date.now() - t0
+  const left = dataDir ? leftovers(dataDir) : []
+  for (const p of left) {
+    if (!leftovers(dataDir!).some((q) => q.pid === p.pid)) continue
+    try { process.kill(p.pid, 'SIGKILL') } catch { /* gone */ }
+  }
+  marks.swept = Date.now() - t0
+  save(`${name}-teardown`, { marks, leftovers: left.map((p) => ({ pid: p.pid, args: p.args.slice(0, 160) })), after: dataDir ? leftovers(dataDir).length : 0 })
 }
 
 /** Which of Claude Code's two Linux programs are installed (command -v). */
@@ -534,7 +580,7 @@ test.describe('paste probes: PM1 and PM2 on macOS, PL1 on Linux', () => {
   test.afterAll(async () => {
     test.setTimeout(60_000)
     save(`probe${TOOLS ? `-${TOOLS}` : ''}`, { platform: process.platform, tools: TOOLS || null, which: toolsHere(), rows, paste: mainLines.filter((l) => /\[paste\]/.test(l)).slice(-40) })
-    await closeAll()
+    await closeAll(`probe${TOOLS ? `-${TOOLS}` : ''}`)
   })
 
   test(IS_MAC ? 'PM1: each write\'s formats, and both CLIs on Ctrl+V' : 'PL1: each write\'s formats, and both CLIs on Ctrl+V', async () => {
@@ -576,7 +622,7 @@ test.describe('paste readings: the app\'s own route into Claude Code and Codex',
   test.afterAll(async () => {
     test.setTimeout(60_000)
     save(`readings${TOOLS ? `-${TOOLS}` : ''}`, { platform: process.platform, tools: TOOLS || null, which: toolsHere(), rows, paste: mainLines.filter((l) => /\[paste\]/.test(l)).slice(-60) })
-    await closeAll()
+    await closeAll(`readings${TOOLS ? `-${TOOLS}` : ''}`)
   })
 
   /** Whether Claude Code's program is there for this run (always on macOS). */
@@ -585,12 +631,12 @@ test.describe('paste readings: the app\'s own route into Claude Code and Codex',
 
   for (const cli of ['codex', 'claude'] as const) {
     test(`${cli}: the image paste key in and out of the terminal, the text chord with only a picture${IS_MAC ? ', a copied file' : ''}`, async () => {
-      test.skip(IS_LINUX && TOOLS === 'wl-paste', 'under X11 with only wl-paste: the probe (PL1) records it')
+      test.skip(IS_LINUX && TOOLS === 'wl-paste', 'Linux with wl-paste alone: Codex is read with neither and with xclip; Claude Code\'s hint is the test below')
+      test.skip(cli === 'claude' && !claudeCanRead(), 'Linux without xclip: Claude Code\'s hint is the test below')
       test.setTimeout(hows().length * (APP_PRESS_MS + TURN_MS * 3 + 10_000) + 60_000)
       let seed = cli === 'codex' ? 60 : 80
       const mine: Array<Record<string, unknown>> = []
       for (const how of hows()) {
-        if (cli === 'claude' && !claudeCanRead()) break
         const r = await appPress(cli, how, ++seed)
         mine.push(r)
         rows.push(r)
@@ -604,10 +650,10 @@ test.describe('paste readings: the app\'s own route into Claude Code and Codex',
     })
   }
 
-  test('Linux, neither xclip nor wl-paste: Claude Code gets no key, and the hint names both', async () => {
-    test.skip(!IS_LINUX || TOOLS !== 'none', 'Linux with neither program only')
+  test('Linux under X11 without xclip (neither program, or wl-paste alone): Claude Code gets no key, and the hint names both', async () => {
+    test.skip(!IS_LINUX || (TOOLS !== 'none' && TOOLS !== 'wl-paste'), 'Linux without xclip only')
     test.setTimeout(APP_PRESS_MS + 60_000)
-    expect(toolsHere(), 'the job removed both').toEqual({ xclip: null, 'wl-paste': null })
+    expect(toolsHere(), 'what the job left installed').toEqual(TOOLS === 'none' ? { xclip: null, 'wl-paste': null } : { xclip: null, 'wl-paste': '/usr/bin/wl-paste' })
     await show('claude')
     const png = await picturePng(ctx!.app, 99)
     const w = await writeInMain(ctx!.app, formatsFor('app', png))

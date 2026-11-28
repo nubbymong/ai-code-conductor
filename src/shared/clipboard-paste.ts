@@ -54,7 +54,8 @@ export type PasteNotPastedReason =
   /** The session's key cannot be sent (an account binding the app cannot express). */
   | 'no-key'
   /** The program the CLI reads the clipboard with is not on this computer
-   *  (Claude Code on Linux: xclip or wl-paste; plan 2.1.3-beta.21 phase 3). */
+   *  (Claude Code on Linux: xclip under X11, xclip or wl-paste under
+   *  Wayland; plan 2.1.3-beta.21 phase 3). */
   | 'no-clipboard-tool'
   /** This computer's clipboard could not be written. */
   | 'not-written'
@@ -126,7 +127,7 @@ export const PASTE_NOTES: Readonly<Record<PasteNotPastedReason, string>> = {
   'prompt-on-screen': 'The session is asking a question, so the picture was not sent. Answer the question in the session first; the picture may still be at its prompt.',
   busy: 'The session was busy, so nothing was pasted. The picture is on the clipboard: press Alt+V in the session.',
   'no-key': 'The picture is on the clipboard. Press Claude Code\'s image paste key in the session to paste it.',
-  'no-clipboard-tool': 'The picture is on the clipboard, but Claude Code reads it on Linux with xclip or wl-paste, and neither is installed. Install xclip (or wl-clipboard on Wayland), then press Alt+V in the session.',
+  'no-clipboard-tool': 'The picture is on the clipboard, but Claude Code cannot read it here: on Linux it reads the clipboard with xclip (X11) or wl-paste (Wayland), and the one this desktop needs is not installed. Install xclip (on Wayland, wl-clipboard), then press Alt+V in the session.',
   'not-written': 'The picture could not be put on the clipboard, so nothing was pasted.',
   'not-available': 'Image paste into this session is not available yet.',
   'session-gone': 'This session is not running, so nothing was pasted.',

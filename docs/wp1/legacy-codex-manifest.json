@@ -1,8 +1,8 @@
 {
   "schema": "wp1-legacy-codex-manifest/3",
-  "generatedAt": "2026-11-28T11:24:08.691Z",
-  "head": "a0b4b151ffb1e544a8ed7bcca5552ba043ccde49",
-  "tree": "b92744a6c5f4163fdf5cb33d0d941b4d1b59f134",
+  "generatedAt": "2026-11-28T11:38:47.320Z",
+  "head": "b33fd28872956fed6e32d9b5cb2cdad88d1dcd4a",
+  "tree": "b14bf0d03214433bef5c51552baa3727768db0c9",
   "scannedWorkingTree": true,
   "predicateDigest": "100a1233edebdc39a5f9004d3fba980a89ebb15b25872e52076386bc84b03153",
   "predicates": [
@@ -4122,7 +4122,7 @@
         "P04",
         "P13"
       ],
-      "lineCount": 62
+      "lineCount": 66
     },
     {
       "path": "tests/e2e/session-dialog-permutations.spec.ts",

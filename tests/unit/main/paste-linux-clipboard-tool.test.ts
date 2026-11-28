@@ -1,11 +1,14 @@
 // Claude Code on a Linux app machine reads the clipboard by running xclip or
-// wl-paste (ADR-032's table; plan 2.1.3-beta.21 phase 3, 3.1): with neither
-// installed its own paste cannot read the picture, so the app sends no key
-// and the paste hint names the two programs.
-//  - The Claude package (row 14): neither xclip nor wl-paste in PATH's
-//    folders or the system's (/usr/local/bin, /usr/bin, /bin) on Linux: the
-//    tool is missing; either one there: not missing. Never missing on
-//    Windows or macOS. Codex reads the clipboard itself (arboard): never.
+// wl-paste (ADR-032's table; plan 2.1.3-beta.21 phase 3, 3.1): without the
+// one its read needs, its own paste cannot read the picture, so the app
+// sends no key and the paste hint names the two programs.
+//  - The Claude package (row 14), searching PATH's folders and the system's
+//    (/usr/local/bin, /usr/bin, /bin) on Linux. Under X11 (no
+//    WAYLAND_DISPLAY) it needs xclip: probe PL1 (run 46139776011, the Ubuntu
+//    runner under Xvfb) read Claude Code 2.1.332 attach with xclip and not
+//    with wl-paste alone. Under Wayland (not measured) either one is taken.
+//    Never missing on Windows or macOS. Codex reads the clipboard itself
+//    (arboard): never.
 //  - The paste module (row 8): a press, the text chord with a picture, and
 //    Snap into a Claude Code session on Linux with the tool missing: no key
 //    to the door, and the hint naming xclip and wl-paste (Snap's picture is
@@ -13,7 +16,9 @@
 //    with a tool there: the key, as before.
 //  - The hint's line: names both programs, no path, no em dash.
 // Red on e89996bb: no such check; the key went and the session showed
-// nothing. Mutant this must catch: the check skipped (the key sent anyway).
+// nothing. Red on a0b4b151: wl-paste alone under X11 read as installed, so
+// the key went and the session showed nothing (PL1). Mutant this must
+// catch: the check skipped (the key sent anyway).
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 vi.mock('../../../src/main/debug-logger', () => ({ logInfo: vi.fn(), logWarn: vi.fn(), logError: vi.fn() }))
@@ -32,24 +37,35 @@ const CTRL_V = '\u0016'
 describe('the Claude package: is the program Claude Code reads the clipboard with there?', () => {
   const on = (files: string[]) => (p: string) => files.includes(p)
 
-  it('Linux, neither xclip nor wl-paste in PATH or the system folders: missing', () => {
-    expect(claude.claudeClipboardToolMissing('linux', '/home/me/.local/bin:/usr/bin', on([]))).toBe(true)
-    expect(claude.claudeClipboardToolMissing('linux', '', on(['/usr/bin/xclipboard', '/opt/xclip']))).toBe(true)
+  const x11 = (path: string) => ({ PATH: path })
+  const wayland = (path: string) => ({ PATH: path, WAYLAND_DISPLAY: 'wayland-0' })
+
+  it('Linux under X11: xclip needed; neither, or wl-paste alone (PL1), is missing', () => {
+    expect(claude.claudeClipboardToolMissing('linux', x11('/home/me/.local/bin:/usr/bin'), on([]))).toBe(true)
+    expect(claude.claudeClipboardToolMissing('linux', x11(''), on(['/usr/bin/xclipboard', '/opt/xclip']))).toBe(true)
+    expect(claude.claudeClipboardToolMissing('linux', x11('/home/me/bin'), on(['/home/me/bin/wl-paste']))).toBe(true)
+    expect(claude.claudeClipboardToolMissing('linux', x11(''), on(['/usr/bin/wl-paste']))).toBe(true)
   })
 
-  it('Linux, either one: not missing, in a PATH folder or a system folder', () => {
-    expect(claude.claudeClipboardToolMissing('linux', '/home/me/bin', on(['/home/me/bin/xclip']))).toBe(false)
-    expect(claude.claudeClipboardToolMissing('linux', '/home/me/bin', on(['/home/me/bin/wl-paste']))).toBe(false)
-    expect(claude.claudeClipboardToolMissing('linux', '', on(['/usr/bin/xclip']))).toBe(false)
-    expect(claude.claudeClipboardToolMissing('linux', 'relative/bin', on(['/bin/wl-paste']))).toBe(false)
+  it('Linux under X11, xclip there: not missing, in a PATH folder or a system folder', () => {
+    expect(claude.claudeClipboardToolMissing('linux', x11('/home/me/bin'), on(['/home/me/bin/xclip']))).toBe(false)
+    expect(claude.claudeClipboardToolMissing('linux', x11(''), on(['/usr/bin/xclip']))).toBe(false)
+    expect(claude.claudeClipboardToolMissing('linux', x11('relative/bin'), on(['/bin/xclip']))).toBe(false)
+  })
+
+  it('Linux under Wayland (not measured): either one is taken; neither is missing', () => {
+    expect(claude.claudeClipboardToolMissing('linux', wayland('/home/me/bin'), on(['/home/me/bin/wl-paste']))).toBe(false)
+    expect(claude.claudeClipboardToolMissing('linux', wayland(''), on(['/usr/bin/xclip']))).toBe(false)
+    expect(claude.claudeClipboardToolMissing('linux', wayland('/usr/bin'), on([]))).toBe(true)
+    expect(claude.claudeClipboardToolMissing('linux', { PATH: '', WAYLAND_DISPLAY: '' }, on(['/usr/bin/wl-paste'])), 'an empty WAYLAND_DISPLAY is X11').toBe(true)
   })
 
   it('a relative PATH folder is never searched', () => {
-    expect(claude.claudeClipboardToolMissing('linux', 'bin:./tools', on(['bin/xclip', 'tools/xclip', './tools/xclip']))).toBe(true)
+    expect(claude.claudeClipboardToolMissing('linux', x11('bin:./tools'), on(['bin/xclip', 'tools/xclip', './tools/xclip']))).toBe(true)
   })
 
   it('never missing on Windows or macOS (PowerShell and osascript come with the system)', () => {
-    for (const os of ['win32', 'darwin'] as const) expect(claude.claudeClipboardToolMissing(os, '', on([])), os).toBe(false)
+    for (const os of ['win32', 'darwin'] as const) expect(claude.claudeClipboardToolMissing(os, x11(''), on([])), os).toBe(false)
   })
 
   it('the package\'s rule asks it; Codex\'s has no such program to miss', () => {
