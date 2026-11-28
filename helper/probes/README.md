@@ -501,10 +501,13 @@ commit that records the PASS under "Results" below sets that entry: from then
 on that build runs a review on any machine of that architecture whose Codex is
 not older than the oldest the app runs, and whose git read at its Check (for
 a git change); no exact version is matched. Nothing is written on the host.
-Then the file runs one codex_review from a Claude Code tab through the session
-helper (the fake CLI as the tab's program, the session's own tool server on
-the host carrying the call), given this run's PASS as its proof, and checks
-that it ran there and its footer names the machine.
+Then the file runs one codex_review asked from a Claude Code tab through the
+session helper, given this run's PASS as its proof, and checks that it ran
+there and its footer names the machine. On a host line the tab's program is
+the fake CLI and the file sends the call itself, through the session's own
+tool server on the host: the model stand-in real Claude Code would ask
+listens on the test PC's loopback, which the host cannot reach. In CI the
+caller is real Claude Code 2.1.332 (below).
 
 ## What you need
 
@@ -574,7 +577,18 @@ In CI, the `remote-helper-e2e` job runs the same file against its localhost
 sshd with `REMOTE_REVIEW_CODEX=stand-in`: a stand-in Codex
 (`pv-codex-stand-in.cjs`) on the login PATH, since the review's argv passes
 `--ignore-user-config` and so cannot be pointed at a loopback model. The real
-Codex is proven by the host lines only.
+Codex is proven by the host lines only. The review there is asked by real
+Claude Code 2.1.332, the job's one install (the paste check runs it too,
+`REMOTE_REVIEW_CLAUDE`), in a tab on a config folder of the run's own,
+answering probe P11's model stand-in (`p11-model-stand-in.cjs`): on the marked
+prompt (run `review-tool-1`) the stand-in sends a tool_use of
+`mcp__conductor__codex_review` (mode working), Claude Code calls it through
+the session's relay, and the stand-in answers the request that carries the
+result with fixed text. The check reads, from that result as Claude Code sent
+it back, that the footer names the machine (the runner's sshd host), and,
+from the stand-in Codex's record of its own process, that the review started
+under that sshd by the helper's run mode and never under the check's own
+process (the runner's app side).
 
 ## Status
 
@@ -583,16 +597,14 @@ when the phase was built; the host lines are owed before the cut (plan
 section 6.2, s5). Until they pass, both entries are null and this build
 refuses every review on a machine, with the reason.
 
-Owed too (plan 6.3's CI line as written): real Claude Code 2.1.332 as the
-tab's program in the `remote-helper-e2e` job, answering P11's stand-in model
-(`p11-model-stand-in.cjs`) with one scripted tool_use turn for
-`mcp__conductor__codex_review` (mode working), in place of the fake CLI and
-the test's own tool call. It waits for plan phase 5 to install Claude Code
-2.1.332 in that job, and runs as one dispatch on the beta.21 aggregate after
-phase 5 is merged there. The stand-in Codex stays a recorded change from the
-plan: the plan names real Codex 0.157.1 against P11, and the review's argv
-passes `--ignore-user-config` with a fixed host environment, so it cannot be
-pointed at a loopback model.
+The CI line's caller is real Claude Code 2.1.332, as plan 6.3's CI line says
+(since the 2.1.3-beta.21 aggregate with phase 5 merged: the job's one install
+of it, answering P11's model stand-in with its scripted review turn; the
+readings are in the header of `tests/live/remote-review.live.ts`). The one
+recorded change from that CI line is the stand-in Codex: the plan names real
+Codex 0.157.1 against P11, and the review's argv passes
+`--ignore-user-config` with a fixed host environment, so it cannot be pointed
+at a loopback model.
 
 ## Results
 

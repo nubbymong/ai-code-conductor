@@ -9,19 +9,30 @@
  *   - the dispatch-only `remote-helper-e2e` job of ci.yml, after the device
  *     check, against the runner's localhost sshd, with the stand-in Codex the
  *     job puts on the account's login PATH (helper/probes/pv-codex-stand-in.cjs,
- *     REMOTE_REVIEW_CODEX=stand-in): its header says why not the real Codex;
+ *     REMOTE_REVIEW_CODEX=stand-in): its header says why not the real Codex
+ *     (the one recorded change from plan 6.3's CI line). The review there is
+ *     asked by REAL Claude Code 2.1.332, the job's one install (the paste
+ *     check runs it too), answering probe P11's model stand-in on this
+ *     runner's loopback (helper/probes/p11-model-stand-in.cjs, its scripted
+ *     review turn);
  *   - a host line (Rocky, the Pi), from a test PC with ssh and that job's
  *     artifact, with the real Codex installed and signed in in the tester
- *     login (REMOTE_REVIEW_CODEX=real). helper/probes/README.md ("Probes PV1
- *     and PV2") says how. Never 192.168.50.185.
+ *     login (REMOTE_REVIEW_CODEX=real). There the review is asked by the
+ *     fake CLI's tab and this file's own call: the model stand-in listens on
+ *     the test PC's loopback, which the host cannot reach.
+ *     helper/probes/README.md ("Probes PV1 and PV2") says how. Never
+ *     192.168.50.185.
  * Run as
  *   npx vitest run --config vitest.live.config.ts tests/live/remote-review.live.ts --retry=0
  * It fails, never skips, when what it needs is not given.
  *
  * What it takes, from the environment (no secret anywhere):
- *   REMOTE_HELPER_HOSTS, REMOTE_HELPER_BIN, REMOTE_HELPER_MANIFEST,
- *   REMOTE_HELPER_FAKE_CLI   as the device check takes them
+ *   REMOTE_HELPER_HOSTS, REMOTE_HELPER_BIN, REMOTE_HELPER_MANIFEST
+ *                            as the device check takes them
  *   REMOTE_REVIEW_CODEX      `stand-in` (CI) or `real` (a host line)
+ *   REMOTE_REVIEW_CLAUDE     with `stand-in`: the absolute path of Claude Code
+ *                            2.1.332 on the host, which must be this computer
+ *   REMOTE_HELPER_FAKE_CLI   with `real`: the fake CLI, as the device check takes it
  *   REMOTE_HELPER_OUT        a folder for the readings (optional)
  *
  * In order:
@@ -47,23 +58,29 @@
  *      Codex and git versions they passed with), for the commit that records
  *      the PASS in helper/probes/README.md; with the stand-in it prints none
  *      (a stand-in run proves no Codex). Nothing is written on the host.
- *   6. One codex_review from a Claude Code tab (the fake CLI as the tab's
- *      program, its tool server the session's mcp.json relay on the host),
- *      through the relay, the holder and the bridge to a tool host here that
- *      runs the app's remote review, given this run's PASS as its proof: the
- *      review ran there, on that machine's own sign-in; its footer names the
- *      machine; every process this computer started for it was ssh.
- * Then: the tab ends, the fixture folders and the machine's device folder go;
- * a ~/.codex it did not make stays.
- *
- * Not yet here (plan 6.3's CI line as written): the tab's program is the
- * fake CLI, not real Claude Code 2.1.332 answering P11's stand-in model with
- * a scripted tool_use turn; that swap is owed once plan phase 5 installs
- * Claude Code 2.1.332 in the remote-helper-e2e job (helper/probes/README.md,
- * "Status").
+ *   6. One codex_review asked from a Claude Code tab through the session
+ *      helper, given this run's PASS as its proof. In CI the tab's program is
+ *      real Claude Code 2.1.332 on a config folder of the run's own (the
+ *      paste check's: onboarding done, the made-up key approved, the project
+ *      trusted, the model stand-in named, the review tool allowed), its tool
+ *      server the session's mcp.json relay on the host. A marked prompt
+ *      (P11's run `review-tool-1`) gets the stand-in's tool_use of
+ *      mcp__conductor__codex_review (mode working); Claude Code calls it
+ *      through the relay, the holder and the bridge to a tool host here
+ *      (./review-tool-host.ts, the app's MCP SDK) that runs the app's remote
+ *      review, and sends the result back to the stand-in, which answers with
+ *      fixed text. Read from that result, what Claude Code received: the
+ *      footer names the machine (this runner's sshd host) and the review
+ *      process started under that sshd by the helper's run mode, never under
+ *      this check's own process (this runner's app side); every process this
+ *      computer started for it was ssh. On a host line the fake CLI is the
+ *      tab's program and this file sends the call itself, as phase 6 shipped.
+ * Then: the tab ends, the fixture folders, the config folder, the env file
+ * and the machine's device folder go; a ~/.codex it did not make stays.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
+import { createRequire } from 'module'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -79,7 +96,9 @@ import { REMOTE_REVIEW_PROVEN, runRemoteCodexReview, type RemoteReviewDeps, type
 import { codexRemoteReview } from '../../src/main/providers/codex/remote-review'
 import { REVIEW_DIFF_MAX_BYTES, produceReviewDiff, produceReviewFiles } from '../../src/main/review-diff'
 import { mergeRegistry, type ModelRegistry } from '../../src/shared/model-registry'
+import { readClaudeScreen } from '../../src/shared/claude-screen'
 import registryJson from '../../resources/model-registry.json'
+import { newToolHostSeen, serveReviewTool } from './review-tool-host'
 
 const need = (name: string): string => {
   const v = process.env[name]
@@ -91,10 +110,50 @@ const OUT = process.env.REMOTE_HELPER_OUT
 const readings: Record<string, unknown> = {}
 const note = (k: string, v: unknown) => { readings[k] = v }
 
+/** Probe P11's model stand-in, with its one scripted review turn (CI only). */
+interface ModelEvent {
+  ev: string
+  t?: number
+  path?: string
+  kind?: string
+  run?: string | null
+  tools?: number
+  script?: {
+    step: string
+    run: string
+    offered?: boolean
+    tools?: string[]
+    toolUse?: { id: string; name: string; input: Record<string, unknown> }
+    toolResult?: { toolUseId: string; isError: boolean; text: string }
+  }
+}
+const req = createRequire(__filename)
+const { createModelStandIn, REVIEW_TOOL } = req('../../helper/probes/p11-model-stand-in.cjs') as {
+  createModelStandIn: (o: { onEvent: (e: ModelEvent) => void }) => { listen(): Promise<number>; close(): Promise<void> }
+  REVIEW_TOOL: string
+}
+
+/** The Claude Code the CI line runs (the job's one install), and the made-up
+ *  key its config approves (no secret: the stand-in takes any). */
+const CLAUDE_VERSION = '2.1.332'
+const FAKE_KEY = 'sk-ant-e2e-fake-key-not-real-0000000000'
+/** The env file the job's rc step reads in an interactive login shell, for
+ *  the CLI the tab starts (named for the paste check, which reads it too). */
+const ENV_FILE = '.aicc-e2e-paste-env'
+/** The marked prompt: P11's stand-in answers its run with the review call. */
+const REVIEW_RUN = 'review-tool-1'
+const ASK = `p11 probe ${REVIEW_RUN}: ask for a Codex review of the working change.`
+
 let target: SshTarget
 let helper: BundledLinuxHelper
-let fakeCli: string
+let fakeCli = ''
+let claude = ''
 let codexKind: 'stand-in' | 'real'
+const modelEvents: ModelEvent[] = []
+let standIn: { listen(): Promise<number>; close(): Promise<void> } | undefined
+let envFileWritten = false
+/** What the tool host here saw of the tab's tool stream (CI). */
+const toolHost = newToolHostSeen()
 /** Every program this computer started for the run's execs: ssh only. */
 const spawned: string[] = []
 const realRunner = nodeSshRunner(() => 'ssh')
@@ -113,6 +172,8 @@ function memoryStore(): MachineStore {
 
 /** The line the test's own execs print before their command (an rc file prints first). */
 const OWN = 'AICC-E2E-OWN'
+const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`
+const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms) })
 
 /** One plain ssh exec for the test's own steps (not the app's). */
 function sshRun(command: string, input?: Buffer): { code: number | null; out: string; err: string } {
@@ -128,6 +189,25 @@ async function until(what: string, ok: () => boolean, ms = 30_000): Promise<void
   while (!ok()) {
     if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`)
     await new Promise((r) => setTimeout(r, 50))
+  }
+}
+
+/** As until, for a test that reads the holder's screen (each read a message on the tab's connection, no new exec). */
+async function untilRead(what: string, ok: () => Promise<boolean>, ms: number): Promise<void> {
+  const start = Date.now()
+  while (!(await ok())) {
+    if (Date.now() - start > ms) throw new Error(`timed out waiting for ${what}`)
+    await sleep(250)
+  }
+}
+
+/** A tab's holder screen now, as rows of text (for a cause). */
+async function screenText(p: RemoteHelperPty): Promise<string> {
+  try {
+    const read = p.screenRead
+    return read ? (await read()).lines.map((l) => l.text).join('\n') : '(the tab reads no screen now)'
+  } catch (err) {
+    return `(no screen read: ${(err as Error).message})`
   }
 }
 
@@ -248,6 +328,9 @@ function localFixture(dir: string): void {
 
 // ── the app's side of the tab: a tool host that runs the remote review ──
 
+/** The app's remote review for the tab the stream was served for, as the tool host runs it. */
+const reviewFor = (id: string) => (args: Record<string, unknown>) => runRemoteCodexReview({ ...args, cccSessionId: id }, remoteReviewTarget(id), deps())
+
 const served: Array<{ id: string; provider: string }> = []
 const signals: RemoteSignalDeps = {
   toolsServed: () => true,
@@ -255,6 +338,12 @@ const signals: RemoteSignalDeps = {
   event: () => {},
   serve: (id, provider, link) => {
     served.push({ id, provider })
+    // CI: real Claude Code at the far end, served as the app's tool host serves it.
+    if (codexKind === 'stand-in') {
+      serveReviewTool(link, { name: 'codex_review', description: 'Get a Codex code review on a change. The review runs on the machine this session runs on, with that machine\'s own Codex sign-in.', run: reviewFor(id) }, toolHost)
+      return true
+    }
+    // A host line: the fake CLI's tab, and this file's own call (Relay).
     link.take((m) => {
       if (Array.isArray(m) || m.method !== 'tools/call' || m.id === undefined) return
       const params = (m.params ?? {}) as { name?: unknown; arguments?: Record<string, unknown> }
@@ -263,7 +352,7 @@ const signals: RemoteSignalDeps = {
         return
       }
       // As the tool host does: the session is the tab the stream was served for.
-      void runRemoteCodexReview({ ...(params.arguments ?? {}), cccSessionId: id }, remoteReviewTarget(id), deps()).then((r) => {
+      void reviewFor(id)(params.arguments ?? {}).then((r) => {
         link.send({ jsonrpc: '2.0', id: m.id, result: { content: [{ type: 'text', text: r.text }], ...(r.isError ? { isError: true } : {}) } })
       })
     }, () => { /* the stream ended */ })
@@ -306,30 +395,46 @@ beforeAll(async () => {
   const hosts = JSON.parse(fs.readFileSync(need('REMOTE_HELPER_HOSTS'), 'utf8')) as { host?: unknown; user?: unknown; port?: unknown }
   target = { host: String(hosts.host), user: String(hosts.user), port: Number(hosts.port ?? 22) }
   if (target.host === '192.168.50.185') throw new Error('never this host (owner rule)')
-  fakeCli = need('REMOTE_HELPER_FAKE_CLI')
   const kind = need('REMOTE_REVIEW_CODEX')
   if (kind !== 'stand-in' && kind !== 'real') throw new Error('REMOTE_REVIEW_CODEX is `stand-in` or `real`')
   codexKind = kind
+  if (codexKind === 'stand-in') {
+    // Real Claude Code asks for the review, against the model stand-in on this computer's loopback.
+    if (target.host !== '127.0.0.1' && target.host !== 'localhost') throw new Error('with REMOTE_REVIEW_CODEX=stand-in this check runs against this computer\'s own sshd only: the model stand-in Claude Code asks listens on its loopback')
+    claude = need('REMOTE_REVIEW_CLAUDE')
+    if (!path.posix.isAbsolute(claude)) throw new Error('REMOTE_REVIEW_CLAUDE is the absolute path of Claude Code on the host')
+  } else {
+    fakeCli = need('REMOTE_HELPER_FAKE_CLI')
+  }
   const bundled = await readBundledLinuxHelper({ manifest: need('REMOTE_HELPER_MANIFEST'), file: need('REMOTE_HELPER_BIN') })
   if (!bundled.ok) throw new Error(`the helper and its manifest do not read: ${bundled.why}`)
   helper = bundled.helper
   note('target', `${target.user}@${target.host}:${target.port}`)
   note('codex', codexKind)
   machines = new RemoteMachines({ runner, store: memoryStore(), bundled: async () => ({ ok: true, helpers: [helper] }), inUse: () => inUse, log: (l) => { logs.push(l) }, reviewer: () => codexRemoteReview })
-  // The run's own folder on the host, inside the home folder (this computer's is localDir).
-  const up = sshRun('umask 077; d=$(mktemp -d "$HOME/aicc-pv.XXXXXXXX") && mkdir "$d/repo" "$d/big" && cat > "$d/aicc-fake-cli" && chmod 700 "$d/aicc-fake-cli" && echo "$d"', fs.readFileSync(fakeCli))
+  // The run's own folder on the host, inside the home folder (this computer's
+  // is localDir): the fixtures, Claude Code's config folder in CI, the fake CLI on a host line.
+  const up = sshRun('umask 077; d=$(mktemp -d "$HOME/aicc-pv.XXXXXXXX") && mkdir "$d/repo" "$d/big" "$d/config" && echo "$d"')
   hostDir = up.out.trim().split('\n').pop() ?? ''
   if (!/^\/[A-Za-z0-9._/-]+\/aicc-pv\.[A-Za-z0-9]+$/.test(hostDir)) throw new Error(`the host folder was not made: ${up.err}`)
-})
+  if (codexKind === 'real') {
+    const put = sshRun(`umask 077; cat > ${q(`${hostDir}/aicc-fake-cli`)} && chmod 700 ${q(`${hostDir}/aicc-fake-cli`)} && echo PUT-OK`, fs.readFileSync(fakeCli))
+    if (!put.out.includes('PUT-OK')) throw new Error(`the fake CLI was not written on the host: ${put.err}`)
+  }
+}, 120_000)
 
 afterAll(async () => {
   if (machine) {
     try { await machines.remove(machine.did) } catch { /* the readings say what is left */ }
   }
   if (/^\/[A-Za-z0-9._/-]+\/aicc-pv\.[A-Za-z0-9]+$/.test(hostDir)) sshRun(`rm -rf -- '${hostDir}'`)
+  if (envFileWritten) sshRun(`rm -f -- "$HOME/${ENV_FILE}"`)
+  await standIn?.close()
   if (path.basename(localDir).startsWith('aicc-pv-')) fs.rmSync(localDir, { recursive: true, force: true })
   note('logs', logs)
   note('spawned', [...new Set(spawned)])
+  note('tool-host', toolHost)
+  note('model-requests', modelEvents.filter((e) => e.ev === 'request').map(({ t, path: p, kind, run, tools, script }) => ({ t, path: p, kind, run, tools, ...(script ? { script } : {}) })))
   if (OUT) {
     fs.mkdirSync(OUT, { recursive: true })
     fs.writeFileSync(path.join(OUT, 'remote-review.json'), `${JSON.stringify({ at: new Date().toISOString(), host: os.hostname(), passed, readings }, null, 2)}\n`)
@@ -486,50 +591,202 @@ describe('a review on the machine a remote session runs on', () => {
     expect(left.out.split('\n').map((n) => n.trim())).not.toContain('review-probes')
   })
 
-  it('6. a codex_review from a Claude Code tab through the session helper runs on the machine: its footer names it, and this computer started only ssh', async () => {
+  it('6. a codex_review asked from a Claude Code tab through the session helper runs on the machine: the footer Claude Code got names it, and no review process started on this computer\'s app side', async () => {
     expect(proof, 'PV1 and PV2 did not both pass in this run').not.toBeNull()
-    const id = 'pv-review-tab'
-    const remotePath = `${hostDir}/repo`
-    const m: RemoteMachineRecord = { ...machine, claudePath: `${hostDir}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
-    inUse = 1
-    // As the app's start of the tab: registered for a review in its folder there.
-    expect(registerRemoteReviewSession(id, { did: m.did, cwd: remoteCwd(remotePath, m.home) }, m.home)).toBe(true)
-    const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model', ssh: { host: target.host, port: target.port, username: target.user, remotePath } }, null, () => true, remoteSessionId(id), 100, 30, true)
-    const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: (l) => { logs.push(l) } })
-    let out = ''
-    pty.onData((x) => { out += x })
-    let relay: Relay | null = null
-    try {
-      await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
-      const mcp = JSON.parse(sshRun(`cat "${plan.helper.folder}/mcp.json"`).out) as { mcpServers: { conductor: { command: string; args: string[] } } }
-      relay = new Relay(mcp.mcpServers.conductor)
-      const before = spawned.length
-      relay.send({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'codex_review', arguments: { mode: 'working', effort: 'low', timeoutSeconds: 300 } } })
-      await until('the review\'s answer', () => relay!.answers.some((a) => a.id === 7), 360_000)
-      const answer = relay.answers.find((a) => a.id === 7)!
-      const text = answer.result?.content[0].text ?? ''
-      note('review', { text, isError: answer.result?.isError ?? false, served })
-      expect(answer.result?.isError ?? false, text).toBe(false)
-      // The footer: the machine and its own sign-in, the effort the caller chose.
-      expect(text).toContain(`\n\n---\nCodex review on ${name()}, with ${name()}'s own Codex sign-in, on `)
-      expect(text).toContain('effort low (caller')
-      if (codexKind === 'stand-in') {
-        // The material was the host's change: the stand-in names its first diff line.
-        expect(text.startsWith('PV stand-in review of ')).toBe(true)
-        expect(text).toContain('First change line: diff --git a/a.ts b/a.ts')
-        const rec = standInRecord()
-        expect(rec.argv).toEqual([...(codexRemoteReview.args({ effort: 'low' }) as readonly string[])])
-      }
-      // This computer started nothing for the review but ssh (the host read and the run).
-      expect(spawned.slice(before).every((p) => /^ssh(\.exe)?$/i.test(p)), spawned.slice(before).join(', ')).toBe(true)
-      expect(spawned.length - before).toBeGreaterThanOrEqual(2)
-      expect(served).toEqual([{ id, provider: 'claude' }])
-    } finally {
-      await relay?.end()
-      pty.kill()
-      await pty.ended
-      inUse = 0
-      forgetRemoteReviewSession(id)
-    }
+    if (codexKind === 'stand-in') await reviewAskedByClaudeCode('pv-review-tab')
+    else await reviewAskedByFakeCaller('pv-review-tab')
   }, 600_000)
 })
+
+/** One file on the host, written whole by the test's own exec. */
+function putOnHost(file: string, text: string): void {
+  const r = sshRun(`umask 077; cat > ${q(file)} && echo PUT-OK`, Buffer.from(text))
+  if (!r.out.includes('PUT-OK')) throw new Error(`${file} was not written on the host: ${r.err}`)
+}
+
+/** The scripted turn's event of one step since `from`, as the model stand-in recorded it. */
+const scripted = (from: number, step: string) => modelEvents.slice(from).find((e) => e.ev === 'request' && e.script?.step === step)?.script
+
+/**
+ * CI (REMOTE_REVIEW_CODEX=stand-in): real Claude Code 2.1.332 in the tab, on
+ * a config folder of the run's own, answering P11's model stand-in, which
+ * scripts the call; everything asserted is what Claude Code itself sent back
+ * to the stand-in as the tool's result, and where the review ran.
+ */
+async function reviewAskedByClaudeCode(id: string): Promise<void> {
+  const remotePath = `${hostDir}/repo`
+  standIn = createModelStandIn({ onEvent: (e) => { modelEvents.push(e) } })
+  const port = await standIn.listen()
+  // The config folder, as the paste check seeds its own: onboarding done, the
+  // made-up key approved, the project trusted under every spelling of its
+  // path, the model stand-in named, and the one review tool allowed.
+  const real = sshRun(`cd ${q(remotePath)} && pwd -P`).out.trim().split('\n').pop() || remotePath
+  const realDir = sshRun(`cd ${q(hostDir)} && pwd -P`).out.trim().split('\n').pop() || hostDir
+  const project = { hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true, projectOnboardingSeenCount: 1, allowedTools: [REVIEW_TOOL] }
+  const config = {
+    hasCompletedOnboarding: true, lastOnboardingVersion: CLAUDE_VERSION, theme: 'dark', numStartups: 1, autoUpdates: false,
+    hasAcknowledgedCostThreshold: true, customApiKeyResponses: { approved: [FAKE_KEY.slice(-20)], rejected: [] },
+    projects: Object.fromEntries([...new Set([remotePath, real, hostDir, realDir])].map((p) => [p, project])),
+  }
+  const env = {
+    ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`, ANTHROPIC_API_KEY: FAKE_KEY, DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+    // The review tool sent in the request itself, never deferred behind a tool search.
+    ENABLE_TOOL_SEARCH: 'false',
+  }
+  putOnHost(`${hostDir}/config/.claude.json`, `${JSON.stringify(config, null, 2)}\n`)
+  putOnHost(`${hostDir}/config/settings.json`, `${JSON.stringify({ env, permissions: { allow: [REVIEW_TOOL] } }, null, 2)}\n`)
+  const home = sshRun('printf %s "$HOME"').out.trim()
+  if (!path.posix.isAbsolute(home)) throw new Error('the host\'s home folder did not read')
+  envFileWritten = true
+  putOnHost(`${home}/${ENV_FILE}`, `${Object.entries(env).map(([k, v]) => `export ${k}=${q(v)}`).join('\n')}\n`)
+  const version = sshRun(`${q(claude)} --version`).out.trim()
+  note('claude-version', version)
+  expect(version, `REMOTE_REVIEW_CLAUDE is not Claude Code ${CLAUDE_VERSION}`).toContain(CLAUDE_VERSION)
+
+  const m: RemoteMachineRecord = { ...machine, claudePath: claude, check: { at: Date.now(), ok: true } }
+  inUse = 1
+  // As the app's start of the tab: registered for a review in its folder there.
+  expect(registerRemoteReviewSession(id, { did: m.did, cwd: remoteCwd(remotePath, m.home) }, m.home)).toBe(true)
+  // The tools served (its mcp.json relay), its own config folder, and the
+  // permission mode that asks (2.1.332's own default is auto mode, which
+  // would ask a model before a call): the allow rule above runs the tool.
+  const plan = remoteLaunchOf(claudeRemoteLaunch, m, { extraArgs: '--permission-mode default', ssh: { host: target.host, port: target.port, username: target.user, remotePath } }, null, () => true, remoteSessionId(id), 120, 40, true, false, { configDir: `${hostDir}/config` })
+  const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: (l) => { logs.push(l) } })
+  let out = ''
+  let exited = false
+  pty.onData((x) => { out += x })
+  pty.onExit((e) => { exited = true; note('review-tab-exit', e) })
+  try {
+    await until('the tab to read its holder\'s screen', () => !!pty.screenRead, 60_000)
+    await untilRead('Claude Code\'s prompt on the holder\'s screen', async () => {
+      if (exited) throw new Error('the tab ended before Claude Code\'s prompt showed')
+      const read = pty.screenRead
+      try { return !!read && readClaudeScreen((await read()).lines).screen === 'ready' } catch { return false }
+    }, 120_000)
+    // Its tool server connected: the relay's stream served here, and the tool
+    // listed. Not a condition of its own: a request that does not offer the
+    // tool fails below, with the tools it did offer.
+    await until('Claude Code to list the tools of its conductor server', () => toolHost.methods.includes('tools/list'), 60_000)
+      .catch(() => { note('tools-list-wait', 'no tools/list from Claude Code within 60 s of its prompt; the prompt was typed anyway') })
+    note('start-screen', await screenText(pty))
+    const before = spawned.length
+    const from = modelEvents.length
+    pty.write(ASK)
+    await sleep(700)
+    pty.write('\r')
+    let promptAnswered = false
+    let lastLook = 0
+    await untilRead('Claude Code to send the review tool\'s result to the model', async () => {
+      if (exited) throw new Error('the tab ended before Claude Code sent the tool\'s result')
+      const call = scripted(from, 'call')
+      if (call && call.offered === false) throw new Error(`Claude Code's request did not offer ${REVIEW_TOOL}; it offered: ${(call.tools ?? []).join(', ')}`)
+      if (scripted(from, 'answer')) return true
+      // Not expected (the allow rule runs the tool), but answered so the
+      // check reads the review: Claude Code asking before the call.
+      if (!promptAnswered && Date.now() - lastLook > 1000) {
+        lastLook = Date.now()
+        const screen = await screenText(pty)
+        if (/Do you want to proceed\?/.test(screen) && /codex_review/.test(screen)) {
+          promptAnswered = true
+          note('permission-prompt', screen)
+          pty.write('\r')
+        }
+      }
+      return false
+    }, 360_000)
+    const call = scripted(from, 'call')!
+    const answer = scripted(from, 'answer')!
+    const got = answer.toolResult!
+    const footer = got.text.includes('\n\n---\n') ? got.text.slice(got.text.lastIndexOf('\n\n---\n') + 6) : null
+    note('review-call', call)
+    note('review-result', got)
+    note('review-footer', footer)
+    note('permission-prompt-answered', promptAnswered)
+    console.log(`REVIEW CHECK: ${version}; the model stand-in sent a tool_use of ${call.toolUse?.name ?? 'none'}; Claude Code sent back a result whose footer is: ${footer ?? '(none)'}`)
+    // What the stand-in asked for, and what Claude Code called through the relay.
+    expect(call.toolUse?.name).toBe(REVIEW_TOOL)
+    expect(call.toolUse?.input).toMatchObject({ mode: 'working', effort: 'low' })
+    expect(toolHost.calls.map((c) => c.name)).toEqual(['codex_review'])
+    expect(toolHost.calls[0].args).toMatchObject({ mode: 'working', effort: 'low' })
+    // What Claude Code received: the result of that call, as it sent it back.
+    expect(got.toolUseId).toBe(call.toolUse!.id)
+    expect(got.isError, got.text).toBe(false)
+    // The footer names the machine, this runner's sshd host, and its own sign-in; the effort the caller chose.
+    expect(got.text).toContain(`\n\n---\nCodex review on ${name()}, with ${name()}'s own Codex sign-in, on `)
+    expect(got.text).toContain('effort low (caller')
+    // No review process on this runner's app side: the review process (the
+    // stand-in Codex's record of its own run) was started by the helper's run
+    // mode under the machine's sshd, and this check's own process, where the
+    // app's code runs, is none of its ancestors.
+    const rec = standInRecord()
+    const chain = Array.isArray(rec.ancestors) ? (rec.ancestors as Array<{ pid: number; comm: string }>) : []
+    note('review-process', { pid: rec.pid, parent: rec.parent, ancestors: chain, appSide: process.pid })
+    expect(chain.length, 'the review process\'s ancestors did not read').toBeGreaterThan(0)
+    expect(chain.map((a) => a.pid), `the review process (pid ${String(rec.pid)}) descends from this check's own process (pid ${process.pid}): it started on this computer's app side, not on the machine`).not.toContain(process.pid)
+    expect(chain[0].comm, 'the review process was not started by the helper\'s run mode').toBe('aicc-helper')
+    expect(chain.some((a) => /^sshd/.test(a.comm)), `the review process did not come through the machine's sshd: ${chain.map((a) => a.comm).join(' < ')}`).toBe(true)
+    // The material was the host's change: the stand-in names its first diff line, and ran the review's argv.
+    expect(got.text).toContain('PV stand-in review of ')
+    expect(got.text).toContain('First change line: diff --git a/a.ts b/a.ts')
+    expect(rec.argv).toEqual([...(codexRemoteReview.args({ effort: 'low' }) as readonly string[])])
+    // This computer started nothing for the review but ssh (the host read and the run).
+    expect(spawned.slice(before).every((p) => /^ssh(\.exe)?$/i.test(p)), spawned.slice(before).join(', ')).toBe(true)
+    expect(spawned.length - before).toBeGreaterThanOrEqual(2)
+    // Every stream served was this tab's (Claude Code may open it again).
+    expect(served.length).toBeGreaterThanOrEqual(1)
+    for (const s of served) expect(s).toEqual({ id, provider: 'claude' })
+  } catch (err) {
+    note('review-screen', await screenText(pty))
+    note('review-output-tail', out.slice(-4000))
+    throw err
+  } finally {
+    pty.kill()
+    await Promise.race([pty.ended, sleep(15_000)])
+    inUse = 0
+    forgetRemoteReviewSession(id)
+  }
+}
+
+/**
+ * A host line (REMOTE_REVIEW_CODEX=real), as phase 6 shipped it: the fake CLI
+ * as the tab's program and this file's own call through the session's relay,
+ * since the model stand-in real Claude Code would ask listens on the test
+ * PC's loopback, which the host cannot reach.
+ */
+async function reviewAskedByFakeCaller(id: string): Promise<void> {
+  const remotePath = `${hostDir}/repo`
+  const m: RemoteMachineRecord = { ...machine, claudePath: `${hostDir}/aicc-fake-cli`, check: { at: Date.now(), ok: true } }
+  inUse = 1
+  // As the app's start of the tab: registered for a review in its folder there.
+  expect(registerRemoteReviewSession(id, { did: m.did, cwd: remoteCwd(remotePath, m.home) }, m.home)).toBe(true)
+  const plan = remoteLaunchOf(claudeRemoteLaunch, m, { model: 'e2e-model', ssh: { host: target.host, port: target.port, username: target.user, remotePath } }, null, () => true, remoteSessionId(id), 100, 30, true)
+  const pty = new RemoteHelperPty({ appPtyId: id, machine: m, installId: machines.installId(), runner, spec: plan.spec, plan, signals, log: (l) => { logs.push(l) } })
+  let out = ''
+  pty.onData((x) => { out += x })
+  let relay: Relay | null = null
+  try {
+    await until('the fake CLI\'s banner', () => out.includes('FAKE-CLI READY'))
+    const mcp = JSON.parse(sshRun(`cat "${plan.helper.folder}/mcp.json"`).out) as { mcpServers: { conductor: { command: string; args: string[] } } }
+    relay = new Relay(mcp.mcpServers.conductor)
+    const before = spawned.length
+    relay.send({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'codex_review', arguments: { mode: 'working', effort: 'low', timeoutSeconds: 300 } } })
+    await until('the review\'s answer', () => relay!.answers.some((a) => a.id === 7), 360_000)
+    const answer = relay.answers.find((a) => a.id === 7)!
+    const text = answer.result?.content[0].text ?? ''
+    note('review', { text, isError: answer.result?.isError ?? false, served })
+    expect(answer.result?.isError ?? false, text).toBe(false)
+    // The footer: the machine and its own sign-in, the effort the caller chose.
+    expect(text).toContain(`\n\n---\nCodex review on ${name()}, with ${name()}'s own Codex sign-in, on `)
+    expect(text).toContain('effort low (caller')
+    // This computer started nothing for the review but ssh (the host read and the run).
+    expect(spawned.slice(before).every((p) => /^ssh(\.exe)?$/i.test(p)), spawned.slice(before).join(', ')).toBe(true)
+    expect(spawned.length - before).toBeGreaterThanOrEqual(2)
+    expect(served).toEqual([{ id, provider: 'claude' }])
+  } finally {
+    await relay?.end()
+    pty.kill()
+    await pty.ended
+    inUse = 0
+    forgetRemoteReviewSession(id)
+  }
+}
