@@ -361,10 +361,13 @@ pub fn run(o: &Options) -> u8 {
         },
         // A read of a type the stand-in never serves is the real tool's,
         // and reads nothing here.
-        // MUTANT M3 (text served): a read of any type gets the current picture.
-        Ask::Read(_t) => match current_picture(&o.store, &o.sid, me) {
-            Some((_, bytes)) => write_out(&bytes),
-            None => EXIT_NOTHING,
+        Ask::Read(t) => match Kind::of_mime(&t) {
+            None => to_real(o),
+            Some(asked) => match current_picture(&o.store, &o.sid, me) {
+                Some((kind, bytes)) if kind == asked => write_out(&bytes),
+                Some(_) => to_real(o),
+                None => EXIT_NOTHING,
+            },
         },
         Ask::Other => to_real(o),
     }
@@ -392,14 +395,9 @@ fn write_out(bytes: &[u8]) -> u8 {
 #[cfg(unix)]
 fn to_real(o: &Options) -> u8 {
     use std::os::unix::process::CommandExt;
-    // MUTANT M2 (the real tool found through PATH): no --real starts it by name.
-    let by_name = PathBuf::from(match o.tool {
-        Tool::Xclip => "xclip",
-        Tool::WlPaste => "wl-paste",
-    });
     let real = match &o.real {
         Some(r) => r,
-        None => &by_name,
+        None => return EXIT_NOTHING,
     };
     let err = std::process::Command::new(real).args(&o.args).exec();
     let _ = writeln!(std::io::stderr(), "aicc-helper: clip: {} could not be started: {err}", real.display());
@@ -456,41 +454,18 @@ pub fn newest<'a, I: IntoIterator<Item = &'a str>>(names: I) -> Option<(&'a str,
 /// user's folder or file.
 #[cfg(unix)]
 pub fn current_picture(store: &Path, sid: &str, me: u32) -> Option<(Kind, Vec<u8>)> {
-    if let Some(p) = own_picture(store, sid, me) {
-        return Some(p);
-    }
-    // MUTANT M4 (another session's picture served): with none of its own, another's.
-    let sessions = store.parent()?.join("sessions");
-    for entry in std::fs::read_dir(&sessions).ok()? {
-        let other = entry.ok()?.file_name().into_string().ok()?;
-        if other != sid {
-            if let Some(p) = own_picture(store, &other, me) {
-                return Some(p);
-            }
-        }
-    }
-    None
-}
-
-#[cfg(unix)]
-fn own_picture(store: &Path, sid: &str, me: u32) -> Option<(Kind, Vec<u8>)> {
     let paste = paste_folder(store, sid, me)?;
-    // MUTANT M1 (a read outside paste/): the session folder's own names count too.
-    let session = paste.parent()?.to_path_buf();
-    let mut found: Vec<(String, PathBuf)> = Vec::new();
-    for folder in [paste.clone(), session] {
-        for (count, entry) in std::fs::read_dir(&folder).ok()?.enumerate() {
-            if count >= MAX_PASTE_ENTRIES {
-                return None;
-            }
-            if let Ok(name) = entry.ok()?.file_name().into_string() {
-                found.push((name, folder.clone()));
-            }
+    let mut names: Vec<String> = Vec::new();
+    for (count, entry) in std::fs::read_dir(&paste).ok()?.enumerate() {
+        if count >= MAX_PASTE_ENTRIES {
+            return None;
+        }
+        if let Ok(name) = entry.ok()?.file_name().into_string() {
+            names.push(name);
         }
     }
-    let (name, kind) = newest(found.iter().map(|(n, _)| n.as_str()))?;
-    let folder = found.iter().find(|(n, _)| n.as_str() == name)?.1.clone();
-    read_picture(&folder.join(name), kind, me)
+    let (name, kind) = newest(names.iter().map(String::as_str))?;
+    read_picture(&paste.join(name), kind, me)
 }
 
 /// `sessions/<sid>/paste` beside `store`, when it and every folder from the
