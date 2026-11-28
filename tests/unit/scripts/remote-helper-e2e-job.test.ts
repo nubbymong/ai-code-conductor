@@ -175,7 +175,9 @@ describe('ci.yml: the Remote helper e2e job only reads, runs its file once, and 
   })
 
   // 2.1.3-beta.21 (plan phase 6, aicc_planning#446): probes PV1 and PV2 and a
-  // review on the machine, after the device check, never beside it.
+  // review on the machine, after the device check, never beside it. Its
+  // caller is real Claude Code 2.1.332 (plan 6.3's CI line), the one install
+  // the paste check runs, made before the machine is added and Checked.
   it('then runs the review check: its own live file, retries off, the stand-in Codex the rc step put on the login PATH, its own report that must show a pass', () => {
     const at = (start: string) => names().findIndex((n) => n.startsWith(start))
     const rc = step('Give the account rc files')
@@ -199,7 +201,25 @@ describe('ci.yml: the Remote helper e2e job only reads, runs its file once, and 
     expect(at('Run the review check on the machine')).toBeGreaterThan(at('Fail a run in which no test ran'))
     expect(at('Fail the review check when no test ran')).toBeGreaterThan(at('Run the review check on the machine'))
     expect(at('Upload the two programs')).toBeGreaterThan(at('Fail the review check when no test ran'))
-    for (const v of ['REMOTE_HELPER_HOSTS', 'REMOTE_HELPER_BIN', 'REMOTE_HELPER_MANIFEST', 'REMOTE_HELPER_FAKE_CLI', 'REMOTE_REVIEW_CODEX']) expect(read('tests/live/remote-review.live.ts')).toContain(v)
+    for (const v of ['REMOTE_HELPER_HOSTS', 'REMOTE_HELPER_BIN', 'REMOTE_HELPER_MANIFEST', 'REMOTE_HELPER_FAKE_CLI', 'REMOTE_REVIEW_CODEX', 'REMOTE_REVIEW_CLAUDE']) expect(read('tests/live/remote-review.live.ts')).toContain(v)
+  })
+
+  it('the review check\'s caller is the real Claude Code the job installed once, not the fake CLI, pointed at P11\'s model stand-in by the rc step\'s env file', () => {
+    const at = (start: string) => names().findIndex((n) => n.startsWith(start))
+    const run = step('Run the review check on the machine')
+    expect(run.env?.REMOTE_REVIEW_CLAUDE).toBe('${{ steps.claudebin.outputs.bin }}')
+    expect(run.env?.REMOTE_HELPER_FAKE_CLI).toBeUndefined()
+    // One install of Claude Code in the job, the paste check's, before the machine is added and Checked.
+    expect(names().filter((n) => /^Install Claude Code/.test(n))).toHaveLength(1)
+    expect(job.steps.filter((s) => /npm install\b/.test(String(s.run ?? '')))).toHaveLength(1)
+    expect(at('Run the review check on the machine')).toBeGreaterThan(at('Locate the installed Claude Code'))
+    expect(String(run.run)).not.toContain('npm')
+    const live = read('tests/live/remote-review.live.ts')
+    // The same env file the rc step reads, and P11's model stand-in with its scripted review turn.
+    expect(String(step('Give the account rc files').run)).toContain(`[ -f "$HOME/.aicc-e2e-paste-env" ] && . "$HOME/.aicc-e2e-paste-env"`)
+    expect(live).toContain("const ENV_FILE = '.aicc-e2e-paste-env'")
+    expect(live).toContain("req('../../helper/probes/p11-model-stand-in.cjs')")
+    expect(live).toContain("from './review-tool-host'")
   })
 
   // 2.1.3-beta.21 (plan block 5.3's CI line, ADR-032): a picture into a

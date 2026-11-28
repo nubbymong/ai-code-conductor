@@ -25,8 +25,12 @@
 // itself (the run's environment is the app's choice, so no variable of the
 // test's can name a folder): its argv, its folder, its variables' names,
 // whether its standard streams are terminals, its session id and its parent's
-// command line (Linux /proc), and the prompt's size and SHA-256. The prompt's
-// text is never kept. No network, no file but its record.
+// command line (Linux /proc), its ancestors from its parent up (each one's
+// pid and command name, Linux /proc; null where there is no /proc: the
+// review check reads from them that the review started under the machine's
+// sshd, never under the check's own process), and the prompt's size and
+// SHA-256. The prompt's text is never kept. No network, no file but its
+// record.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -53,6 +57,28 @@ function sessionId() {
   }
 }
 
+/** Its ancestors from its parent up to the first process, by /proc/<pid>/stat
+ *  (pid (comm) state ppid ...; comm may hold spaces and brackets); null with
+ *  no /proc. At most 64. */
+function ancestors() {
+  const out = [];
+  let pid = process.ppid;
+  for (let i = 0; i < 64 && Number.isSafeInteger(pid) && pid > 0; i++) {
+    let stat;
+    try {
+      stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+    } catch {
+      return out.length > 0 ? out : null;
+    }
+    const comm = stat.slice(stat.indexOf('(') + 1, stat.lastIndexOf(')'));
+    const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
+    out.push({ pid, comm });
+    if (ppid === pid) break;
+    pid = ppid;
+  }
+  return out;
+}
+
 function record(extra) {
   const dir = path.join(__dirname, 'codex-runs');
   try {
@@ -66,6 +92,7 @@ function record(extra) {
       pid: process.pid,
       ids: sessionId(),
       parent: parentCommand(),
+      ancestors: ancestors(),
       ...extra,
     })}\n`, { mode: 0o600 });
   } catch (err) {
