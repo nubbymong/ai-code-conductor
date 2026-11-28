@@ -147,8 +147,8 @@
  * coldPowerShellEnv), so every run reads that cold start, whatever an earlier
  * app on the runner left in the runner's own cache. Not raised, and not
  * answered by the fix: the first app of a job is slower than the apps after
- * it. It meets two conditions they do not: its own cold-disk start, and a
- * burst of disk reads by a runner process outside the app (provjobd.exe,
+ * it. It meets its own cold-disk start, and in most jobs read a burst of
+ * disk reads by a runner process outside the app as well (provjobd.exe,
  * about one CPU and 3,000 to 13,000 read operations a second for 8 to 9 s,
  * from 2 to 6 s after the first app's launch, C: 0 to 12% idle). Under the
  * diagnosis's harder condition (thousands of generated modules as well), in
@@ -174,7 +174,12 @@
  * calls took 12.1 to 12.4 s, nearly all of it before Windows PowerShell ran
  * their first line, the tab took the direct line, and the stand-in started
  * 8.2 to 8.7 s after the Snap button showed (the job's first app: 8.4 s).
- * That is the slowest D1 read under load, about 21 s inside TAB_MS.
+ * In 46094389002 provjobd ran no burst, and the first app was as slow
+ * (8.0 s), C: 0 to 4% idle through its own start; a cold cache, the burst
+ * and two busy processes together gave 6.4 to 8.2 s. The slowest D1 read
+ * with the fix in and no generated modules is a first app with no diag
+ * lines, the merge candidate 46094264723: the stand-in about 11.8 s after
+ * the Snap button, 18 s inside TAB_MS.
  * With X1.2 in (the beta.16 aggregate, run 45304028588 on 5a2f0f41), a
  * picture's sentence follows its paste by 1.5 s and its Enter by 2.2 s, and a
  * picture pressed meanwhile waited behind the one before it: 82 to 1818 ms
